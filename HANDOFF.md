@@ -19,7 +19,55 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 
 ## Session log
 
-### 2026-04-19 — Kickoff / planning
+### 2026-04-19 (session 2) — Next.js scaffold + /api/health canary
+
+**Branch:** `claude/scaffold-nextjs-phase-1`
+
+**Decisions locked this session:**
+- #9 iOS migration deferred until web cutover is stable.
+- #10 Reuse `DATABASE_URL` env var name (same Neon instance).
+- #11 Vercel project already linked; env vars managed by user in Vercel UI.
+
+**Done:**
+- Next.js 16 + React 19 + TypeScript 6 scaffolded. `npm install` clean (367 packages).
+- App skeleton: `src/app/layout.tsx`, `src/app/page.tsx` (redirects to `/status`).
+- `/api/health` endpoint with DB / Redis / xAI / Anthropic checks. Required vs optional semantics.
+- Pure-function split (`computeStatus`, `runHealth`) for testability.
+- Vitest config + 10 passing tests covering all status transitions.
+- `/status` page rendering the health report as a table.
+- `/docs` page placeholder listing the one migrated endpoint.
+- GitHub Actions CI workflow (`.github/workflows/ci.yml`): typecheck + lint + test on PR / push to master.
+
+**Verification gates:**
+- `npm run typecheck` — **passing**
+- `npm test` — **passing** (10/10)
+- `npm run lint` — **FAILING** (see open issue below)
+- `npm run build` — not yet run
+- Manual hit of `/api/health` on preview deploy — not yet done
+
+**Open issue — ESLint 10 incompatibility (FIX SPIRAL STOPPED):**
+`eslint-plugin-react` (bundled transitively by `eslint-config-next@16.2.4`) uses the removed `context.getFilename()` API and crashes under ESLint 10. This is an ecosystem bug waiting on an upstream plugin update. Three resolution paths logged in-session:
+- (a) Drop lint from CI for now and revisit when ecosystem catches up.
+- (b) Pin `eslint@^9` and retry.
+- (c) Switch to `biome` or `oxlint`.
+User to choose before next session. CI will report failing lint until resolved.
+
+**Not done (next session):**
+- Resolve ESLint 10 issue (user's chosen path above).
+- Run `npm run build` to verify production build works.
+- Manual hit of `/api/health` on a preview deploy against real Neon DB.
+- Wire `/status` to real health data (currently fetches from itself — works in prod, not in preview for same-origin reasons).
+- `/docs` OpenAPI generation from route handlers.
+- `/api/feed` migration (phase-1 canary #2).
+- Reverse-proxy layer that routes unmigrated paths to the old backend.
+
+**Safety notes:**
+- No code from the old `aiglitch` repo has been copied yet.
+- `DATABASE_URL` reused, so the local dev database IS the production database — reads only until consumer cutover, no writes from this repo in phase 1.
+
+---
+
+### 2026-04-19 (session 1) — Kickoff / planning
 
 **Branch:** `claude/review-master-rules-YLOHK`
 
