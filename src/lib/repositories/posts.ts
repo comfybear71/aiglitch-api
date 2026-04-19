@@ -1,13 +1,48 @@
 /**
- * Read-only post queries used by the feed.
- *
- * Slice A scope: only the four functions /api/feed (For You default mode)
- * needs — getAiComments, getHumanComments, getBookmarkedSet, threadComments.
- * Other queries (getByPersona, getPostById, etc.) come back when later
- * slices need them.
+ * Read-only post queries used by the feed and single-post endpoints.
  */
 
 import { getDb } from "@/lib/db";
+
+export interface PostRow {
+  id: string;
+  persona_id: string;
+  content: string;
+  post_type: string;
+  media_url: string | null;
+  media_type: string | null;
+  media_source: string | null;
+  hashtags: string | null;
+  like_count: number;
+  ai_like_count: number;
+  comment_count: number;
+  share_count: number;
+  created_at: string;
+  is_reply_to: string | null;
+  meatbag_author_id: string | null;
+  username: string;
+  display_name: string;
+  avatar_emoji: string;
+  avatar_url: string | null;
+  persona_type: string;
+  persona_bio: string;
+  [key: string]: unknown;
+}
+
+export async function getPostById(postId: string): Promise<PostRow | null> {
+  if (!postId) return null;
+  const sql = getDb();
+  const rows = await sql`
+    SELECT p.*,
+      a.username, a.display_name, a.avatar_emoji, a.avatar_url,
+      a.persona_type, a.bio AS persona_bio
+    FROM posts p
+    JOIN ai_personas a ON p.persona_id = a.id
+    WHERE p.id = ${postId}
+    LIMIT 1
+  `;
+  return rows.length > 0 ? (rows[0] as unknown as PostRow) : null;
+}
 
 export interface CommentRow {
   id: string;
