@@ -1,14 +1,17 @@
 /**
- * Integration tests for /api/feed (Slice A — For You default mode).
+ * Integration tests for /api/feed (Slices A + B — For You default + cursor).
  *
  * The route handler is exercised through a fake `neon` client that records
  * every SQL template and returns canned rows. This catches:
- *   - 501 short-circuit on unsupported mode params
- *   - shape of the response (posts, nextCursor)
+ *   - 501 short-circuit on unsupported mode params (shuffle, following, …)
+ *   - shape of the response (posts, nextCursor, nextOffset)
  *   - bookmark resolution when session_id is present vs absent
  *   - meatbag author overlay when posts carry meatbag_author_id
  *   - empty-feed shortcut (no comment / meatbag queries fired)
  *   - error wrapping when the DB throws
+ *   - Slice B: cursor mode switches to chronological queries
+ *   - Slice B: nextCursor is set to last post's created_at on full pages
+ *   - Slice B: Cache-Control differs by mode and session
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -77,9 +80,9 @@ function videoRow(id: string, extras: Record<string, unknown> = {}) {
   };
 }
 
-describe("GET /api/feed (Slice A)", () => {
-  it("returns 501 for unsupported mode params", async () => {
-    for (const param of ["cursor", "shuffle", "following", "breaking", "premieres", "premiere_counts", "following_list"]) {
+describe("GET /api/feed (Slices A + B)", () => {
+  it("returns 501 for unsupported mode params (Slice B removes cursor from this list)", async () => {
+    for (const param of ["shuffle", "following", "breaking", "premieres", "premiere_counts", "following_list"]) {
       const res = await callGet(`http://localhost/api/feed?${param}=1`);
       expect(res.status).toBe(501);
       const body = (await res.json()) as { error: string; unsupported_param: string };
@@ -208,5 +211,94 @@ describe("GET /api/feed (Slice A)", () => {
     const body = (await res.json()) as { error: string; detail: string };
     expect(body.error).toBe("feed_temporarily_unavailable");
     expect(body.detail).toBe("kaboom");
+  });
+
+  // ── Slice B — cursor pagination ─────────────────────────────────────────
+
+  it("cursor param no longer returns 501 (Slice B)", async () => {
+    fake.results = [[], [], []];
+    const res = await callGet("http://localhost/api/feed?cursor=2026-04-18T00:00:00Z");
+    expect(res.status).toBe(200);
+  });
+
+  it("cursor mode filters with WHERE created_at < cursor and ORDERs chronologically", async () => {
+    fake.results = [[], [], []];
+    const cursorValue = "2026-04-18T00:00:00Z";
+    await callGet(`http://localhost/api/feed?cursor=${encodeURIComponent(cursorValue)}`);
+    // Each of the three stream queries should include the cursor value and no RANDOM().
+    for (let i = 0; i < 3; i++) {
+      const call = fake.calls[i];
+      expect(call.values).toContain(cursorValue);
+      const sqlText = call.strings.join("?");
+      expect(sqlText).toContain("p.created_at < ");
+      expect(sqlText).toContain("ORDER BY p.created_at DESC");
+      expect(sqlText).not.toContain("RANDOM()");
+    }
+  });
+
+  it("cursor mode uses 1x pool multiplier (no 3x)", async () => {
+    fake.results = [[], [], []];
+    await callGet("http://localhost/api/feed?cursor=2026-04-18T00:00:00Z&limit=10");
+    // limit=10: video=ceil(10*0.75)=8→max(4)=8, image=2, text=1. 1x multiplier → [8, 2, 1].
+    const expected = [8, 2, 1];
+    for (let i = 0; i < 3; i++) {
+      expect(fake.calls[i]?.values).toContain(expected[i]);
+    }
+  });
+
+  it("sets nextCursor to last post's created_at when posts.length === limit", async () => {
+    // Fill a full page: limit=3 with mixed stream rows that interleave to 3.
+    const row = (id: string, created_at: string) =>
+      videoRow(id, { created_at });
+    fake.results = [
+      [row("v1", "2026-04-19T09:00:00Z"), row("v2", "2026-04-19T08:00:00Z"), row("v3", "2026-04-19T07:00:00Z")],
+      [],
+      [],
+      [], // ai comments
+      [], // human comments
+    ];
+    const res = await callGet("http://localhost/api/feed?limit=3");
+    const body = (await res.json()) as { posts: Array<{ id: string; created_at: string }>; nextCursor: string | null };
+    expect(body.posts).toHaveLength(3);
+    // nextCursor is the last-after-interleave post's created_at (matching legacy contract).
+    const lastCreatedAt = body.posts[body.posts.length - 1]!.created_at;
+    expect(body.nextCursor).toBe(lastCreatedAt);
+  });
+
+  it("nextCursor is null when fewer posts than limit", async () => {
+    fake.results = [
+      [videoRow("v1")],
+      [],
+      [],
+      [],
+      [],
+    ];
+    const res = await callGet("http://localhost/api/feed?limit=10");
+    const body = (await res.json()) as { nextCursor: string | null };
+    expect(body.nextCursor).toBeNull();
+  });
+
+  it("default mode keeps private, no-store Cache-Control", async () => {
+    fake.results = [[], [], []];
+    const res = await callGet();
+    expect(res.headers.get("Cache-Control")).toBe("private, no-store");
+  });
+
+  it("cursor mode without session uses public CDN cache (60s)", async () => {
+    fake.results = [[], [], []];
+    const res = await callGet("http://localhost/api/feed?cursor=2026-04-18T00:00:00Z");
+    expect(res.headers.get("Cache-Control")).toBe(
+      "public, s-maxage=60, stale-while-revalidate=300",
+    );
+  });
+
+  it("cursor mode with session uses short CDN cache (15s)", async () => {
+    fake.results = [[], [], []];
+    const res = await callGet(
+      "http://localhost/api/feed?cursor=2026-04-18T00:00:00Z&session_id=user-1",
+    );
+    expect(res.headers.get("Cache-Control")).toBe(
+      "public, s-maxage=15, stale-while-revalidate=120",
+    );
   });
 });
