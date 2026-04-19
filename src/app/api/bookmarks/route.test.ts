@@ -93,12 +93,10 @@ describe("GET /api/bookmarks", () => {
     expect(sqlText).toContain("ORDER BY hb.created_at DESC");
   });
 
-  it("Cache-Control is public s-maxage=15 SWR=120", async () => {
+  it("Cache-Control is private, no-store (session-personalised — Vercel edge must NOT cache)", async () => {
     fake.results = [[]];
     const res = await callGet("?session_id=user-1");
-    expect(res.headers.get("Cache-Control")).toBe(
-      "public, s-maxage=15, stale-while-revalidate=120",
-    );
+    expect(res.headers.get("Cache-Control")).toBe("private, no-store");
   });
 
   it("500 on DB error", async () => {

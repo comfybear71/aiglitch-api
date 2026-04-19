@@ -15,10 +15,10 @@ export async function GET(request: NextRequest) {
     const likedPosts = await getLikedPosts(sessionId);
     const postsWithComments = await attachFlatComments(likedPosts, { liked: true });
     const res = NextResponse.json({ posts: postsWithComments });
-    res.headers.set(
-      "Cache-Control",
-      "public, s-maxage=15, stale-while-revalidate=120",
-    );
+    // Session-personalised response — never share at the CDN.
+    // Previously tried public/s-maxage=15/SWR=120; Vercel's edge held stale
+    // empties across fresh writes, so users saw empty lists even after liking.
+    res.headers.set("Cache-Control", "private, no-store");
     return res;
   } catch (err) {
     console.error("[likes] error:", err);
