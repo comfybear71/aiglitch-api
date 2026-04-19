@@ -1,19 +1,17 @@
 /**
  * Human ↔ content interactions.
  *
- * Slice 1 + 2 scope: like, bookmark, share, view, follow, react
- * (+ internal trackInterest, maybeAIFollowBack).
+ * Slices 1 + 2 + 3 scope: like, bookmark, share, view, follow, react,
+ * comment, comment_like (+ internal trackInterest, maybeAIFollowBack).
  *
  * Deferred to later slices:
- *   - Slice 3: comment, comment_like
  *   - Slice 4: AI auto-reply trigger (requires AI engine port)
  *   - Slice 5: coin awards (requires users-repo + COIN_REWARDS port)
  *   - Slice 6: subscribe-via-post (thin glue to channels repo)
  *
- * toggleLike has TWO coin-award side-effects on the like path (first-like
- * bonus + persona like reward). Both are wrapped in try/catch and marked
- * non-critical in legacy. Stripped here with a clearly-marked TODO — Slice 5
- * retrofits them once users.awardCoins / users.awardPersonaCoins land.
+ * toggleLike + addComment have coin-award side-effects. Both are wrapped in
+ * try/catch and marked non-critical in legacy. Stripped here with a clearly-
+ * marked TODO — Slice 5 retrofits them once users.awardCoins lands.
  */
 
 import { randomUUID } from "node:crypto";
@@ -290,6 +288,125 @@ export async function getReactionCounts(
   const counts: Record<string, number> = { funny: 0, sad: 0, shocked: 0, crap: 0 };
   for (const row of rows) counts[row.emoji] = row.count;
   return counts;
+}
+
+export interface CommentResult {
+  id: string;
+  content: string;
+  display_name: string;
+  username: "human";
+  avatar_emoji: string;
+  is_human: true;
+  like_count: 0;
+  parent_comment_id?: string;
+  parent_comment_type?: string;
+  created_at: string;
+}
+
+const COMMENT_MAX_LENGTH = 300;
+const DISPLAY_NAME_MAX_LENGTH = 30;
+
+/**
+ * Insert a human comment on a post. Trims content to 300 chars and
+ * display_name to 30 chars (default "Meat Bag"). Increments post
+ * counter and tracks interest. Returns the stored comment shape the
+ * consumer renders directly.
+ *
+ * DOES NOT trigger the AI auto-reply — that's Slice 4 (will be fired
+ * fire-and-forget from the route after this returns). Has a
+ * first-comment coin bonus in legacy that's deferred to Slice 5.
+ */
+export async function addComment(
+  postId: string,
+  sessionId: string,
+  content: string,
+  displayName: string,
+  parentCommentId?: string | null,
+  parentCommentType?: string | null,
+): Promise<CommentResult> {
+  const sql = getDb();
+  const cleanContent = content.trim().slice(0, COMMENT_MAX_LENGTH);
+  const name = displayName?.trim().slice(0, DISPLAY_NAME_MAX_LENGTH) || "Meat Bag";
+  const commentId = randomUUID();
+
+  await sql`
+    INSERT INTO human_comments (
+      id, post_id, session_id, display_name, content,
+      parent_comment_id, parent_comment_type
+    )
+    VALUES (
+      ${commentId}, ${postId}, ${sessionId}, ${name}, ${cleanContent},
+      ${parentCommentId || null}, ${parentCommentType || null}
+    )
+  `;
+  await sql`
+    UPDATE posts SET comment_count = comment_count + 1 WHERE id = ${postId}
+  `;
+  await trackInterest(sessionId, postId);
+  // TODO(Slice 5): first-comment coin bonus here.
+
+  return {
+    id: commentId,
+    content: cleanContent,
+    display_name: name,
+    username: "human",
+    avatar_emoji: "🧑",
+    is_human: true,
+    like_count: 0,
+    parent_comment_id: parentCommentId || undefined,
+    parent_comment_type: parentCommentType || undefined,
+    created_at: new Date().toISOString(),
+  };
+}
+
+/**
+ * Toggle a like on a comment. The counter target depends on comment_type:
+ *   - "human" → human_comments.like_count
+ *   - anything else (AI) → posts.like_count (AI comments are stored as
+ *     posts with is_reply_to set)
+ */
+export async function toggleCommentLike(
+  commentId: string,
+  commentType: string,
+  sessionId: string,
+): Promise<"comment_liked" | "comment_unliked"> {
+  const sql = getDb();
+  const existing = (await sql`
+    SELECT id FROM comment_likes
+    WHERE comment_id = ${commentId} AND comment_type = ${commentType} AND session_id = ${sessionId}
+  `) as unknown as Array<{ id: string }>;
+
+  if (existing.length === 0) {
+    await sql`
+      INSERT INTO comment_likes (id, comment_id, comment_type, session_id)
+      VALUES (${randomUUID()}, ${commentId}, ${commentType}, ${sessionId})
+    `;
+    if (commentType === "human") {
+      await sql`
+        UPDATE human_comments SET like_count = like_count + 1 WHERE id = ${commentId}
+      `;
+    } else {
+      await sql`
+        UPDATE posts SET like_count = like_count + 1 WHERE id = ${commentId}
+      `;
+    }
+    return "comment_liked";
+  }
+
+  await sql`
+    DELETE FROM comment_likes
+    WHERE comment_id = ${commentId} AND comment_type = ${commentType} AND session_id = ${sessionId}
+  `;
+  if (commentType === "human") {
+    await sql`
+      UPDATE human_comments SET like_count = GREATEST(0, like_count - 1) WHERE id = ${commentId}
+    `;
+  } else {
+    await sql`
+      UPDATE posts SET like_count = GREATEST(0, like_count - 1) WHERE id = ${commentId}
+    `;
+  }
+  return "comment_unliked";
 }
 
 /**
