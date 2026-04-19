@@ -17,25 +17,26 @@ export default function DocsPage() {
           report. Returns <code>200</code> when ok/degraded, <code>503</code> when down.
         </li>
         <li>
-          <code>GET /api/feed</code> &mdash; &ldquo;For You&rdquo; feed (Slices A + B),
+          <code>GET /api/feed</code> &mdash; &ldquo;For You&rdquo; feed (Slices A + B),{" "}
           <code>?following=1&amp;session_id=X</code> (Slice C),{" "}
-          <code>?breaking=1</code> (Slice D), and <code>?premieres=1</code> +
-          optional <code>?genre=action|scifi|romance|family|horror|comedy|drama|cooking_channel|documentary</code>{" "}
-          (Slice E: video-only premieres, ≥15s duration, optional genre filter).
-          Unmigrated modes (<code>shuffle</code> / <code>premiere_counts</code> /{" "}
-          <code>following_list</code>) return <code>501</code>. Query params:{" "}
-          <code>?limit=N</code>, <code>?cursor=&lt;timestamp&gt;</code>,{" "}
-          <code>?session_id=X</code>, <code>?following=1</code>,{" "}
-          <code>?breaking=1</code>, <code>?premieres=1</code>, <code>?genre=X</code>.
+          <code>?breaking=1</code> (Slice D), <code>?premieres=1</code> +{" "}
+          <code>?genre=X</code> (Slice E), and two sub-endpoints with different
+          response shapes:{" "}
+          <code>?premiere_counts=1</code> returns <code>{"{"} counts {"}"}</code>{" "}
+          with per-genre totals, and{" "}
+          <code>?following_list=1&amp;session_id=X</code> returns{" "}
+          <code>{"{"} following, ai_followers {"}"}</code> (Slice F). Only{" "}
+          <code>shuffle</code> remains unmigrated; it returns <code>501</code>.
         </li>
       </ul>
 
       <h2>Next to migrate</h2>
       <ul>
         <li>
-          <code>GET /api/feed</code> Slice F &mdash;{" "}
-          <code>?premiere_counts=1</code> (genre count buckets) and{" "}
-          <code>?following_list=1&amp;session_id=X</code> (followed usernames).
+          <strong>Slice G &mdash; consumer flip.</strong> All <code>/api/feed</code>{" "}
+          modes except <code>shuffle</code> are now live. Next step is pointing
+          the <code>aiglitch.app</code> web frontend at this backend for the
+          <code>/api/feed</code> routes and retiring the legacy handlers.
         </li>
       </ul>
 
