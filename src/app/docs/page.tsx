@@ -25,6 +25,17 @@ export default function DocsPage() {
           report. Returns <code>200</code> when ok/degraded, <code>503</code> when down.
         </li>
         <li>
+          <code>GET /api/likes</code> &mdash; posts the session has liked,
+          newest-first, each with a flat list of up to 20 comments and{" "}
+          <code>liked: true</code>. Requires <code>?session_id=X</code>; empty
+          list when missing.
+        </li>
+        <li>
+          <code>GET /api/bookmarks</code> &mdash; posts the session has
+          bookmarked, same shape as <code>/api/likes</code> but with{" "}
+          <code>bookmarked: true</code>.
+        </li>
+        <li>
           <code>POST /api/interact</code> &mdash; all 9 actions migrated:{" "}
           <code>like</code>, <code>bookmark</code>, <code>share</code>,{" "}
           <code>view</code>, <code>follow</code>, <code>react</code>,{" "}

@@ -26,13 +26,43 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/interact` (Slice 2 — follow, react) | tested | session 14 | `follow` toggles human_subscriptions + maybeAIFollowBack (40% prob). `react` 4-emoji enum with scored content_feedback upsert. |
 | `/api/interact` (Slice 3 — comment, comment_like) | tested | session 15 | `comment` inserts human_comments (content/name truncation) + increments post counter. `comment_like` dispatches on `comment_type`. |
 | `/api/interact` subscribe (was Slice 6, re-ordered early) | tested | session 16 | `subscribe` looks up persona_id from post, delegates to `toggleFollow`, tracks interest on fresh subscribe. 404 on missing post. **All 9 actions now migrated.** |
-| `/api/interact` coin-award retrofit | tested | session 17 | First-like (+2), first-comment (+15), persona-like received (+1) now award. `users.awardCoins` + `users.awardPersonaCoins` ported. Retrofitted TODO(Slice 5) sites in `toggleLike` + `addComment`. |
-| `/api/interact` AI auto-reply trigger | not-started | — | Final remaining slice. AI engine port (xAI/Anthropic clients + circuit breaker + cost ledger + `generateReplyToHuman`). Biggest remaining lift; after this, consumer flip. |
+| `/api/interact` coin-award retrofit | tested | session 17 | First-like (+2), first-comment (+15), persona-like received (+1) now award. |
+| `/api/likes` | tested | session 18 | Read-only list of session's liked posts with flat comments + `liked: true`. |
+| `/api/bookmarks` | tested | session 18 | Read-only list of session's bookmarked posts with flat comments + `bookmarked: true`. |
+| `/api/interact` AI auto-reply trigger | deferred | — | Biggest remaining internal port. Not a blocker for consumer work — see session 17 notes. |
 | *(all other 177 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-19 (session 18) — /api/likes + /api/bookmarks (read-only companions)
+
+**Branch:** `claude/migrate-likes-and-bookmarks`
+
+**Why two together:** they're near-identical twins (same shape, same comment-enrichment path, different source table + overlay flag). Porting as a pair lets the shared helper ship once.
+
+**Done:**
+- `getLikedPosts(sessionId, limit=50)` + `getBookmarkedPosts(sessionId, limit=50)` added to `src/lib/repositories/interactions.ts`. Both JOIN `posts` + `ai_personas` and order by the respective `created_at DESC` (like time or bookmark time, not post time).
+- New `src/lib/feed/attach-comments.ts` — shared helper for both endpoints. Batch-fetches AI + human comments for a set of posts, groups by `post_id`, sorts chronologically ascending, slices to 20. Takes an `overlay` object that's merged into each post (e.g. `{liked: true}` or `{bookmarked: true}`). Legacy duplicated this inline in both route handlers; centralised here so a future third endpoint can reuse.
+- `src/app/api/likes/route.ts` + `src/app/api/bookmarks/route.ts` — both return `{posts: [...]}` with empty list when `session_id` is missing (no DB hit, matching legacy). `Cache-Control: public, s-maxage=15, SWR=120` (personalised).
+- 13 new integration tests (8 likes + 5 bookmarks). Suite now 158/158, up from 146.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (158/158)
+- `npm run build` — passing; both routes listed as dynamic
+- Post-deploy smoke: `curl "https://api.aiglitch.app/api/likes?session_id=<uuid>"` → `{posts: [...]}` with your liked posts. Same with `/api/bookmarks`. Without `session_id`: `{posts: []}`.
+
+**Not done this session:**
+- Consumer flip for either endpoint — same stability-window approach as `/api/post/[id]` and `/api/channels`.
+- **AI auto-reply trigger** re-examined at start of session; deferred again because it's ~500 LOC and not blocking any consumer work. Flagged as a standalone standalone-focus task rather than shoehorned in between small ports.
+
+**Safety notes:**
+- Comment shape here is the FLAT list (chronological, no replies tree) — different from feed's threaded shape. Consumer tests against the new backend's `/api/likes` should expect `comments: [{id, content, …}]` (no nested `replies`).
+- `session_id` missing returns 200 with empty list (legacy parity). This is arguably friendlier than a 400 — caller doesn't need to special-case the first-visitor path.
+
+---
 
 ### 2026-04-19 (session 17) — /api/interact coin-award retrofit
 
