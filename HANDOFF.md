@@ -22,13 +22,51 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/post/[id]` | tested | session 11 | Single post + threaded comments + bookmark + meatbag_author overlay. 404 on miss, 500 on DB error. Consumer flip deferred until stability window. |
 | `/api/channels` GET | tested | session 12 | List + counts + hosts + thumbnail + subscription state. Legacy Cache-Control preserved (s-maxage=30, SWR=120). |
 | `/api/channels` POST | tested | session 12 | subscribe / unsubscribe. **First write endpoint on the new backend.** INSERT + counter UPDATE match legacy non-transactional shape. `crypto.randomUUID()` for row ids (no deps added). |
-| `/api/interact` (Slice 1 — like, bookmark, share, view) | tested | session 13 | Hot write path. 4 of 9 actions migrated; others return 501. Coin awards stripped (deferred to Slice 5). |
-| `/api/interact` (Slices 2–6) | not-started | — | follow+react · comment+comment_like · AI reply trigger · coin awards · subscribe-via-post |
+| `/api/interact` (Slice 1 — like, bookmark, share, view) | tested | session 13 | Hot write path. Coin awards stripped (deferred to Slice 5). |
+| `/api/interact` (Slice 2 — follow, react) | tested | session 14 | `follow` toggles human_subscriptions + maybeAIFollowBack (40% prob). `react` 4-emoji enum with scored content_feedback upsert. 6 of 9 actions now live. |
+| `/api/interact` (Slices 3–6) | not-started | — | comment+comment_like · AI reply trigger · coin awards · subscribe-via-post |
 | *(all other 177 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-19 (session 14) — /api/interact Slice 2 (follow + react)
+
+**Branch:** `claude/migrate-interact-slice-2`
+
+**Done:**
+- Extended `src/lib/repositories/interactions.ts` with:
+  - `toggleFollow(personaId, sessionId)` — toggles `human_subscriptions`, bumps `ai_personas.follower_count` with `GREATEST(0, …)` decrement guard, triggers `maybeAIFollowBack` on the follow path.
+  - `maybeAIFollowBack(personaId, sessionId)` — internal, rolls `AI_FOLLOW_BACK_PROB` (40%), inserts `ai_persona_follows` row, sends an `ai_follow` notification with `"<display_name> followed you back! 🤖"` preview.
+  - `toggleReaction(postId, sessionId, emoji)` — 4-emoji enum (`funny`, `sad`, `shocked`, `crap`); inserts `emoji_reactions` row; upserts `content_feedback` with scored formula (`funny×3 + shocked×2 + sad - crap×2`); `GREATEST(0, …)` guards on remove path; throws on invalid emoji so the route can 400.
+  - `getReactionCounts(postId)` — aggregates and returns `{funny, sad, shocked, crap}` counts.
+  - Inlined `AI_FOLLOW_BACK_PROB = 0.40` + `VALID_EMOJIS` + `EMOJI_SCORE_DELTA` map.
+- Extended `src/app/api/interact/route.ts`:
+  - Removed `follow` + `react` from `UNSUPPORTED_ACTIONS`. Only `comment`, `comment_like`, `subscribe` remain deferred.
+  - `follow` branch validates `persona_id` (not `post_id`).
+  - `react` branch validates `post_id` + `emoji`; translates `Invalid emoji:` thrown errors into 400 while passing other errors through to the 500 wrapper.
+- 8 new integration tests: follow missing persona_id, follow add/remove, maybeAIFollowBack fires / skips / stops on already-follows, react missing post_id / missing emoji / invalid emoji, react add with scored upsert, react remove with GREATEST guard.
+- Suite now 126/126, up from 118.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (126/126)
+- `npm run build` — passing; `/api/interact` still the single endpoint
+- Post-deploy smoke: `curl -X POST https://api.aiglitch.app/api/interact -d '{"session_id":"<uuid>","persona_id":"glitch-001","action":"follow"}'` → `{success: true, action: "followed"}` / `"unfollowed"` on second call.
+- Post-deploy smoke: same endpoint with `{"post_id":"<id>","emoji":"funny","action":"react"}` → `{success: true, action: "reacted", emoji: "funny", counts: {...}}`.
+
+**Not done this session:**
+- Slice 3: `comment` + `comment_like` (no AI reply, that's Slice 4).
+- Slice 4: AI auto-reply trigger.
+- Slice 5: coin-award retrofit (touches likes and reactions retroactively).
+- Slice 6: `subscribe` (post-id → persona lookup, calls toggleFollow).
+
+**Safety notes:**
+- `toggleReaction` upsert uses Postgres UPSERT semantics — concurrent first-press from the same session would race to insert. `ON CONFLICT (post_id)` in content_feedback is fine, but emoji_reactions has no explicit unique constraint shown; legacy trusts the SELECT-then-INSERT flow. Legacy race preserved.
+- `maybeAIFollowBack` is fire-and-forget semantically — any error inside would currently surface as a 500 to the caller. Legacy wraps in an outer try/catch in the route. Kept the same shape (route's catch handles it).
+
+---
 
 ### 2026-04-19 (session 13) — /api/interact Slice 1 (like / bookmark / share / view)
 
