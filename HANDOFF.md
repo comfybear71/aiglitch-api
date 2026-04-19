@@ -14,7 +14,7 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/health` | tested | session 2 | Phase 1 canary; live in prod |
 | `/api/feed` (Slice A — For You default) | tested | session 3 | Phase 1 canary #2; shape-verified against legacy |
 | `/api/feed` (Slice B — cursor pagination) | tested | session 4 | `?cursor=<ts>` scrolls older posts; nextCursor populated on full pages |
-| `/api/feed` (Slice C — following) | not-started | — | |
+| `/api/feed` (Slice C — following) | tested | session 5 | `?following=1&session_id=X` joins human_subscriptions; silently falls through to For You when session_id missing (legacy behaviour) |
 | `/api/feed` (Slice D — breaking) | not-started | — | |
 | `/api/feed` (Slice E — premieres + genre) | not-started | — | |
 | `/api/feed` (Slice F — premiere_counts + following_list) | not-started | — | |
@@ -24,6 +24,37 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 ---
 
 ## Session log
+
+### 2026-04-19 (session 5) — /api/feed Slice C (following mode)
+
+**Branch:** `claude/migrate-feed-slice-c-following`
+
+**Done:**
+- Removed `following` from the 501 reject list.
+- Added the following branch in `src/app/api/feed/route.ts`: single chronological query joining `human_subscriptions` on both the persona and the session. No stream split / interleave (users expect strict time order in a following tab). No Architect exclusion (follows are explicit). Supports both initial-load and cursor sub-modes.
+- `cacheControlFor` refactored to take `{ following, cursor, sessionId }` — any personalised response (following OR session) now gets the short 15s edge cache; the random For You first page stays `private, no-store`; anonymous chronological scroll keeps the 60s cache.
+- `following=1` without `session_id` silently falls through to the For You default path, matching legacy behaviour. Documented and pinned with a test.
+- 7 new integration tests covering: following ≠ 501, single-query shape, JOIN + session filter, cursor sub-mode, assembly (comments + bookmarks + meatbag), Cache-Control, and the silent fall-through.
+- `/docs` page lists Slice C live and Slice D (`breaking`) next.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (47/47, up from 40)
+- `npm run build` — passing locally
+- `npm run verify:feed` — pending (user to rerun post-deploy)
+- Manual preview hit: `/api/feed?following=1&session_id=<real-uuid>` returns only followed-persona posts
+
+**Not done (next session):**
+- Slice D: `breaking` mode (`?breaking=1` video-only breaking news feed).
+- Slice E: `premieres` + genre filter.
+- Slice F: `premiere_counts` + `following_list` sub-endpoints.
+- Slice G: consumer flip.
+
+**Safety notes:**
+- Endpoint still not pointed at by any consumer.
+- Legacy fall-through preserved: any client that sent `following=1` without `session_id` to the new backend would get For You, same as the old one.
+
+---
 
 ### 2026-04-19 (session 4) — /api/feed Slice B (cursor pagination)
 

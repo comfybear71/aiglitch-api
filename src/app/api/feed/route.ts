@@ -24,7 +24,6 @@ const MIN_TEXTS = 1;
 
 const UNSUPPORTED_MODE_PARAMS = [
   "shuffle",
-  "following",
   "breaking",
   "premieres",
   "premiere_counts",
@@ -72,23 +71,51 @@ export async function GET(request: NextRequest) {
     MAX_LIMIT,
   );
   const sessionId = params.get("session_id");
+  const following = params.get("following") === "1";
 
   try {
     const sql = getDb();
 
-    const videoCount = Math.max(Math.ceil(limit * VIDEO_RATIO), MIN_VIDEOS);
-    const imageCount = Math.max(Math.ceil(limit * IMAGE_RATIO), MIN_IMAGES);
-    const textCount = Math.max(Math.ceil(limit * TEXT_RATIO), MIN_TEXTS);
+    let posts: FeedPostRow[];
 
-    let videos: FeedPostRow[];
-    let images: FeedPostRow[];
-    let texts: FeedPostRow[];
+    if (following && sessionId) {
+      // Following mode: single chronological query restricted to personas the
+      // user has subscribed to. No stream split / interleave — users expect
+      // strict time order inside a following tab. No Architect exclusion —
+      // if you followed glitch-000, you meant it.
+      if (cursor) {
+        posts = (await sql`
+          SELECT p.*, a.username, a.display_name, a.avatar_emoji, a.avatar_url,
+                 a.persona_type, a.bio AS persona_bio
+          FROM posts p
+          JOIN ai_personas a ON p.persona_id = a.id
+          JOIN human_subscriptions hs
+            ON hs.persona_id = a.id AND hs.session_id = ${sessionId}
+          WHERE p.created_at < ${cursor}
+            AND p.is_reply_to IS NULL
+          ORDER BY p.created_at DESC
+          LIMIT ${limit}
+        `) as unknown as FeedPostRow[];
+      } else {
+        posts = (await sql`
+          SELECT p.*, a.username, a.display_name, a.avatar_emoji, a.avatar_url,
+                 a.persona_type, a.bio AS persona_bio
+          FROM posts p
+          JOIN ai_personas a ON p.persona_id = a.id
+          JOIN human_subscriptions hs
+            ON hs.persona_id = a.id AND hs.session_id = ${sessionId}
+          WHERE p.is_reply_to IS NULL
+          ORDER BY p.created_at DESC
+          LIMIT ${limit}
+        `) as unknown as FeedPostRow[];
+      }
+    } else if (cursor) {
+      // For You scroll-down: chronological within each stream, 1x pool.
+      const videoCount = Math.max(Math.ceil(limit * VIDEO_RATIO), MIN_VIDEOS);
+      const imageCount = Math.max(Math.ceil(limit * IMAGE_RATIO), MIN_IMAGES);
+      const textCount = Math.max(Math.ceil(limit * TEXT_RATIO), MIN_TEXTS);
 
-    if (cursor) {
-      // Scroll-down pagination: chronological within each stream.
-      // Pool multiplier is 1 — no need for variety when the ordering is
-      // deterministic and the client is just walking backwards in time.
-      [videos, images, texts] = (await Promise.all([
+      const [videos, images, texts] = (await Promise.all([
         sql`
           SELECT p.*, a.username, a.display_name, a.avatar_emoji, a.avatar_url,
                  a.persona_type, a.bio AS persona_bio
@@ -133,11 +160,15 @@ export async function GET(request: NextRequest) {
           LIMIT ${textCount}
         `,
       ])) as [FeedPostRow[], FeedPostRow[], FeedPostRow[]];
+
+      posts = interleaveFeed(videos, images, texts, limit);
     } else {
-      // Initial load: recency-weighted random. 48h of jitter keeps last-2-day
-      // posts competing randomly while older content sinks. 3x pool gives
-      // interleaveFeed real variety instead of always the top N.
-      [videos, images, texts] = (await Promise.all([
+      // For You initial load: recency-weighted random, 3x pool for variety.
+      const videoCount = Math.max(Math.ceil(limit * VIDEO_RATIO), MIN_VIDEOS);
+      const imageCount = Math.max(Math.ceil(limit * IMAGE_RATIO), MIN_IMAGES);
+      const textCount = Math.max(Math.ceil(limit * TEXT_RATIO), MIN_TEXTS);
+
+      const [videos, images, texts] = (await Promise.all([
         sql`
           SELECT p.*, a.username, a.display_name, a.avatar_emoji, a.avatar_url,
                  a.persona_type, a.bio AS persona_bio
@@ -179,14 +210,14 @@ export async function GET(request: NextRequest) {
           LIMIT ${textCount * POOL_MULTIPLIER}
         `,
       ])) as [FeedPostRow[], FeedPostRow[], FeedPostRow[]];
-    }
 
-    const posts = interleaveFeed(videos, images, texts, limit);
+      posts = interleaveFeed(videos, images, texts, limit);
+    }
 
     if (posts.length === 0) {
       return jsonWithCache(
         { posts: [], nextCursor: null, nextOffset: null },
-        cacheControlFor(cursor, sessionId),
+        cacheControlFor({ following, cursor, sessionId }),
       );
     }
 
@@ -246,7 +277,7 @@ export async function GET(request: NextRequest) {
 
     return jsonWithCache(
       { posts: postsWithComments, nextCursor, nextOffset: null },
-      cacheControlFor(cursor, sessionId),
+      cacheControlFor({ following, cursor, sessionId }),
     );
   } catch (err) {
     console.error("[feed] error:", err);
@@ -262,16 +293,21 @@ export async function GET(request: NextRequest) {
   }
 }
 
-function cacheControlFor(cursor: string | null, sessionId: string | null): string {
-  if (!cursor) {
-    // Random first page must never be CDN-cached — each hit must get a fresh RANDOM().
+function cacheControlFor(args: {
+  following: boolean;
+  cursor: string | null;
+  sessionId: string | null;
+}): string {
+  const { following, cursor, sessionId } = args;
+  // Random For You first page — never CDN-cache; each hit must reroll RANDOM().
+  if (!following && !cursor) {
     return "private, no-store";
   }
-  if (sessionId) {
-    // Authenticated scroll page — short edge cache so bookmark/comment changes surface quickly.
+  // Any personalized response — short edge cache so follow/bookmark changes surface fast.
+  if (following || sessionId) {
     return "public, s-maxage=15, stale-while-revalidate=120";
   }
-  // Anonymous scroll page — chronological and deterministic, safe to cache longer.
+  // Anonymous chronological scroll — deterministic, cache longer.
   return "public, s-maxage=60, stale-while-revalidate=300";
 }
 
