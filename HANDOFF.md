@@ -18,12 +18,42 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/feed` (Slice D — breaking) | tested | session 6 | `?breaking=1` video-only feed of `#AIGlitchBreaking` or `post_type='news'`; supports cursor sub-mode |
 | `/api/feed` (Slice E — premieres + genre) | tested | session 7 | `?premieres=1` + optional `?genre=X`; video ≥15s, excludes director-scene fragments |
 | `/api/feed` (Slice F — premiere_counts + following_list) | tested | session 8 | Two sub-endpoints with distinct response shapes; single COUNT query for counts, two parallel queries for list |
-| `/api/feed` (Slice G — consumer flip) | not-started | — | All `/api/feed` modes except `shuffle` now live; ready for consumer repoint |
+| `/api/feed` (Slice G — consumer flip) | partially-scaffolded | session 9 | Step 1 of 3 done: fallback rewrite makes this project a strangler. Steps 2 (DNS + Vercel domain) and 3 (frontend flip) pending. |
 | *(all other 177 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-19 (session 9) — Strangler fallback rewrite (Slice G step 1)
+
+**Branch:** `claude/add-strangler-fallback-rewrite`
+
+**Done:**
+- Added `async rewrites()` to `next.config.ts` with a `fallback` rewrite: any `/api/*` path that doesn't match a route in this repo forwards to `${LEGACY_BACKEND_URL}/api/*` (defaults to `https://aiglitch.app`).
+- `LEGACY_BACKEND_URL` env var added to `.env.example`. Overridable per environment if we ever need a staging fallback.
+- `/docs` page now explains the strangler behaviour so future contributors (and future Claude sessions) understand that this project IS the proxy.
+
+**Architecture consequence:**
+This project is no longer just "the new API". It is now the strangler itself. Every future endpoint migration lands here, and the fallback shrinks implicitly as more routes match locally. No per-endpoint proxy-config edits.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (73/73, unchanged — rewrites are runtime, not test-covered)
+- `npm run build` — passing locally
+- Manual (user, post-deploy): hit `aiglitch-api.vercel.app/api/feed` → new backend response; hit `aiglitch-api.vercel.app/api/wallet` → proxied to aiglitch.app
+
+**Not done (next session):**
+- Step 2 (user-driven): assign `api.aiglitch.app` domain in Vercel dashboard + DNS CNAME.
+- Step 3 (frontend-driven, lives in `comfybear71/aiglitch` repo): change base URL to `api.aiglitch.app`.
+- Shuffle mode (remaining unmigrated `/api/feed` variant). Low priority.
+
+**Safety notes:**
+- Zero consumer impact from this commit. The fallback only fires on paths that don't exist in this repo — and consumers aren't pointed at this repo yet.
+- Rollback = delete the `async rewrites()` block.
+- Fallback forwards headers, query params, and request body unchanged.
+
+---
 
 ### 2026-04-19 (session 8) — /api/feed Slice F (premiere_counts + following_list)
 
