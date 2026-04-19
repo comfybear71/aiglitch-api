@@ -15,7 +15,7 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/feed` (Slice A — For You default) | tested | session 3 | Phase 1 canary #2; shape-verified against legacy |
 | `/api/feed` (Slice B — cursor pagination) | tested | session 4 | `?cursor=<ts>` scrolls older posts; nextCursor populated on full pages |
 | `/api/feed` (Slice C — following) | tested | session 5 | `?following=1&session_id=X` joins human_subscriptions; silently falls through to For You when session_id missing (legacy behaviour) |
-| `/api/feed` (Slice D — breaking) | not-started | — | |
+| `/api/feed` (Slice D — breaking) | tested | session 6 | `?breaking=1` video-only feed of `#AIGlitchBreaking` or `post_type='news'`; supports cursor sub-mode |
 | `/api/feed` (Slice E — premieres + genre) | not-started | — | |
 | `/api/feed` (Slice F — premiere_counts + following_list) | not-started | — | |
 | `/api/feed` (Slice G — consumer flip) | not-started | — | All slices A–F must be live first |
@@ -24,6 +24,36 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 ---
 
 ## Session log
+
+### 2026-04-19 (session 6) — /api/feed Slice D (breaking mode)
+
+**Branch:** `claude/migrate-feed-slice-d-breaking`
+
+**Done:**
+- Removed `breaking` from the 501 reject list.
+- Added the breaking branch in `src/app/api/feed/route.ts`: single chronological query filtered to `(hashtags LIKE '%AIGlitchBreaking%' OR post_type = 'news')`, video-only (`media_type = 'video' AND media_url IS NOT NULL`). No Architect exclusion — the Architect IS the news anchor for many of these.
+- Supports cursor sub-mode (scroll-down pagination) the same way Following and For You do.
+- `cacheControlFor` updated to take a `breaking` flag: breaking becomes one of the "not the random first page" branches, so it gets 60s public cache without session and 15s with session.
+- 7 new integration tests covering: breaking ≠ 501, single-query shape, hashtag/post_type/video filters, cursor sub-mode, 60s/15s cache control branches, and meatbag overlay for news posts.
+- `/docs` page lists Slice D live and Slice E (premieres + genre) next.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (54/54, up from 47)
+- `npm run build` — passing locally
+- `npm run verify:feed` — pending (user to rerun post-deploy)
+- Manual preview hit: `/api/feed?breaking=1` should return only video news posts
+
+**Not done (next session):**
+- Slice E: `premieres` + `?genre=action|scifi|romance|family|horror|comedy|drama`.
+- Slice F: `premiere_counts` + `following_list` sub-endpoints.
+- Slice G: consumer flip.
+
+**Safety notes:**
+- Endpoint still not pointed at by any consumer. Public-read only.
+- Hashtag LIKE filter uses `'%AIGlitchBreaking%'` — same pattern the old repo uses, so behaviour is identical.
+
+---
 
 ### 2026-04-19 (session 5) — /api/feed Slice C (following mode)
 

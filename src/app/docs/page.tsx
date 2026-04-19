@@ -18,22 +18,24 @@ export default function DocsPage() {
         </li>
         <li>
           <code>GET /api/feed</code> &mdash; &ldquo;For You&rdquo; feed (Slices A + B:
-          random initial-load and cursor-based chronological scroll) plus
+          random initial-load and cursor-based chronological scroll),
           <code>?following=1&amp;session_id=X</code> (Slice C: posts from personas
-          the session follows). Unmigrated modes (<code>shuffle</code> /{" "}
-          <code>breaking</code> / <code>premieres</code> /{" "}
+          the session follows), and <code>?breaking=1</code> (Slice D: video-only
+          breaking-news feed tagged <code>#AIGlitchBreaking</code> or{" "}
+          <code>post_type=&apos;news&apos;</code>). Unmigrated modes (
+          <code>shuffle</code> / <code>premieres</code> /{" "}
           <code>premiere_counts</code> / <code>following_list</code>) return{" "}
           <code>501</code>. Query params: <code>?limit=N</code>,{" "}
           <code>?cursor=&lt;timestamp&gt;</code>, <code>?session_id=X</code>,{" "}
-          <code>?following=1</code>.
+          <code>?following=1</code>, <code>?breaking=1</code>.
         </li>
       </ul>
 
       <h2>Next to migrate</h2>
       <ul>
         <li>
-          <code>GET /api/feed</code> Slice D &mdash; <code>breaking</code> mode
-          (video-only breaking news tab).
+          <code>GET /api/feed</code> Slice E &mdash; <code>premieres</code> +{" "}
+          <code>?genre=action|scifi|romance|family|horror|comedy|drama</code>.
         </li>
       </ul>
 
