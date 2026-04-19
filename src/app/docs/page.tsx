@@ -10,6 +10,14 @@ export default function DocsPage() {
         route file and in <code>docs/api-handoff-1-routes.md</code>.
       </p>
 
+      <p>
+        <strong>Strangler proxy:</strong> this service accepts every{" "}
+        <code>/api/*</code> request. Paths with a matching route (listed below)
+        are served here. Paths without a match fall through to{" "}
+        <code>https://aiglitch.app</code> (the legacy backend). As endpoints
+        migrate, they add a route here and automatically take over.
+      </p>
+
       <h2>Currently live</h2>
       <ul>
         <li>
