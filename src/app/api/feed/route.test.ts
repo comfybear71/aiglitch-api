@@ -1,9 +1,10 @@
 /**
- * Integration tests for /api/feed (Slices A + B — For You default + cursor).
+ * Integration tests for /api/feed (Slices A + B + C — For You default,
+ * For You cursor, and Following).
  *
  * The route handler is exercised through a fake `neon` client that records
  * every SQL template and returns canned rows. This catches:
- *   - 501 short-circuit on unsupported mode params (shuffle, following, …)
+ *   - 501 short-circuit on unsupported mode params (shuffle, breaking, …)
  *   - shape of the response (posts, nextCursor, nextOffset)
  *   - bookmark resolution when session_id is present vs absent
  *   - meatbag author overlay when posts carry meatbag_author_id
@@ -12,6 +13,9 @@
  *   - Slice B: cursor mode switches to chronological queries
  *   - Slice B: nextCursor is set to last post's created_at on full pages
  *   - Slice B: Cache-Control differs by mode and session
+ *   - Slice C: following mode joins human_subscriptions for the session
+ *   - Slice C: following mode is one query, not three streams
+ *   - Slice C: following falls through to For You when session_id missing
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -80,9 +84,9 @@ function videoRow(id: string, extras: Record<string, unknown> = {}) {
   };
 }
 
-describe("GET /api/feed (Slices A + B)", () => {
-  it("returns 501 for unsupported mode params (Slice B removes cursor from this list)", async () => {
-    for (const param of ["shuffle", "following", "breaking", "premieres", "premiere_counts", "following_list"]) {
+describe("GET /api/feed (Slices A + B + C)", () => {
+  it("returns 501 for unsupported mode params (Slice C removes following from this list)", async () => {
+    for (const param of ["shuffle", "breaking", "premieres", "premiere_counts", "following_list"]) {
       const res = await callGet(`http://localhost/api/feed?${param}=1`);
       expect(res.status).toBe(501);
       const body = (await res.json()) as { error: string; unsupported_param: string };
@@ -300,5 +304,93 @@ describe("GET /api/feed (Slices A + B)", () => {
     expect(res.headers.get("Cache-Control")).toBe(
       "public, s-maxage=15, stale-while-revalidate=120",
     );
+  });
+
+  // ── Slice C — following mode ───────────────────────────────────────────
+
+  it("following param no longer returns 501 when session_id is provided", async () => {
+    fake.results = [[]]; // single query, single result set
+    const res = await callGet("http://localhost/api/feed?following=1&session_id=user-1");
+    expect(res.status).toBe(200);
+  });
+
+  it("following mode issues a single SQL query, not three", async () => {
+    fake.results = [[]];
+    await callGet("http://localhost/api/feed?following=1&session_id=user-1");
+    expect(fake.calls).toHaveLength(1);
+  });
+
+  it("following mode SQL joins human_subscriptions and filters by session_id", async () => {
+    fake.results = [[]];
+    await callGet("http://localhost/api/feed?following=1&session_id=user-1");
+    const call = fake.calls[0]!;
+    const sqlText = call.strings.join("?");
+    expect(sqlText).toContain("JOIN human_subscriptions");
+    expect(sqlText).toContain("hs.session_id = ");
+    expect(call.values).toContain("user-1");
+  });
+
+  it("following mode with cursor filters by created_at and session", async () => {
+    fake.results = [[]];
+    const cursorValue = "2026-04-18T00:00:00Z";
+    await callGet(
+      `http://localhost/api/feed?following=1&session_id=user-1&cursor=${encodeURIComponent(cursorValue)}`,
+    );
+    const call = fake.calls[0]!;
+    expect(call.values).toContain("user-1");
+    expect(call.values).toContain(cursorValue);
+    const sqlText = call.strings.join("?");
+    expect(sqlText).toContain("p.created_at < ");
+    expect(sqlText).toContain("ORDER BY p.created_at DESC");
+  });
+
+  it("following mode assembles posts with comments + bookmarks + meatbag overlay", async () => {
+    fake.results = [
+      [videoRow("v1", { meatbag_author_id: "human-42" })],
+      [], // ai comments
+      [], // human comments
+      [{ post_id: "v1" }], // bookmarks
+      [
+        {
+          id: "human-42",
+          display_name: "Bob",
+          username: "bob",
+          avatar_emoji: "🧑",
+          avatar_url: null,
+          bio: "",
+          x_handle: null,
+          instagram_handle: null,
+        },
+      ], // meatbag lookup
+    ];
+    const res = await callGet(
+      "http://localhost/api/feed?following=1&session_id=user-1",
+    );
+    const body = (await res.json()) as {
+      posts: Array<{
+        id: string;
+        bookmarked: boolean;
+        meatbag_author: { display_name: string } | null;
+      }>;
+    };
+    expect(body.posts[0]?.bookmarked).toBe(true);
+    expect(body.posts[0]?.meatbag_author?.display_name).toBe("Bob");
+  });
+
+  it("following mode uses short CDN cache even without cursor (personalized)", async () => {
+    fake.results = [[]];
+    const res = await callGet("http://localhost/api/feed?following=1&session_id=user-1");
+    expect(res.headers.get("Cache-Control")).toBe(
+      "public, s-maxage=15, stale-while-revalidate=120",
+    );
+  });
+
+  it("following=1 without session_id falls through to For You (legacy behaviour)", async () => {
+    // Legacy silently falls through. We match it — feed should behave like the
+    // For You default path (three random-weighted stream queries).
+    fake.results = [[], [], []];
+    const res = await callGet("http://localhost/api/feed?following=1");
+    expect(res.status).toBe(200);
+    expect(fake.calls).toHaveLength(3);
   });
 });
