@@ -1,10 +1,10 @@
 /**
- * Integration tests for /api/feed (Slices A + B + C — For You default,
- * For You cursor, and Following).
+ * Integration tests for /api/feed (Slices A + B + C + D — For You default,
+ * For You cursor, Following, and Breaking).
  *
  * The route handler is exercised through a fake `neon` client that records
  * every SQL template and returns canned rows. This catches:
- *   - 501 short-circuit on unsupported mode params (shuffle, breaking, …)
+ *   - 501 short-circuit on unsupported mode params (shuffle, premieres, …)
  *   - shape of the response (posts, nextCursor, nextOffset)
  *   - bookmark resolution when session_id is present vs absent
  *   - meatbag author overlay when posts carry meatbag_author_id
@@ -16,6 +16,8 @@
  *   - Slice C: following mode joins human_subscriptions for the session
  *   - Slice C: following mode is one query, not three streams
  *   - Slice C: following falls through to For You when session_id missing
+ *   - Slice D: breaking mode filters by hashtag/post_type and video-only
+ *   - Slice D: breaking supports cursor sub-mode
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -84,9 +86,9 @@ function videoRow(id: string, extras: Record<string, unknown> = {}) {
   };
 }
 
-describe("GET /api/feed (Slices A + B + C)", () => {
-  it("returns 501 for unsupported mode params (Slice C removes following from this list)", async () => {
-    for (const param of ["shuffle", "breaking", "premieres", "premiere_counts", "following_list"]) {
+describe("GET /api/feed (Slices A + B + C + D)", () => {
+  it("returns 501 for unsupported mode params (Slice D removes breaking from this list)", async () => {
+    for (const param of ["shuffle", "premieres", "premiere_counts", "following_list"]) {
       const res = await callGet(`http://localhost/api/feed?${param}=1`);
       expect(res.status).toBe(501);
       const body = (await res.json()) as { error: string; unsupported_param: string };
@@ -392,5 +394,85 @@ describe("GET /api/feed (Slices A + B + C)", () => {
     const res = await callGet("http://localhost/api/feed?following=1");
     expect(res.status).toBe(200);
     expect(fake.calls).toHaveLength(3);
+  });
+
+  // ── Slice D — breaking mode ────────────────────────────────────────────
+
+  it("breaking param no longer returns 501", async () => {
+    fake.results = [[]];
+    const res = await callGet("http://localhost/api/feed?breaking=1");
+    expect(res.status).toBe(200);
+  });
+
+  it("breaking mode issues a single SQL query, not three", async () => {
+    fake.results = [[]];
+    await callGet("http://localhost/api/feed?breaking=1");
+    expect(fake.calls).toHaveLength(1);
+  });
+
+  it("breaking mode SQL filters by hashtag/post_type and video-only", async () => {
+    fake.results = [[]];
+    await callGet("http://localhost/api/feed?breaking=1");
+    const sqlText = fake.calls[0]!.strings.join("?");
+    expect(sqlText).toContain("AIGlitchBreaking");
+    expect(sqlText).toContain("post_type = 'news'");
+    expect(sqlText).toContain("p.media_type = 'video'");
+    expect(sqlText).toContain("p.media_url IS NOT NULL");
+    expect(sqlText).toContain("ORDER BY p.created_at DESC");
+  });
+
+  it("breaking mode with cursor adds WHERE created_at < cursor", async () => {
+    fake.results = [[]];
+    const cursorValue = "2026-04-18T00:00:00Z";
+    await callGet(
+      `http://localhost/api/feed?breaking=1&cursor=${encodeURIComponent(cursorValue)}`,
+    );
+    const call = fake.calls[0]!;
+    expect(call.values).toContain(cursorValue);
+    const sqlText = call.strings.join("?");
+    expect(sqlText).toContain("p.created_at < ");
+  });
+
+  it("breaking mode without session uses 60s public cache", async () => {
+    fake.results = [[]];
+    const res = await callGet("http://localhost/api/feed?breaking=1");
+    expect(res.headers.get("Cache-Control")).toBe(
+      "public, s-maxage=60, stale-while-revalidate=300",
+    );
+  });
+
+  it("breaking mode with session uses 15s personalized cache", async () => {
+    fake.results = [[]];
+    const res = await callGet("http://localhost/api/feed?breaking=1&session_id=user-1");
+    expect(res.headers.get("Cache-Control")).toBe(
+      "public, s-maxage=15, stale-while-revalidate=120",
+    );
+  });
+
+  it("breaking mode assembles posts with comments + bookmarks + meatbag overlay", async () => {
+    fake.results = [
+      [videoRow("n1", { post_type: "news", meatbag_author_id: "human-7" })],
+      [], // ai comments
+      [], // human comments
+      [{ post_id: "n1" }], // bookmarks
+      [
+        {
+          id: "human-7",
+          display_name: "Chuck the News",
+          username: "chuck",
+          avatar_emoji: "📰",
+          avatar_url: null,
+          bio: "",
+          x_handle: null,
+          instagram_handle: null,
+        },
+      ],
+    ];
+    const res = await callGet("http://localhost/api/feed?breaking=1&session_id=user-1");
+    const body = (await res.json()) as {
+      posts: Array<{ bookmarked: boolean; meatbag_author: { display_name: string } | null }>;
+    };
+    expect(body.posts[0]?.bookmarked).toBe(true);
+    expect(body.posts[0]?.meatbag_author?.display_name).toBe("Chuck the News");
   });
 });
