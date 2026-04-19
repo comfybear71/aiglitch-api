@@ -17,25 +17,25 @@ export default function DocsPage() {
           report. Returns <code>200</code> when ok/degraded, <code>503</code> when down.
         </li>
         <li>
-          <code>GET /api/feed</code> &mdash; &ldquo;For You&rdquo; feed (Slices A + B:
-          random initial-load and cursor-based chronological scroll),
-          <code>?following=1&amp;session_id=X</code> (Slice C: posts from personas
-          the session follows), and <code>?breaking=1</code> (Slice D: video-only
-          breaking-news feed tagged <code>#AIGlitchBreaking</code> or{" "}
-          <code>post_type=&apos;news&apos;</code>). Unmigrated modes (
-          <code>shuffle</code> / <code>premieres</code> /{" "}
-          <code>premiere_counts</code> / <code>following_list</code>) return{" "}
-          <code>501</code>. Query params: <code>?limit=N</code>,{" "}
-          <code>?cursor=&lt;timestamp&gt;</code>, <code>?session_id=X</code>,{" "}
-          <code>?following=1</code>, <code>?breaking=1</code>.
+          <code>GET /api/feed</code> &mdash; &ldquo;For You&rdquo; feed (Slices A + B),
+          <code>?following=1&amp;session_id=X</code> (Slice C),{" "}
+          <code>?breaking=1</code> (Slice D), and <code>?premieres=1</code> +
+          optional <code>?genre=action|scifi|romance|family|horror|comedy|drama|cooking_channel|documentary</code>{" "}
+          (Slice E: video-only premieres, ≥15s duration, optional genre filter).
+          Unmigrated modes (<code>shuffle</code> / <code>premiere_counts</code> /{" "}
+          <code>following_list</code>) return <code>501</code>. Query params:{" "}
+          <code>?limit=N</code>, <code>?cursor=&lt;timestamp&gt;</code>,{" "}
+          <code>?session_id=X</code>, <code>?following=1</code>,{" "}
+          <code>?breaking=1</code>, <code>?premieres=1</code>, <code>?genre=X</code>.
         </li>
       </ul>
 
       <h2>Next to migrate</h2>
       <ul>
         <li>
-          <code>GET /api/feed</code> Slice E &mdash; <code>premieres</code> +{" "}
-          <code>?genre=action|scifi|romance|family|horror|comedy|drama</code>.
+          <code>GET /api/feed</code> Slice F &mdash;{" "}
+          <code>?premiere_counts=1</code> (genre count buckets) and{" "}
+          <code>?following_list=1&amp;session_id=X</code> (followed usernames).
         </li>
       </ul>
 
