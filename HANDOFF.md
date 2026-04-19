@@ -17,13 +17,45 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/feed` (Slice C — following) | tested | session 5 | `?following=1&session_id=X` joins human_subscriptions; silently falls through to For You when session_id missing (legacy behaviour) |
 | `/api/feed` (Slice D — breaking) | tested | session 6 | `?breaking=1` video-only feed of `#AIGlitchBreaking` or `post_type='news'`; supports cursor sub-mode |
 | `/api/feed` (Slice E — premieres + genre) | tested | session 7 | `?premieres=1` + optional `?genre=X`; video ≥15s, excludes director-scene fragments |
-| `/api/feed` (Slice F — premiere_counts + following_list) | not-started | — | |
-| `/api/feed` (Slice G — consumer flip) | not-started | — | All slices A–F must be live first |
+| `/api/feed` (Slice F — premiere_counts + following_list) | tested | session 8 | Two sub-endpoints with distinct response shapes; single COUNT query for counts, two parallel queries for list |
+| `/api/feed` (Slice G — consumer flip) | not-started | — | All `/api/feed` modes except `shuffle` now live; ready for consumer repoint |
 | *(all other 177 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-19 (session 8) — /api/feed Slice F (premiere_counts + following_list)
+
+**Branch:** `claude/migrate-feed-slice-f-counts-list`
+
+**Done:**
+- Removed `premiere_counts` AND `following_list` from the 501 reject list. Only `shuffle` remains unmigrated on `/api/feed`.
+- Added two early-return sub-endpoint branches at the top of the try-block in `src/app/api/feed/route.ts`:
+  - `premiere_counts`: one `COUNT(*) FILTER (WHERE hashtags LIKE …)` query across 9 genre hashtags plus total. Response shape `{ counts: { action, scifi, romance, family, horror, comedy, drama, cooking_channel, documentary, all } }`. `public, s-maxage=60, SWR=300`.
+  - `following_list`: parallel queries on `human_subscriptions` (what the session follows) and `ai_persona_follows` (who follows the session). Response shape `{ following: string[], ai_followers: string[] }`. `public, s-maxage=15, SWR=120`.
+- New `src/lib/repositories/personas.ts` with `getFollowedUsernames` and `getAiFollowerUsernames`.
+- `following_list` without `session_id` silently falls through to For You (legacy behaviour).
+- Skipped the legacy background retag job that `premiere_counts` runs — it backfills missing genre hashtags on untagged premieres. That belongs in a scheduled cron, not inside a read endpoint. Noted for a future maintenance-jobs branch.
+- 10 new integration tests covering: both endpoints ≠ 501, response shapes, single-COUNT-query shape, two-parallel-queries shape, Cache-Control for each, silent fall-through for following_list without session.
+- `/docs` page lists Slice F live and Slice G (consumer flip) as the next step.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (73/73, up from 63)
+- `npm run build` — passing locally
+- `npm run verify:feed` — pending (user to rerun post-deploy)
+- Manual: `/api/feed?premiere_counts=1` returns `{counts}` shape; `/api/feed?following_list=1&session_id=X` returns `{following, ai_followers}`
+
+**Not done (next session):**
+- Slice G — **consumer flip.** Point aiglitch.app's frontend at `https://aiglitch-api.vercel.app/api/feed` for all `/api/feed` routes. This is a consumer-side change and needs careful rollback planning.
+- Eventually: port the `premiere_counts` background retag work into a proper cron/scheduled job.
+
+**Safety notes:**
+- Endpoint parity is now close to complete. Only `?shuffle=1` remains on the 501 list — it's a separate shuffle feature (md5 seed pagination) used by some consumer paths; we'll port it if/when a consumer starts using it on the new backend.
+- Consumer flip is a bigger deal than a slice. Needs: feature flag on the frontend, rollback plan, monitoring window, and ideally shadow traffic first.
+
+---
 
 ### 2026-04-19 (session 7) — /api/feed Slice E (premieres + genre)
 
