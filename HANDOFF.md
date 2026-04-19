@@ -23,13 +23,52 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/channels` GET | tested | session 12 | List + counts + hosts + thumbnail + subscription state. Legacy Cache-Control preserved (s-maxage=30, SWR=120). |
 | `/api/channels` POST | tested | session 12 | subscribe / unsubscribe. **First write endpoint on the new backend.** INSERT + counter UPDATE match legacy non-transactional shape. `crypto.randomUUID()` for row ids (no deps added). |
 | `/api/interact` (Slice 1 — like, bookmark, share, view) | tested | session 13 | Hot write path. Coin awards stripped (deferred to Slice 5). |
-| `/api/interact` (Slice 2 — follow, react) | tested | session 14 | `follow` toggles human_subscriptions + maybeAIFollowBack (40% prob). `react` 4-emoji enum with scored content_feedback upsert. 6 of 9 actions now live. |
-| `/api/interact` (Slices 3–6) | not-started | — | comment+comment_like · AI reply trigger · coin awards · subscribe-via-post |
+| `/api/interact` (Slice 2 — follow, react) | tested | session 14 | `follow` toggles human_subscriptions + maybeAIFollowBack (40% prob). `react` 4-emoji enum with scored content_feedback upsert. |
+| `/api/interact` (Slice 3 — comment, comment_like) | tested | session 15 | `comment` inserts human_comments (content/name truncation) + increments post counter. `comment_like` dispatches on `comment_type`: human → human_comments.like_count, else → posts.like_count. 8 of 9 actions live. AI auto-reply trigger deferred to Slice 4. |
+| `/api/interact` (Slices 4–6) | not-started | — | AI reply trigger · coin awards · subscribe-via-post |
 | *(all other 177 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-19 (session 15) — /api/interact Slice 3 (comment + comment_like)
+
+**Branch:** `claude/migrate-interact-slice-3`
+
+**Done:**
+- Extended `src/lib/repositories/interactions.ts`:
+  - `addComment(postId, sessionId, content, displayName, parentCommentId?, parentCommentType?)` — trims content to 300 chars, displayName to 30 chars (default "Meat Bag"), inserts `human_comments`, increments `posts.comment_count`, calls `trackInterest`. Returns the full `CommentResult` shape the consumer renders directly.
+  - `toggleCommentLike(commentId, commentType, sessionId)` — dispatches the counter update based on `commentType`: `"human"` → `human_comments.like_count`, anything else (AI comments are stored as posts with `is_reply_to`) → `posts.like_count`. `GREATEST(0, …)` guard on remove path.
+  - Inlined `COMMENT_MAX_LENGTH = 300`, `DISPLAY_NAME_MAX_LENGTH = 30`.
+- Extended `src/app/api/interact/route.ts`:
+  - Removed `comment` + `comment_like` from `UNSUPPORTED_ACTIONS`. Only `subscribe` remains deferred.
+  - `comment` branch validates `post_id` + non-empty `content`; accepts `display_name`, `parent_comment_id`, `parent_comment_type`; response body is `{success: true, action: "commented", comment: CommentResult}` matching legacy. Left a `TODO(Slice 4)` where AI auto-reply will fire.
+  - `comment_like` branch validates `comment_id` + `comment_type`; response is `{success: true, action: "comment_liked" | "comment_unliked"}`.
+- 10 new integration tests: 3 validation cases for `comment` (missing post_id / missing content / whitespace-only), 2 validation cases for `comment_like` (missing comment_id / comment_type), insert+counter+trackInterest flow, content truncation at 300, display_name default + trim, parent_comment fields pass-through, human vs AI counter target, GREATEST guard on remove.
+- Suite now 136/136, up from 126.
+
+**Coin + AI reply deferral:**
+- Legacy `addComment` awards a first-comment coin bonus — stripped, `TODO(Slice 5)`.
+- Legacy route fires `triggerAIReply(post_id, comment.id, …)` after `addComment`. Not ported in this slice — `TODO(Slice 4)` marker in the route. Comment writes work; human comments land in the DB. AI replies will start flowing once Slice 4 ports the AI engine. Consumer is still on the old backend so real users still see AI replies.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (136/136)
+- `npm run build` — passing; `/api/interact` still the single route
+- Post-deploy smoke: `curl -X POST https://api.aiglitch.app/api/interact -d '{"session_id":"<uuid>","post_id":"<id>","content":"test","action":"comment"}'` → `{success: true, action: "commented", comment: {...}}`
+- Post-deploy smoke: `curl -X POST ... -d '{"session_id":"<uuid>","comment_id":"<id>","comment_type":"human","action":"comment_like"}'` → `{success: true, action: "comment_liked"}`
+
+**Not done this session:**
+- Slice 4: AI auto-reply trigger — ports the AI engine stack (xAI / Anthropic clients, circuit breaker, cost tracking, `generateReplyToHuman`).
+- Slice 5: coin-award retrofit across like / comment.
+- Slice 6: `subscribe` (the last 501'd action).
+
+**Safety notes:**
+- `addComment` response is time-sensitive: `created_at` is `new Date().toISOString()` (app-generated, not DB-generated). Clock skew between the DB and the serverless instance could theoretically diverge. Legacy does the same — preserved.
+- The first real test write from api.aiglitch.app that will be visible in the aiglitch.app feed once the consumer flips — worth a careful end-to-end once all 6 slices land.
+
+---
 
 ### 2026-04-19 (session 14) — /api/interact Slice 2 (follow + react)
 

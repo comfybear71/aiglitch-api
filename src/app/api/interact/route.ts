@@ -1,8 +1,10 @@
 import { type NextRequest, NextResponse } from "next/server";
 import {
+  addComment,
   recordShare,
   recordView,
   toggleBookmark,
+  toggleCommentLike,
   toggleFollow,
   toggleLike,
   toggleReaction,
@@ -18,12 +20,10 @@ const SUPPORTED_ACTIONS = [
   "view",
   "follow",
   "react",
-] as const;
-const UNSUPPORTED_ACTIONS = [
   "comment",
   "comment_like",
-  "subscribe",
 ] as const;
+const UNSUPPORTED_ACTIONS = ["subscribe"] as const;
 
 interface InteractBody {
   session_id?: string;
@@ -31,6 +31,12 @@ interface InteractBody {
   persona_id?: string;
   emoji?: string;
   action?: string;
+  content?: string;
+  display_name?: string;
+  parent_comment_id?: string | null;
+  parent_comment_type?: string | null;
+  comment_id?: string;
+  comment_type?: string;
 }
 
 export async function POST(request: NextRequest) {
@@ -87,6 +93,44 @@ export async function POST(request: NextRequest) {
         }
         throw err;
       }
+    }
+
+    if (action === "comment") {
+      if (!post_id) {
+        return NextResponse.json({ error: "Missing post_id" }, { status: 400 });
+      }
+      const content = body.content;
+      if (!content || typeof content !== "string" || content.trim().length === 0) {
+        return NextResponse.json(
+          { error: "Comment cannot be empty" },
+          { status: 400 },
+        );
+      }
+      const comment = await addComment(
+        post_id,
+        session_id,
+        content,
+        body.display_name || "Meat Bag",
+        body.parent_comment_id,
+        body.parent_comment_type,
+      );
+      // TODO(Slice 4): fire-and-forget AI auto-reply trigger here.
+      return NextResponse.json({ success: true, action: "commented", comment });
+    }
+
+    if (action === "comment_like") {
+      if (!body.comment_id || !body.comment_type) {
+        return NextResponse.json(
+          { error: "Missing comment_id or comment_type" },
+          { status: 400 },
+        );
+      }
+      const result = await toggleCommentLike(
+        body.comment_id,
+        body.comment_type,
+        session_id,
+      );
+      return NextResponse.json({ success: true, action: result });
     }
 
     // Remaining supported actions all need post_id.

@@ -67,7 +67,7 @@ function sqlOf(call: SqlCall): string {
   return call.strings.join("?");
 }
 
-describe("POST /api/interact (Slices 1 + 2)", () => {
+describe("POST /api/interact (Slices 1 + 2 + 3)", () => {
   // ── Validation ─────────────────────────────────────────────────────
 
   it("400 on invalid JSON", async () => {
@@ -97,8 +97,8 @@ describe("POST /api/interact (Slices 1 + 2)", () => {
 
   // ── Deferred actions ───────────────────────────────────────────────
 
-  it.each(["comment", "comment_like", "subscribe"])(
-    "501 action_not_yet_migrated for %s (Slice 2 removes follow + react from this list)",
+  it.each(["subscribe"])(
+    "501 action_not_yet_migrated for %s (Slice 3 removes comment + comment_like from this list)",
     async (action) => {
       const res = await callPost({ session_id: "u-1", post_id: "p-1", action });
       expect(res.status).toBe(501);
@@ -439,5 +439,189 @@ describe("POST /api/interact (Slices 1 + 2)", () => {
     expect(body.action).toBe("unreacted");
     expect(body.counts).toEqual({ funny: 0, sad: 0, shocked: 0, crap: 0 });
     expect(sqlOf(fake.calls[2]!)).toContain("GREATEST(0, sad_count");
+  });
+
+  // ── Slice 3 — comment ──────────────────────────────────────────────
+
+  it("comment: 400 on missing post_id", async () => {
+    const res = await callPost({
+      session_id: "u-1",
+      content: "hi",
+      action: "comment",
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("comment: 400 on missing content", async () => {
+    const res = await callPost({
+      session_id: "u-1",
+      post_id: "p-1",
+      action: "comment",
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("comment: 400 on whitespace-only content", async () => {
+    const res = await callPost({
+      session_id: "u-1",
+      post_id: "p-1",
+      content: "   ",
+      action: "comment",
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("Comment cannot be empty");
+  });
+
+  it("comment: inserts human_comments + increments counter + tracks interest", async () => {
+    fake.results = [
+      [], // INSERT human_comments
+      [], // UPDATE comment_count
+      [{ hashtags: "a,b", persona_type: "host" }], // trackInterest: post lookup
+      [], [], [], // 3 interest upserts
+      [], // human_users upsert
+    ];
+    const res = await callPost({
+      session_id: "u-1",
+      post_id: "p-1",
+      content: "  great post  ",
+      display_name: " Stu ",
+      action: "comment",
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      success: boolean;
+      action: string;
+      comment: {
+        id: string;
+        content: string;
+        display_name: string;
+        username: string;
+        is_human: boolean;
+        like_count: number;
+      };
+    };
+    expect(body.success).toBe(true);
+    expect(body.action).toBe("commented");
+    expect(body.comment.content).toBe("great post"); // trimmed
+    expect(body.comment.display_name).toBe("Stu"); // trimmed
+    expect(body.comment.username).toBe("human");
+    expect(body.comment.is_human).toBe(true);
+    expect(body.comment.like_count).toBe(0);
+
+    expect(sqlOf(fake.calls[0]!)).toContain("INSERT INTO human_comments");
+    expect(sqlOf(fake.calls[1]!)).toContain("comment_count = comment_count + 1");
+  });
+
+  it("comment: truncates content to 300 chars", async () => {
+    fake.results = [
+      [], [], // insert + update
+      [], // trackInterest lookup (empty → skip interest upserts)
+    ];
+    const long = "x".repeat(500);
+    const res = await callPost({
+      session_id: "u-1",
+      post_id: "p-1",
+      content: long,
+      action: "comment",
+    });
+    const body = (await res.json()) as { comment: { content: string } };
+    expect(body.comment.content.length).toBe(300);
+  });
+
+  it("comment: defaults display_name to 'Meat Bag' when missing", async () => {
+    fake.results = [[], [], []];
+    const res = await callPost({
+      session_id: "u-1",
+      post_id: "p-1",
+      content: "hello",
+      action: "comment",
+    });
+    const body = (await res.json()) as { comment: { display_name: string } };
+    expect(body.comment.display_name).toBe("Meat Bag");
+  });
+
+  it("comment: passes through parent_comment_id and parent_comment_type", async () => {
+    fake.results = [[], [], []];
+    await callPost({
+      session_id: "u-1",
+      post_id: "p-1",
+      content: "reply",
+      parent_comment_id: "parent-1",
+      parent_comment_type: "ai",
+      action: "comment",
+    });
+    expect(fake.calls[0]!.values).toContain("parent-1");
+    expect(fake.calls[0]!.values).toContain("ai");
+  });
+
+  // ── Slice 3 — comment_like ─────────────────────────────────────────
+
+  it("comment_like: 400 on missing comment_id", async () => {
+    const res = await callPost({
+      session_id: "u-1",
+      comment_type: "human",
+      action: "comment_like",
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("comment_like: 400 on missing comment_type", async () => {
+    const res = await callPost({
+      session_id: "u-1",
+      comment_id: "c-1",
+      action: "comment_like",
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("comment_like: human type hits human_comments on add", async () => {
+    fake.results = [
+      [], // no existing
+      [], // INSERT comment_likes
+      [], // UPDATE human_comments
+    ];
+    const res = await callPost({
+      session_id: "u-1",
+      comment_id: "c-1",
+      comment_type: "human",
+      action: "comment_like",
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { action: string };
+    expect(body.action).toBe("comment_liked");
+    expect(sqlOf(fake.calls[2]!)).toContain(
+      "UPDATE human_comments SET like_count = like_count + 1",
+    );
+  });
+
+  it("comment_like: ai type hits posts.like_count on add", async () => {
+    fake.results = [[], [], []];
+    await callPost({
+      session_id: "u-1",
+      comment_id: "ai-reply-1",
+      comment_type: "ai",
+      action: "comment_like",
+    });
+    expect(sqlOf(fake.calls[2]!)).toContain(
+      "UPDATE posts SET like_count = like_count + 1",
+    );
+  });
+
+  it("comment_like: remove path decrements with GREATEST guard", async () => {
+    fake.results = [
+      [{ id: "like-1" }], // existing
+      [], // DELETE
+      [], // UPDATE
+    ];
+    const res = await callPost({
+      session_id: "u-1",
+      comment_id: "c-1",
+      comment_type: "human",
+      action: "comment_like",
+    });
+    const body = (await res.json()) as { action: string };
+    expect(body.action).toBe("comment_unliked");
+    expect(sqlOf(fake.calls[2]!)).toContain("GREATEST(0, like_count - 1)");
   });
 });
