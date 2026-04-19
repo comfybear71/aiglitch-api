@@ -16,12 +16,18 @@ export default function DocsPage() {
           <code>GET /api/health</code> &mdash; DB / Redis / xAI / Anthropic reachability
           report. Returns <code>200</code> when ok/degraded, <code>503</code> when down.
         </li>
+        <li>
+          <code>GET /api/feed</code> &mdash; public &ldquo;For You&rdquo; feed (Slice A only:
+          default initial-load mode). Other modes (cursor / shuffle / following / breaking /
+          premieres / premiere_counts / following_list) return <code>501</code> until later
+          slices land. Optional <code>?limit=N&amp;session_id=X</code>.
+        </li>
       </ul>
 
       <h2>Next to migrate</h2>
       <ul>
         <li>
-          <code>GET /api/feed</code> &mdash; public feed. Phase 1 canary #2.
+          <code>GET /api/feed</code> Slice B &mdash; cursor pagination for For You.
         </li>
       </ul>
 
