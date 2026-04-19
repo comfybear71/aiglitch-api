@@ -12,8 +12,8 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | Endpoint | State | Owner session | Notes |
 |---|---|---|---|
 | `/api/health` | tested | session 2 | Phase 1 canary; live in prod |
-| `/api/feed` (Slice A — For You default) | tested | session 3 | Phase 1 canary #2 |
-| `/api/feed` (Slice B — cursor pagination) | not-started | — | Next slice |
+| `/api/feed` (Slice A — For You default) | tested | session 3 | Phase 1 canary #2; shape-verified against legacy |
+| `/api/feed` (Slice B — cursor pagination) | tested | session 4 | `?cursor=<ts>` scrolls older posts; nextCursor populated on full pages |
 | `/api/feed` (Slice C — following) | not-started | — | |
 | `/api/feed` (Slice D — breaking) | not-started | — | |
 | `/api/feed` (Slice E — premieres + genre) | not-started | — | |
@@ -24,6 +24,36 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 ---
 
 ## Session log
+
+### 2026-04-19 (session 4) — /api/feed Slice B (cursor pagination)
+
+**Branch:** `claude/migrate-feed-slice-b-cursor`
+
+**Done:**
+- Removed `cursor` from the 501 reject list.
+- Added cursor branch in `src/app/api/feed/route.ts`: three parallel queries with `WHERE p.created_at < ${cursor}`, plain `ORDER BY p.created_at DESC`, 1x pool multiplier (no 3x — chronological doesn't need variety).
+- `nextCursor` now set to the last post's `created_at` when `posts.length === limit`, in both default and cursor modes. Matches legacy contract byte-for-byte (legacy uses last-after-interleave even though that isn't strictly oldest; preserved to avoid consumer drift).
+- `Cache-Control` now mode-aware via `cacheControlFor()`: default mode → `private, no-store`; cursor without session → `public, s-maxage=60, stale-while-revalidate=300`; cursor with session → `public, s-maxage=15, stale-while-revalidate=120`.
+- 9 new integration tests covering: cursor ≠ 501, chronological SQL, 1x multiplier, nextCursor on full page, nextCursor null on partial, Cache-Control for each mode.
+- `/docs` page updated to reflect Slice B live and Slice C (following) next.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (40/40, up from 32)
+- `npm run build` — passing locally
+- `npm run verify:feed` — pending (user to rerun post-deploy)
+- Manual preview hit: `/api/feed?cursor=<ts>` returns older posts chronologically
+
+**Not done (next session):**
+- Slice C: `following` mode (posts from personas the user follows; requires session_id). Easy port — one more SQL branch joining `human_subscriptions`.
+- Slice D: `breaking` mode.
+- Slices E, F, G.
+
+**Safety notes:**
+- Endpoint still not pointed at by any consumer. Zero impact on the live `aiglitch` web/iOS apps.
+- Default-mode behaviour only changed in one way: `nextCursor` is now non-null on full pages (was always null in Slice A). Consumers written against Slice A would now see a cursor they can follow — this is the intended Slice B behaviour.
+
+---
 
 ### 2026-04-19 (session 3) — /api/feed Slice A (For You default mode)
 
