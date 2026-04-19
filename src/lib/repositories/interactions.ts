@@ -1,22 +1,21 @@
 /**
  * Human ↔ content interactions.
  *
- * Slices 1 + 2 + 3 + subscribe scope: like, bookmark, share, view, follow,
- * react, comment, comment_like, subscribe (+ internal trackInterest,
- * maybeAIFollowBack).
+ * All nine /api/interact actions are now wired:
+ *   like, bookmark, share, view, follow, react, comment, comment_like, subscribe.
  *
- * Deferred to later slices:
- *   - Slice 5: coin awards (requires users-repo + COIN_REWARDS port)
- *   - Slice 4: AI auto-reply trigger (requires AI engine port) — held
- *     until last because it's the largest remaining port.
+ * Coin-award side-effects on the like + first-comment paths are retrofitted
+ * via users.awardCoins / users.awardPersonaCoins. Each coin call is wrapped
+ * in try/catch because legacy marks them non-critical — a failed coin credit
+ * must never break the main action.
  *
- * toggleLike + addComment have coin-award side-effects. Both are wrapped in
- * try/catch and marked non-critical in legacy. Stripped here with a clearly-
- * marked TODO — Slice 5 retrofits them once users.awardCoins lands.
+ * Still pending: AI auto-reply trigger after addComment (Slice 4, the final
+ * internal port before /api/interact consumer flip).
  */
 
 import { randomUUID } from "node:crypto";
 import { getDb } from "@/lib/db";
+import { awardCoins, awardPersonaCoins } from "@/lib/repositories/users";
 
 /**
  * Legacy value from `AI_BEHAVIOR.followBackProb` in bible/constants.ts.
@@ -24,6 +23,18 @@ import { getDb } from "@/lib/db";
  * file when a second slice needs AI_BEHAVIOR values.
  */
 const AI_FOLLOW_BACK_PROB = 0.40;
+
+/**
+ * Legacy coin-reward values from `COIN_REWARDS` in bible/constants.ts.
+ * Inlined for the three rewards this repo fires; the rest (signup, referral,
+ * dailyLogin, friendBonus, aiReply, personaHumanEngagement, maxTransfer)
+ * belong to endpoints not yet migrated.
+ */
+const COIN_REWARDS = {
+  firstLike: 2,
+  firstComment: 15,
+  personaLikeReceived: 1,
+} as const;
 
 const VALID_EMOJIS = ["funny", "sad", "shocked", "crap"] as const;
 export type ReactionEmoji = (typeof VALID_EMOJIS)[number];
@@ -51,13 +62,36 @@ export async function toggleLike(
   `) as unknown as Array<{ id: string }>;
 
   if (existing.length === 0) {
-    await sql`
-      INSERT INTO human_likes (id, post_id, session_id)
+    await sql`INSERT INTO human_likes (id, post_id, session_id)
       VALUES (${randomUUID()}, ${postId}, ${sessionId})
     `;
     await sql`UPDATE posts SET like_count = like_count + 1 WHERE id = ${postId}`;
     await trackInterest(sessionId, postId);
-    // TODO(Slice 5): award first-like bonus + persona like reward here.
+
+    // First-like bonus (non-critical; try/catch per legacy).
+    try {
+      const likeCountRows = (await sql`
+        SELECT COUNT(*)::int AS count FROM human_likes WHERE session_id = ${sessionId}
+      `) as unknown as Array<{ count: number }>;
+      if (likeCountRows[0]?.count === 1) {
+        await awardCoins(sessionId, COIN_REWARDS.firstLike, "First like bonus");
+      }
+    } catch {
+      // non-critical
+    }
+
+    // Persona earns coins when their post is liked (non-critical).
+    try {
+      const [postRow] = (await sql`
+        SELECT persona_id FROM posts WHERE id = ${postId}
+      `) as unknown as Array<{ persona_id: string } | undefined>;
+      if (postRow) {
+        await awardPersonaCoins(postRow.persona_id, COIN_REWARDS.personaLikeReceived);
+      }
+    } catch {
+      // non-critical
+    }
+
     return "liked";
   }
 
@@ -344,7 +378,18 @@ export async function addComment(
     UPDATE posts SET comment_count = comment_count + 1 WHERE id = ${postId}
   `;
   await trackInterest(sessionId, postId);
-  // TODO(Slice 5): first-comment coin bonus here.
+
+  // First-comment bonus (non-critical; try/catch per legacy).
+  try {
+    const commentCountRows = (await sql`
+      SELECT COUNT(*)::int AS count FROM human_comments WHERE session_id = ${sessionId}
+    `) as unknown as Array<{ count: number }>;
+    if (commentCountRows[0]?.count === 1) {
+      await awardCoins(sessionId, COIN_REWARDS.firstComment, "First comment bonus");
+    }
+  } catch {
+    // non-critical
+  }
 
   return {
     id: commentId,

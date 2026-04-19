@@ -115,6 +115,12 @@ describe("POST /api/interact (all 9 actions)", () => {
       [{ hashtags: "foo,bar", persona_type: "comic" }], // trackInterest: post lookup
       [], [], [], // 3x interest upserts (comic, foo, bar)
       [], // human_users upsert
+      // Coin-award side-effects (this IS the first like — count = 1).
+      [{ count: 1 }], // SELECT COUNT(*) human_likes → 1
+      [], // UPSERT glitch_coins
+      [], // INSERT coin_transactions
+      [{ persona_id: "persona-p-1" }], // SELECT persona_id FROM posts
+      [], // UPSERT ai_persona_coins
     ];
     const res = await callPost({
       session_id: "u-1",
@@ -154,7 +160,10 @@ describe("POST /api/interact (all 9 actions)", () => {
       [], // no existing
       [], // insert ack
       [], // UPDATE
-      [], // trackInterest post lookup → empty
+      [], // trackInterest post lookup → empty (skips interest upserts)
+      // Coin-award paths still run their lookup SELECTs but try/catch swallows any awards.
+      [], // SELECT COUNT(*) human_likes — empty, so no first-like bonus
+      [], // SELECT persona_id FROM posts — empty, so no persona coins
     ];
     const res = await callPost({
       session_id: "u-1",
@@ -162,8 +171,8 @@ describe("POST /api/interact (all 9 actions)", () => {
       action: "like",
     });
     expect(res.status).toBe(200);
-    // Only 4 calls — no interest upserts fired.
-    expect(fake.calls).toHaveLength(4);
+    // 4 action calls + 2 coin-award lookup SELECTs (no upserts because both return empty).
+    expect(fake.calls).toHaveLength(6);
   });
 
   // ── bookmark ───────────────────────────────────────────────────────
@@ -684,5 +693,137 @@ describe("POST /api/interact (all 9 actions)", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { success: boolean; action: string };
     expect(body).toEqual({ success: true, action: "unsubscribed" });
+  });
+
+  // ── Coin-award retrofit (was Slice 5) ─────────────────────────────
+
+  it("like: awards first-like bonus when count returns 1", async () => {
+    // Sequence: check (0), insert (1), update (2), trackInterest lookup empty (3),
+    //   count=1 (4), glitch_coins upsert (5), coin_transactions (6),
+    //   post persona lookup (7), ai_persona_coins upsert (8).
+    fake.results = [
+      [], [], [],
+      [],
+      [{ count: 1 }], [], [],
+      [{ persona_id: "persona-1" }], [],
+    ];
+    const res = await callPost({
+      session_id: "u-1",
+      post_id: "p-1",
+      action: "like",
+    });
+    expect(res.status).toBe(200);
+    const coinCall = fake.calls.find((c) =>
+      c.strings.join("?").includes("INSERT INTO glitch_coins"),
+    );
+    expect(coinCall).toBeDefined();
+    expect(coinCall!.values).toContain(2); // firstLike amount
+    const transactionCall = fake.calls.find((c) =>
+      c.strings.join("?").includes("INSERT INTO coin_transactions"),
+    );
+    expect(transactionCall).toBeDefined();
+    expect(transactionCall!.values).toContain("First like bonus");
+  });
+
+  it("like: skips first-like bonus when count returns > 1", async () => {
+    fake.results = [
+      [], [], [],
+      [],
+      [{ count: 5 }], // not first
+      [{ persona_id: "persona-1" }], [], // persona coins still fire
+    ];
+    const res = await callPost({
+      session_id: "u-1",
+      post_id: "p-1",
+      action: "like",
+    });
+    expect(res.status).toBe(200);
+    const coinCall = fake.calls.find((c) =>
+      c.strings.join("?").includes("INSERT INTO glitch_coins"),
+    );
+    expect(coinCall).toBeUndefined();
+  });
+
+  it("like: always awards persona coins when post exists, regardless of first-like state", async () => {
+    fake.results = [
+      [], [], [],
+      [],
+      [{ count: 99 }], // not first
+      [{ persona_id: "persona-1" }], [],
+    ];
+    await callPost({ session_id: "u-1", post_id: "p-1", action: "like" });
+    const personaCoinCall = fake.calls.find((c) =>
+      c.strings.join("?").includes("INSERT INTO ai_persona_coins"),
+    );
+    expect(personaCoinCall).toBeDefined();
+    expect(personaCoinCall!.values).toContain(1); // personaLikeReceived
+    expect(personaCoinCall!.values).toContain("persona-1");
+  });
+
+  it("like: coin-award failure does NOT break the like action (try/catch swallows)", async () => {
+    fake.results = [
+      [], [], [],
+      [],
+      [{ bogus: "no count field" }], // count is undefined → first-like check false, no bonus
+      [{ persona_id: "persona-1" }], [],
+    ];
+    const res = await callPost({
+      session_id: "u-1",
+      post_id: "p-1",
+      action: "like",
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { action: string };
+    expect(body.action).toBe("liked");
+    // Persona coins still awarded even when the count query returned weird shape.
+    const personaCoinCall = fake.calls.find((c) =>
+      c.strings.join("?").includes("INSERT INTO ai_persona_coins"),
+    );
+    expect(personaCoinCall).toBeDefined();
+  });
+
+  it("comment: awards first-comment bonus when count returns 1", async () => {
+    fake.results = [
+      [], // INSERT human_comments
+      [], // UPDATE comment_count
+      [], // trackInterest post lookup (empty → skip interest upserts)
+      [{ count: 1 }], // first comment!
+      [], // UPSERT glitch_coins
+      [], // INSERT coin_transactions
+    ];
+    const res = await callPost({
+      session_id: "u-1",
+      post_id: "p-1",
+      content: "first post",
+      action: "comment",
+    });
+    expect(res.status).toBe(200);
+    const coinCall = fake.calls.find((c) =>
+      c.strings.join("?").includes("INSERT INTO glitch_coins"),
+    );
+    expect(coinCall).toBeDefined();
+    expect(coinCall!.values).toContain(15); // firstComment reward
+    const transactionCall = fake.calls.find((c) =>
+      c.strings.join("?").includes("INSERT INTO coin_transactions"),
+    );
+    expect(transactionCall!.values).toContain("First comment bonus");
+  });
+
+  it("comment: skips first-comment bonus when count returns > 1", async () => {
+    fake.results = [
+      [], [], [], // insert, update, trackInterest lookup (empty)
+      [{ count: 7 }], // not first
+    ];
+    const res = await callPost({
+      session_id: "u-1",
+      post_id: "p-1",
+      content: "hello",
+      action: "comment",
+    });
+    expect(res.status).toBe(200);
+    const coinCall = fake.calls.find((c) =>
+      c.strings.join("?").includes("INSERT INTO glitch_coins"),
+    );
+    expect(coinCall).toBeUndefined();
   });
 });
