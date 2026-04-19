@@ -32,6 +32,9 @@ Decided 2026-04-19. Do not change without written user confirmation.
 | 6 | Trading endpoints | **Final migration phase.** Requires explicit written confirmation per endpoint. Covers: `budju-trading`, `ai-trading`, `wallet`, `exchange`, `otc-swap`, `bridge`, `persona-trade`, `trading`, `solana`. |
 | 7 | OAuth callbacks | Migrated **last**. 6 providers (Google, GitHub, X, YouTube, TikTok-deprecated, Telegram). |
 | 8 | Ops UI (phase 1) | `/docs` (Swagger/OpenAPI) + `/status` (health dashboard). `/migration` + `/logs` deferred. |
+| 9 | iOS migration | **Deferred.** Web-first only this phase. After web cutover is stable, the existing iOS `Glitch-app` repo is wired up to this backend and improved. |
+| 10 | DB env var name | **Reuse `DATABASE_URL`** on day one. Same Neon instance as the existing `aiglitch` repo. |
+| 11 | Vercel project | **Already linked** to this repo. No new project creation. User adds env vars via Vercel UI; we do not manipulate Vercel settings from code. |
 
 ## Migration safety rules (repo-specific)
 

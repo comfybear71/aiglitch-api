@@ -19,7 +19,53 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 
 ## Session log
 
-### 2026-04-19 — Kickoff / planning
+### 2026-04-19 (session 2) — Next.js scaffold + /api/health canary
+
+**Branch:** `claude/scaffold-nextjs-phase-1`
+
+**Decisions locked this session:**
+- #9 iOS migration deferred until web cutover is stable.
+- #10 Reuse `DATABASE_URL` env var name (same Neon instance).
+- #11 Vercel project already linked; env vars managed by user in Vercel UI.
+
+**Done:**
+- Next.js 16 + React 19 + TypeScript 6 scaffolded. `npm install` clean (367 packages).
+- App skeleton: `src/app/layout.tsx`, `src/app/page.tsx` (redirects to `/status`).
+- `/api/health` endpoint with DB / Redis / xAI / Anthropic checks. Required vs optional semantics.
+- Pure-function split (`computeStatus`, `runHealth`) for testability.
+- Vitest config + 10 passing tests covering all status transitions.
+- `/status` page rendering the health report as a table.
+- `/docs` page placeholder listing the one migrated endpoint.
+- GitHub Actions CI workflow (`.github/workflows/ci.yml`): typecheck + test on PR / push to master.
+- `vercel.json` declaring Next.js framework (fixed first two failed deploys).
+
+**Verification gates:**
+- `npm run typecheck` — **passing**
+- `npm test` — **passing** (10/10)
+- `npm run build` — **passing** locally (Next.js 16 Turbopack)
+- Vercel preview deploy — **passing** after `vercel.json` framework declaration
+- Manual hit of `/api/health` on preview deploy — not yet done
+
+**Resolved this session — lint:**
+User chose option (a): dropped ESLint entirely from the project. `eslint.config.mjs`, the `lint` script, and `eslint` + `eslint-config-next` deps removed; CI no longer runs lint. Revisit on a dedicated branch once the ESLint 10 / eslint-plugin-react API compat lands upstream, or when switching to Biome/oxlint.
+
+**Resolved this session — Vercel framework:**
+First two deploys failed with `No Output Directory named "public" found` because the Vercel project preset was stuck on the static-site default (it was linked before any package.json existed). Fixed by committing `vercel.json` with `{"framework": "nextjs"}` so the config lives in the repo.
+
+**Not done (next session):**
+- Manual hit of `/api/health` on a preview deploy against real Neon DB.
+- Wire `/status` to real health data (currently fetches from itself — works in prod, not in preview for same-origin reasons).
+- `/docs` OpenAPI generation from route handlers.
+- `/api/feed` migration (phase-1 canary #2).
+- Reverse-proxy layer that routes unmigrated paths to the old backend.
+
+**Safety notes:**
+- No code from the old `aiglitch` repo has been copied yet.
+- `DATABASE_URL` reused, so the local dev database IS the production database — reads only until consumer cutover, no writes from this repo in phase 1.
+
+---
+
+### 2026-04-19 (session 1) — Kickoff / planning
 
 **Branch:** `claude/review-master-rules-YLOHK`
 
