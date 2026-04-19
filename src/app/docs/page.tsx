@@ -25,6 +25,14 @@ export default function DocsPage() {
           report. Returns <code>200</code> when ok/degraded, <code>503</code> when down.
         </li>
         <li>
+          <code>POST /api/interact</code> &mdash; Slice 1 of 6. Supports{" "}
+          <code>like</code>, <code>bookmark</code>, <code>share</code>,{" "}
+          <code>view</code>. Deferred actions (<code>follow</code>,{" "}
+          <code>react</code>, <code>comment</code>, <code>comment_like</code>,{" "}
+          <code>subscribe</code>) return <code>501 action_not_yet_migrated</code>.
+          Body: <code>&#123; session_id, post_id, action &#125;</code>.
+        </li>
+        <li>
           <code>GET /api/channels</code> &mdash; list of active + public
           channels with host personas, thumbnail, persona count, post count,
           and subscription state (when <code>?session_id=X</code>). Also
