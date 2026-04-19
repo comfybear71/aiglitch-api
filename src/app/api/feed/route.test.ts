@@ -1,10 +1,9 @@
 /**
- * Integration tests for /api/feed (Slices A + B + C + D — For You default,
- * For You cursor, Following, and Breaking).
+ * Integration tests for /api/feed (Slices A + B + C + D + E).
  *
  * The route handler is exercised through a fake `neon` client that records
  * every SQL template and returns canned rows. This catches:
- *   - 501 short-circuit on unsupported mode params (shuffle, premieres, …)
+ *   - 501 short-circuit on unsupported mode params (shuffle, premiere_counts, …)
  *   - shape of the response (posts, nextCursor, nextOffset)
  *   - bookmark resolution when session_id is present vs absent
  *   - meatbag author overlay when posts carry meatbag_author_id
@@ -18,6 +17,9 @@
  *   - Slice C: following falls through to For You when session_id missing
  *   - Slice D: breaking mode filters by hashtag/post_type and video-only
  *   - Slice D: breaking supports cursor sub-mode
+ *   - Slice E: premieres mode filters by premiere hashtag/post_type + video duration
+ *   - Slice E: genre sub-filter adds AIGlitch<Genre> hashtag LIKE
+ *   - Slice E: premieres supports cursor sub-mode
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -86,9 +88,9 @@ function videoRow(id: string, extras: Record<string, unknown> = {}) {
   };
 }
 
-describe("GET /api/feed (Slices A + B + C + D)", () => {
-  it("returns 501 for unsupported mode params (Slice D removes breaking from this list)", async () => {
-    for (const param of ["shuffle", "premieres", "premiere_counts", "following_list"]) {
+describe("GET /api/feed (Slices A + B + C + D + E)", () => {
+  it("returns 501 for unsupported mode params (Slice E removes premieres from this list)", async () => {
+    for (const param of ["shuffle", "premiere_counts", "following_list"]) {
       const res = await callGet(`http://localhost/api/feed?${param}=1`);
       expect(res.status).toBe(501);
       const body = (await res.json()) as { error: string; unsupported_param: string };
@@ -474,5 +476,88 @@ describe("GET /api/feed (Slices A + B + C + D)", () => {
     };
     expect(body.posts[0]?.bookmarked).toBe(true);
     expect(body.posts[0]?.meatbag_author?.display_name).toBe("Chuck the News");
+  });
+
+  // ── Slice E — premieres mode ──────────────────────────────────────────
+
+  it("premieres param no longer returns 501", async () => {
+    fake.results = [[]];
+    const res = await callGet("http://localhost/api/feed?premieres=1");
+    expect(res.status).toBe(200);
+  });
+
+  it("premieres mode issues a single SQL query", async () => {
+    fake.results = [[]];
+    await callGet("http://localhost/api/feed?premieres=1");
+    expect(fake.calls).toHaveLength(1);
+  });
+
+  it("premieres mode SQL filters by premiere hashtag/post_type and requires real video", async () => {
+    fake.results = [[]];
+    await callGet("http://localhost/api/feed?premieres=1");
+    const sqlText = fake.calls[0]!.strings.join("?");
+    expect(sqlText).toContain("p.post_type = 'premiere'");
+    expect(sqlText).toContain("AIGlitchPremieres");
+    expect(sqlText).toContain("p.media_type = 'video'");
+    expect(sqlText).toContain("LENGTH(p.media_url) > 0");
+    expect(sqlText).toContain("director-premiere");
+    expect(sqlText).toContain("p.video_duration > 15");
+    expect(sqlText).toContain("director-movie");
+    expect(sqlText).toContain("ORDER BY p.created_at DESC");
+  });
+
+  it("premieres mode with genre adds AIGlitch<Genre> hashtag LIKE", async () => {
+    fake.results = [[]];
+    await callGet("http://localhost/api/feed?premieres=1&genre=scifi");
+    const call = fake.calls[0]!;
+    expect(call.values).toContain("%AIGlitchScifi%");
+  });
+
+  it("premieres mode capitalises cooking_channel as AIGlitchCooking_channel (matches legacy)", async () => {
+    fake.results = [[]];
+    await callGet("http://localhost/api/feed?premieres=1&genre=cooking_channel");
+    const call = fake.calls[0]!;
+    expect(call.values).toContain("%AIGlitchCooking_channel%");
+  });
+
+  it("premieres mode with cursor adds WHERE created_at < cursor", async () => {
+    fake.results = [[]];
+    const cursorValue = "2026-04-18T00:00:00Z";
+    await callGet(
+      `http://localhost/api/feed?premieres=1&cursor=${encodeURIComponent(cursorValue)}`,
+    );
+    const call = fake.calls[0]!;
+    expect(call.values).toContain(cursorValue);
+    const sqlText = call.strings.join("?");
+    expect(sqlText).toContain("p.created_at < ");
+  });
+
+  it("premieres mode with cursor + genre combines both filters", async () => {
+    fake.results = [[]];
+    const cursorValue = "2026-04-18T00:00:00Z";
+    await callGet(
+      `http://localhost/api/feed?premieres=1&cursor=${encodeURIComponent(cursorValue)}&genre=horror`,
+    );
+    const call = fake.calls[0]!;
+    expect(call.values).toContain(cursorValue);
+    expect(call.values).toContain("%AIGlitchHorror%");
+  });
+
+  it("premieres mode without session uses 60s public cache", async () => {
+    fake.results = [[]];
+    const res = await callGet("http://localhost/api/feed?premieres=1");
+    expect(res.headers.get("Cache-Control")).toBe(
+      "public, s-maxage=60, stale-while-revalidate=300",
+    );
+  });
+
+  it("premieres mode with session uses 15s personalized cache", async () => {
+    fake.results = [[]];
+    const res = await callGet(
+      "http://localhost/api/feed?premieres=1&session_id=user-1",
+    );
+    expect(res.headers.get("Cache-Control")).toBe(
+      "public, s-maxage=15, stale-while-revalidate=120",
+    );
   });
 });

@@ -24,7 +24,6 @@ const MIN_TEXTS = 1;
 
 const UNSUPPORTED_MODE_PARAMS = [
   "shuffle",
-  "premieres",
   "premiere_counts",
   "following_list",
 ] as const;
@@ -72,6 +71,14 @@ export async function GET(request: NextRequest) {
   const sessionId = params.get("session_id");
   const following = params.get("following") === "1";
   const breaking = params.get("breaking") === "1";
+  const premieres = params.get("premieres") === "1";
+  const genre = params.get("genre");
+  const genreFilter = genre
+    ? `AIGlitch${genre.charAt(0).toUpperCase() + genre.slice(1)}`
+    : null;
+
+  const isRandomFirstPage = !following && !breaking && !premieres && !cursor;
+  const isPersonalized = following || !!sessionId;
 
   try {
     const sql = getDb();
@@ -138,6 +145,82 @@ export async function GET(request: NextRequest) {
             AND (p.hashtags LIKE '%AIGlitchBreaking%' OR p.post_type = 'news')
             AND p.media_type = 'video'
             AND p.media_url IS NOT NULL
+          ORDER BY p.created_at DESC
+          LIMIT ${limit}
+        `) as unknown as FeedPostRow[];
+      }
+    } else if (premieres) {
+      // Premieres tab: video-only posts tagged #AIGlitchPremieres or post_type=premiere.
+      // Optional genre filter (?genre=action|scifi|…) adds AIGlitch<Genre> hashtag match.
+      // Excludes director scene fragments; requires real video (duration > 15s or the
+      // special director-movie media_source). Chronological DESC; cursor supported.
+      const genreLike = genreFilter ? `%${genreFilter}%` : null;
+
+      if (cursor && genreLike) {
+        posts = (await sql`
+          SELECT p.*, a.username, a.display_name, a.avatar_emoji, a.avatar_url,
+                 a.persona_type, a.bio AS persona_bio
+          FROM posts p
+          JOIN ai_personas a ON p.persona_id = a.id
+          WHERE p.created_at < ${cursor}
+            AND p.is_reply_to IS NULL
+            AND (p.post_type = 'premiere' OR p.hashtags LIKE '%AIGlitchPremieres%')
+            AND p.hashtags LIKE ${genreLike}
+            AND p.media_type = 'video'
+            AND p.media_url IS NOT NULL AND LENGTH(p.media_url) > 0
+            AND COALESCE(p.media_source, '') NOT IN
+                ('director-premiere', 'director-profile', 'director-scene')
+            AND (p.video_duration > 15 OR p.media_source = 'director-movie')
+          ORDER BY p.created_at DESC
+          LIMIT ${limit}
+        `) as unknown as FeedPostRow[];
+      } else if (cursor) {
+        posts = (await sql`
+          SELECT p.*, a.username, a.display_name, a.avatar_emoji, a.avatar_url,
+                 a.persona_type, a.bio AS persona_bio
+          FROM posts p
+          JOIN ai_personas a ON p.persona_id = a.id
+          WHERE p.created_at < ${cursor}
+            AND p.is_reply_to IS NULL
+            AND (p.post_type = 'premiere' OR p.hashtags LIKE '%AIGlitchPremieres%')
+            AND p.media_type = 'video'
+            AND p.media_url IS NOT NULL AND LENGTH(p.media_url) > 0
+            AND COALESCE(p.media_source, '') NOT IN
+                ('director-premiere', 'director-profile', 'director-scene')
+            AND (p.video_duration > 15 OR p.media_source = 'director-movie')
+          ORDER BY p.created_at DESC
+          LIMIT ${limit}
+        `) as unknown as FeedPostRow[];
+      } else if (genreLike) {
+        posts = (await sql`
+          SELECT p.*, a.username, a.display_name, a.avatar_emoji, a.avatar_url,
+                 a.persona_type, a.bio AS persona_bio
+          FROM posts p
+          JOIN ai_personas a ON p.persona_id = a.id
+          WHERE p.is_reply_to IS NULL
+            AND (p.post_type = 'premiere' OR p.hashtags LIKE '%AIGlitchPremieres%')
+            AND p.hashtags LIKE ${genreLike}
+            AND p.media_type = 'video'
+            AND p.media_url IS NOT NULL AND LENGTH(p.media_url) > 0
+            AND COALESCE(p.media_source, '') NOT IN
+                ('director-premiere', 'director-profile', 'director-scene')
+            AND (p.video_duration > 15 OR p.media_source = 'director-movie')
+          ORDER BY p.created_at DESC
+          LIMIT ${limit}
+        `) as unknown as FeedPostRow[];
+      } else {
+        posts = (await sql`
+          SELECT p.*, a.username, a.display_name, a.avatar_emoji, a.avatar_url,
+                 a.persona_type, a.bio AS persona_bio
+          FROM posts p
+          JOIN ai_personas a ON p.persona_id = a.id
+          WHERE p.is_reply_to IS NULL
+            AND (p.post_type = 'premiere' OR p.hashtags LIKE '%AIGlitchPremieres%')
+            AND p.media_type = 'video'
+            AND p.media_url IS NOT NULL AND LENGTH(p.media_url) > 0
+            AND COALESCE(p.media_source, '') NOT IN
+                ('director-premiere', 'director-profile', 'director-scene')
+            AND (p.video_duration > 15 OR p.media_source = 'director-movie')
           ORDER BY p.created_at DESC
           LIMIT ${limit}
         `) as unknown as FeedPostRow[];
@@ -250,7 +333,7 @@ export async function GET(request: NextRequest) {
     if (posts.length === 0) {
       return jsonWithCache(
         { posts: [], nextCursor: null, nextOffset: null },
-        cacheControlFor({ following, breaking, cursor, sessionId }),
+        cacheControlFor({ isRandomFirstPage, isPersonalized }),
       );
     }
 
@@ -310,7 +393,7 @@ export async function GET(request: NextRequest) {
 
     return jsonWithCache(
       { posts: postsWithComments, nextCursor, nextOffset: null },
-      cacheControlFor({ following, breaking, cursor, sessionId }),
+      cacheControlFor({ isRandomFirstPage, isPersonalized }),
     );
   } catch (err) {
     console.error("[feed] error:", err);
@@ -327,18 +410,13 @@ export async function GET(request: NextRequest) {
 }
 
 function cacheControlFor(args: {
-  following: boolean;
-  breaking: boolean;
-  cursor: string | null;
-  sessionId: string | null;
+  isRandomFirstPage: boolean;
+  isPersonalized: boolean;
 }): string {
-  const { following, breaking, cursor, sessionId } = args;
   // Random For You first page — never CDN-cache; each hit must reroll RANDOM().
-  if (!following && !breaking && !cursor) {
-    return "private, no-store";
-  }
+  if (args.isRandomFirstPage) return "private, no-store";
   // Any personalized response — short edge cache so follow/bookmark changes surface fast.
-  if (following || sessionId) {
+  if (args.isPersonalized) {
     return "public, s-maxage=15, stale-while-revalidate=120";
   }
   // Anonymous chronological scroll — deterministic, cache longer.
