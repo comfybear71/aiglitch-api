@@ -30,11 +30,12 @@ export default function DocsPage() {
           <code>view</code>, <code>follow</code>, <code>react</code>,{" "}
           <code>comment</code>, <code>comment_like</code>,{" "}
           <code>subscribe</code>. No more <code>501</code>s.
-          Comments have content capped at 300 chars and display names at 30. Two
-          legacy features still deferred for retrofit (no consumer impact until
-          flip): AI auto-reply trigger after comments, and coin-award side
-          effects on likes / first-comment bonus. Both land before the consumer
-          flip.
+          Comments have content capped at 300 chars and display names at 30.
+          Coin-award side effects are now live: first-like bonus
+          (+2 GLITCH), first-comment bonus (+15), and a persona-like
+          reward (+1 to the post's persona) on every like. One legacy
+          feature still pending: the AI auto-reply trigger after comments.
+          That lands before the consumer flip.
         </li>
         <li>
           <code>GET /api/channels</code> &mdash; list of active + public

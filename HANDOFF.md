@@ -26,13 +26,42 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/interact` (Slice 2 — follow, react) | tested | session 14 | `follow` toggles human_subscriptions + maybeAIFollowBack (40% prob). `react` 4-emoji enum with scored content_feedback upsert. |
 | `/api/interact` (Slice 3 — comment, comment_like) | tested | session 15 | `comment` inserts human_comments (content/name truncation) + increments post counter. `comment_like` dispatches on `comment_type`. |
 | `/api/interact` subscribe (was Slice 6, re-ordered early) | tested | session 16 | `subscribe` looks up persona_id from post, delegates to `toggleFollow`, tracks interest on fresh subscribe. 404 on missing post. **All 9 actions now migrated.** |
-| `/api/interact` coin-award retrofit | not-started | — | Re-slice: was Slice 5, still pending. users-repo + COIN_REWARDS port. |
-| `/api/interact` AI auto-reply trigger | not-started | — | Re-slice: was Slice 4, now last. AI engine port (xAI/Anthropic clients + circuit breaker + cost ledger + generateReplyToHuman). Biggest remaining lift. |
+| `/api/interact` coin-award retrofit | tested | session 17 | First-like (+2), first-comment (+15), persona-like received (+1) now award. `users.awardCoins` + `users.awardPersonaCoins` ported. Retrofitted TODO(Slice 5) sites in `toggleLike` + `addComment`. |
+| `/api/interact` AI auto-reply trigger | not-started | — | Final remaining slice. AI engine port (xAI/Anthropic clients + circuit breaker + cost ledger + `generateReplyToHuman`). Biggest remaining lift; after this, consumer flip. |
 | *(all other 177 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-19 (session 17) — /api/interact coin-award retrofit
+
+**Branch:** `claude/migrate-interact-coin-awards`
+
+**Done:**
+- New `src/lib/repositories/users.ts` with `awardCoins(sessionId, amount, reason, referenceId?)` and `awardPersonaCoins(personaId, amount)`. Both are idempotent upserts matching legacy byte-for-byte: `glitch_coins` for humans (with a `coin_transactions` log row) and `ai_persona_coins` for AI (no log — legacy parity). `deductCoins` / `getTransactions` / balance reads deferred until a downstream endpoint needs them.
+- Retrofitted both `TODO(Slice 5)` sites in `src/lib/repositories/interactions.ts`:
+  - `toggleLike` now fires **first-like bonus** (+2 GLITCH) when `COUNT(*) human_likes` for the session returns 1, then **persona-like reward** (+1 to the post's persona). Both wrapped in try/catch — any failure is swallowed, legacy-style.
+  - `addComment` now fires **first-comment bonus** (+15 GLITCH) when `COUNT(*) human_comments` for the session returns 1. Same try/catch.
+- Inlined `COIN_REWARDS = { firstLike: 2, firstComment: 15, personaLikeReceived: 1 }`. The other legacy rewards (signup/referral/dailyLogin/etc.) stay out until their endpoints land.
+- Updated one existing test that pinned `fake.calls.length === 4` — coin lookups now fire unconditionally (SELECT COUNT, SELECT persona_id) even when trackInterest skipped, so the count is 6 on that specific code path.
+- 6 new tests: first-like bonus fires, first-like skipped when count > 1, persona coins always fire when post exists, coin-failure swallowed without breaking main action, first-comment bonus fires, first-comment skipped when count > 1. Suite now 146/146, up from 140.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (146/146)
+- `npm run build` — passing
+- Post-deploy smoke: like a post with a fresh session, hit `/api/coins` (old backend) and confirm balance is +2. (This is end-to-end only meaningful after consumer flip; for now the reward fires but is only visible on the new backend's own read endpoints, which aren't migrated yet.)
+
+**Not done this session:**
+- AI auto-reply trigger — the last slice before consumer flip.
+
+**Safety notes:**
+- Coin-award side effects happen AFTER the main action, in try/catch blocks — if the coin writes fail (e.g. Neon replication lag hiding the COUNT), the main action stays successful. Legacy parity.
+- Lifetime_earned is bumped every time, not just on net-positive changes — matches legacy. A `deductCoins` path (when it lands) won't touch lifetime_earned.
+- `firstLike` / `firstComment` checks are COUNT == 1 which includes the write that just happened. Under extreme concurrency a session could theoretically get two "first" bonuses if two likes land simultaneously before either SELECT COUNT sees the other. Legacy has the same race; not worth fixing here.
+
+---
 
 ### 2026-04-19 (session 16) — /api/interact subscribe (re-ordered ahead of coins + AI reply)
 
