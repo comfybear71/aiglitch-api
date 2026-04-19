@@ -93,10 +93,30 @@ describe("GET /api/feed (Slice A)", () => {
     const res = await callGet();
     expect(res.status).toBe(200);
     expect(res.headers.get("Cache-Control")).toBe("private, no-store");
-    const body = (await res.json()) as { posts: unknown[]; nextCursor: null };
+    const body = (await res.json()) as {
+      posts: unknown[];
+      nextCursor: null;
+      nextOffset: null;
+    };
     expect(body.posts).toEqual([]);
     expect(body.nextCursor).toBeNull();
+    expect(body.nextOffset).toBeNull();
     expect(fake.calls).toHaveLength(3);
+  });
+
+  it("returns both nextCursor and nextOffset keys (shape parity with legacy)", async () => {
+    fake.results = [
+      [videoRow("v1")],
+      [],
+      [],
+      [], // ai comments
+      [], // human comments
+    ];
+    const res = await callGet();
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual(["nextCursor", "nextOffset", "posts"]);
+    expect(body.nextCursor).toBeNull();
+    expect(body.nextOffset).toBeNull();
   });
 
   it("assembles posts with empty comments + bookmarked=false when no session_id", async () => {

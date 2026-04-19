@@ -126,7 +126,7 @@ export async function GET(request: NextRequest) {
     const posts = interleaveFeed(videos, images, texts, limit);
 
     if (posts.length === 0) {
-      return jsonNoStore({ posts: [], nextCursor: null });
+      return jsonNoStore({ posts: [], nextCursor: null, nextOffset: null });
     }
 
     const postIds = posts.map((p) => p.id);
@@ -180,6 +180,7 @@ export async function GET(request: NextRequest) {
     return jsonNoStore({
       posts: postsWithComments,
       nextCursor: null,
+      nextOffset: null,
     });
   } catch (err) {
     console.error("[feed] error:", err);
