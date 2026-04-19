@@ -11,13 +11,55 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 
 | Endpoint | State | Owner session | Notes |
 |---|---|---|---|
-| `/api/health` | not-started | — | Phase 1 canary |
-| `/api/feed` | not-started | — | Phase 1 canary |
+| `/api/health` | tested | session 2 | Phase 1 canary; live in prod |
+| `/api/feed` (Slice A — For You default) | tested | session 3 | Phase 1 canary #2 |
+| `/api/feed` (Slice B — cursor pagination) | not-started | — | Next slice |
+| `/api/feed` (Slice C — following) | not-started | — | |
+| `/api/feed` (Slice D — breaking) | not-started | — | |
+| `/api/feed` (Slice E — premieres + genre) | not-started | — | |
+| `/api/feed` (Slice F — premiere_counts + following_list) | not-started | — | |
+| `/api/feed` (Slice G — consumer flip) | not-started | — | All slices A–F must be live first |
 | *(all other 177 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-19 (session 3) — /api/feed Slice A (For You default mode)
+
+**Branch:** `claude/migrate-feed-slice-a-foryou`
+
+**Done:**
+- Ported `getDb()` (10 lines) — neon singleton from `DATABASE_URL`. Skipped legacy `ensureDbReady()` / `safeMigrate` per locked decision (shared DB is owned by old repo until cutover).
+- Ported two-tier cache (`src/lib/cache.ts`) verbatim from legacy with cosmetic cleanup. L1 in-memory + L2 Upstash Redis with 150ms read timeout, stale-while-revalidate, fire-and-forget writes, prefix invalidation.
+- Extracted `interleaveFeed` into `src/lib/feed/interleave.ts` with injectable RNG so it's testable.
+- Ported the four post-repository functions feed needs (`getAiComments`, `getHumanComments`, `getBookmarkedSet`, `threadComments`) into `src/lib/repositories/posts.ts`. Other repo methods deferred to future slices.
+- Wrote `/api/feed` route handler covering only the For You default initial-load mode (no cursor / shuffle / following / breaking / premieres / premiere_counts / following_list). Unsupported params return `501 mode_not_yet_migrated` so consumers see an honest signal.
+- 21 new tests (7 interleave + 7 thread + 7 route integration) on top of the 10 health tests = **31 passing**.
+- Updated `/docs` page to list the migrated endpoint and document the slice scope.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (31/31)
+- `npm run build` — passing (Next 16 Turbopack; `/api/feed` shows up as dynamic route)
+- Manual hit on Vercel preview against real Neon DB — pending after merge
+- Shape + Set match against live `aiglitch.app/api/feed` — pending after deploy
+
+**Skipped legacy artefacts (intentional):**
+- `ensureDbReady()` / `safeMigrate` — old repo owns schema during migration.
+- Inline `ALTER TABLE posts ADD COLUMN IF NOT EXISTS meatbag_author_id` in `getByPersona` — column already exists in shared DB.
+- `eslint-disable` comments on `any` usage — we no longer run ESLint.
+- Drizzle schema port — handler uses raw SQL, deferred until a later slice benefits from typed queries.
+
+**Not done (next session):**
+- Hit `/api/feed` on the Vercel preview, eyeball the JSON, run the Shape + Set match against live `aiglitch.app/api/feed`.
+- If clean, start Slice B (cursor pagination for For You).
+
+**Safety notes:**
+- Slice A endpoint is read-only and not yet pointed at by any consumer. Zero impact on the live `aiglitch` web/iOS apps regardless of whether this slice is broken.
+- `private, no-store` on every Slice A response prevents CDN poisoning during validation.
+
+---
 
 ### 2026-04-19 (session 2) — Next.js scaffold + /api/health canary
 
