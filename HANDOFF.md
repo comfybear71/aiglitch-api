@@ -18,12 +18,55 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/feed` (Slice D — breaking) | tested | session 6 | `?breaking=1` video-only feed of `#AIGlitchBreaking` or `post_type='news'`; supports cursor sub-mode |
 | `/api/feed` (Slice E — premieres + genre) | tested | session 7 | `?premieres=1` + optional `?genre=X`; video ≥15s, excludes director-scene fragments |
 | `/api/feed` (Slice F — premiere_counts + following_list) | tested | session 8 | Two sub-endpoints with distinct response shapes; single COUNT query for counts, two parallel queries for list |
-| `/api/feed` (Slice G — consumer flip) | partially-scaffolded | session 9 | Step 1 of 3 done: fallback rewrite makes this project a strangler. Steps 2 (DNS + Vercel domain) and 3 (frontend flip) pending. |
+| `/api/feed` (Slice G — consumer flip) | **proxy-flipped** | session 10 | All three steps done: fallback rewrite, `api.aiglitch.app` domain + DNS, aiglitch frontend rewrite. Live production traffic served via the strangler. |
 | *(all other 177 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-19 (session 10) — Slice G steps 2 + 3 (consumer flip live)
+
+**Branch:** `claude/slice-g-complete-handoff-update` (housekeeping only — the actual code changes were in session 9 + the aiglitch frontend repo)
+
+**Done:**
+- **Step 2** — `api.aiglitch.app` assigned to the `aiglitch-api` Vercel project. DNS CNAME set; Vercel auto-issued TLS. Verified via `curl`:
+  - `api.aiglitch.app/api/health` → 200 from new backend (migrated route served locally)
+  - `api.aiglitch.app/api/wallet` → 400 from old backend via fallback rewrite (legacy handler header fingerprint present)
+  - `api.aiglitch.app/api/feed?premieres=1&genre=scifi` → real premiere from new backend with correct genre filter
+- **Step 3** — aiglitch web frontend repo (`comfybear71/aiglitch`) got a `beforeFiles` rewrite in `next.config.ts` forwarding `/api/feed` and `/api/feed/:path*` to `https://api.aiglitch.app`. Merged and deployed. Verified: `curl aiglitch.app/api/feed` returns a body containing `nextOffset` (field only the new backend sets), so live user traffic is now served by this backend.
+
+**Architecture end-state:**
+```
+browser → aiglitch.app/api/feed
+       → aiglitch frontend's beforeFiles rewrite
+       → https://api.aiglitch.app/api/feed
+       → aiglitch-api Vercel project (this repo)
+       → src/app/api/feed/route.ts (migrated handler)
+       → Neon DB (shared)
+```
+Everything else on `aiglitch.app/api/*` keeps running on the old backend's routes. Nothing to roll back per endpoint — the strangler is the path.
+
+**Verification gates:**
+- Browser visit to `aiglitch.app` — feed renders, premieres play, comments show, GLITCH balance visible.
+- `curl aiglitch.app/api/feed` — response contains `nextOffset: null` (proves route hit new backend).
+- `curl api.aiglitch.app/api/wallet` — proxied to old backend (proves strangler fallback working).
+
+**Not done (next session):**
+- **`shuffle` mode** — only remaining `/api/feed` variant that returns 501. Uses `md5(id::text || seed)` for deterministic shuffle pagination. Low priority; flip if a consumer actually requests it.
+- **Delete legacy `/api/feed` handler** — the aiglitch frontend's own `src/app/api/feed/route.ts` is now unreachable behind the rewrite. Safe to remove in a cleanup commit whenever convenient.
+- **Next endpoint to migrate.** Options:
+  - `/api/interact` (like / comment / follow / bookmark / share) — hot path, write-side, needs care with session merge and replication lag.
+  - `/api/post/:id` — read-only single-post view, small scope.
+  - `/api/channels` — public list, small scope.
+- **Trading endpoints** — remain in the final-phase bucket per decision #6. Require written confirmation per endpoint.
+- **OAuth callbacks** — migrated last per decision #7. Manual dashboard work at 6 providers to update callback URLs.
+
+**Safety notes:**
+- Consumer flip completed zero-downtime. Old `/api/feed` handler still exists in the aiglitch frontend repo — rollback is one commit revert of the rewrite.
+- Shared Neon DB means both backends read consistent data; no replication-lag risk because we only migrated reads.
+
+---
 
 ### 2026-04-19 (session 9) — Strangler fallback rewrite (Slice G step 1)
 
