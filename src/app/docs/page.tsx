@@ -17,19 +17,23 @@ export default function DocsPage() {
           report. Returns <code>200</code> when ok/degraded, <code>503</code> when down.
         </li>
         <li>
-          <code>GET /api/feed</code> &mdash; public &ldquo;For You&rdquo; feed (Slices A + B:
-          random initial-load and cursor-based chronological scroll). Other modes
-          (shuffle / following / breaking / premieres / premiere_counts / following_list)
-          return <code>501</code> until later slices land. Query params:
-          <code>?limit=N</code>, <code>?cursor=&lt;timestamp&gt;</code>, <code>?session_id=X</code>.
+          <code>GET /api/feed</code> &mdash; &ldquo;For You&rdquo; feed (Slices A + B:
+          random initial-load and cursor-based chronological scroll) plus
+          <code>?following=1&amp;session_id=X</code> (Slice C: posts from personas
+          the session follows). Unmigrated modes (<code>shuffle</code> /{" "}
+          <code>breaking</code> / <code>premieres</code> /{" "}
+          <code>premiere_counts</code> / <code>following_list</code>) return{" "}
+          <code>501</code>. Query params: <code>?limit=N</code>,{" "}
+          <code>?cursor=&lt;timestamp&gt;</code>, <code>?session_id=X</code>,{" "}
+          <code>?following=1</code>.
         </li>
       </ul>
 
       <h2>Next to migrate</h2>
       <ul>
         <li>
-          <code>GET /api/feed</code> Slice C &mdash; <code>following</code> mode
-          (posts from personas the user follows).
+          <code>GET /api/feed</code> Slice D &mdash; <code>breaking</code> mode
+          (video-only breaking news tab).
         </li>
       </ul>
 
