@@ -16,7 +16,7 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/feed` (Slice B — cursor pagination) | tested | session 4 | `?cursor=<ts>` scrolls older posts; nextCursor populated on full pages |
 | `/api/feed` (Slice C — following) | tested | session 5 | `?following=1&session_id=X` joins human_subscriptions; silently falls through to For You when session_id missing (legacy behaviour) |
 | `/api/feed` (Slice D — breaking) | tested | session 6 | `?breaking=1` video-only feed of `#AIGlitchBreaking` or `post_type='news'`; supports cursor sub-mode |
-| `/api/feed` (Slice E — premieres + genre) | not-started | — | |
+| `/api/feed` (Slice E — premieres + genre) | tested | session 7 | `?premieres=1` + optional `?genre=X`; video ≥15s, excludes director-scene fragments |
 | `/api/feed` (Slice F — premiere_counts + following_list) | not-started | — | |
 | `/api/feed` (Slice G — consumer flip) | not-started | — | All slices A–F must be live first |
 | *(all other 177 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
@@ -24,6 +24,34 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 ---
 
 ## Session log
+
+### 2026-04-19 (session 7) — /api/feed Slice E (premieres + genre)
+
+**Branch:** `claude/migrate-feed-slice-e-premieres`
+
+**Done:**
+- Removed `premieres` from the 501 reject list.
+- Added the premieres branch in `src/app/api/feed/route.ts`: four sub-variants for (cursor × genre). Filters to `post_type='premiere' OR hashtags LIKE '%AIGlitchPremieres%'`, video-only, requires `video_duration > 15` OR `media_source = 'director-movie'` (so shorts / director fragments don't leak through), excludes `director-premiere/profile/scene` media sources. Optional `?genre=action|scifi|romance|family|horror|comedy|drama|cooking_channel|documentary` adds `hashtags LIKE '%AIGlitch<Genre>%'`.
+- Capitalisation matches legacy: `cooking_channel` → `AIGlitchCooking_channel`. Odd but preserved for parity.
+- Refactored `cacheControlFor` to take `{ isRandomFirstPage, isPersonalized }` — two booleans instead of an expanding struct. Callers compute them from the mode flags. Cleaner and future-proof.
+- 9 new integration tests covering: premieres ≠ 501, single-query shape, premiere hashtag/post_type/video-duration filters, genre filter, cooking_channel capitalisation, cursor sub-mode, cursor+genre combined, and both Cache-Control branches.
+- `/docs` page lists Slice E live and Slice F (premiere_counts + following_list) next.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (63/63, up from 54)
+- `npm run build` — passing locally
+- `npm run verify:feed` — pending (user to rerun post-deploy)
+- Manual preview hit: `/api/feed?premieres=1` returns real premiere videos
+
+**Not done (next session):**
+- Slice F: `premiere_counts` (genre count buckets + background hashtag retag) and `following_list` (usernames the session follows + AI followers). These are sub-endpoints with different response shapes.
+- Slice G: consumer flip.
+
+**Safety notes:**
+- Legacy's `premiere_counts` path runs a background retag job (backfills missing genre hashtags). When we port it in Slice F, decide whether to port the background work or defer it.
+
+---
 
 ### 2026-04-19 (session 6) — /api/feed Slice D (breaking mode)
 
