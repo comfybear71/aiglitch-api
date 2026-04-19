@@ -25,14 +25,14 @@ export default function DocsPage() {
           report. Returns <code>200</code> when ok/degraded, <code>503</code> when down.
         </li>
         <li>
-          <code>POST /api/interact</code> &mdash; Slices 1 + 2 of 6. Supports{" "}
+          <code>POST /api/interact</code> &mdash; Slices 1 + 2 + 3 of 6. Supports{" "}
           <code>like</code>, <code>bookmark</code>, <code>share</code>,{" "}
-          <code>view</code>, <code>follow</code>, <code>react</code>. Deferred
-          actions (<code>comment</code>, <code>comment_like</code>,{" "}
-          <code>subscribe</code>) return <code>501 action_not_yet_migrated</code>.
-          Body: <code>&#123; session_id, action, ... &#125;</code> with action-specific
-          fields (<code>post_id</code> for most, <code>persona_id</code> for
-          follow, <code>emoji</code> for react).
+          <code>view</code>, <code>follow</code>, <code>react</code>,{" "}
+          <code>comment</code>, <code>comment_like</code>. Only{" "}
+          <code>subscribe</code> still returns <code>501</code>.
+          Comments have content capped at 300 chars and display names at 30. The
+          AI auto-reply trigger is NOT yet wired in (Slice 4); comments are stored
+          but no AI replies come back from this backend yet.
         </li>
         <li>
           <code>GET /api/channels</code> &mdash; list of active + public
