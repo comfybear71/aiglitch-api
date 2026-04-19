@@ -22,11 +22,51 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/post/[id]` | tested | session 11 | Single post + threaded comments + bookmark + meatbag_author overlay. 404 on miss, 500 on DB error. Consumer flip deferred until stability window. |
 | `/api/channels` GET | tested | session 12 | List + counts + hosts + thumbnail + subscription state. Legacy Cache-Control preserved (s-maxage=30, SWR=120). |
 | `/api/channels` POST | tested | session 12 | subscribe / unsubscribe. **First write endpoint on the new backend.** INSERT + counter UPDATE match legacy non-transactional shape. `crypto.randomUUID()` for row ids (no deps added). |
+| `/api/interact` (Slice 1 — like, bookmark, share, view) | tested | session 13 | Hot write path. 4 of 9 actions migrated; others return 501. Coin awards stripped (deferred to Slice 5). |
+| `/api/interact` (Slices 2–6) | not-started | — | follow+react · comment+comment_like · AI reply trigger · coin awards · subscribe-via-post |
 | *(all other 177 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-19 (session 13) — /api/interact Slice 1 (like / bookmark / share / view)
+
+**Branch:** `claude/migrate-interact-slice-1`
+
+**Done:**
+- New `src/lib/repositories/interactions.ts` with 4 public functions (`toggleLike`, `toggleBookmark`, `recordShare`, `recordView`) plus internal `trackInterest` helper. Matches legacy SQL shape including the `GREATEST(0, …)` decrement guard and the `ON CONFLICT … DO UPDATE weight = weight + 0.5` interest upsert.
+- New `src/app/api/interact/route.ts`:
+  - Validates body (400 on bad JSON, missing session_id / action / post_id, unknown action)
+  - Returns `501 action_not_yet_migrated` with the exact action name for `follow`, `react`, `comment`, `comment_like`, `subscribe`
+  - Dispatches supported actions via a `switch` and returns `{ success: true, action: <result> }` matching legacy
+  - 500 wrapping with detail on write failure
+- 19 new integration tests: validation, 501 coverage of all 5 deferred actions, toggle semantics on like & bookmark, SQL-shape checks for each action, `trackInterest` fires on like+share but not bookmark+view, `trackInterest` skip when post lookup is empty, error wrapping.
+- Suite now 118/118, up from 99.
+
+**Coin-award stripping:**
+Legacy `toggleLike` awards a first-like bonus + persona-like reward, both wrapped in `try { … } catch { /* non-critical */ }`. Those are NOT ported here. Replaced with a `TODO(Slice 5)` marker where they'll slot back in once `users.awardCoins` / `users.awardPersonaCoins` + `COIN_REWARDS` land. Consumer impact: zero — `/api/interact` consumer isn't flipped yet, so live coin awards still happen on the legacy backend.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (118/118)
+- `npm run build` — passing; `/api/interact` listed as dynamic route
+- Post-deploy smoke: `curl -X POST https://api.aiglitch.app/api/interact -d '{"session_id":"<your-uuid>","post_id":"<real-id>","action":"like"}'` → expect `{success: true, action: "liked"}` the first time, `"unliked"` the second. Use a throwaway test post to avoid polluting real counts.
+- Post-deploy negative: `curl -X POST … -d '{"session_id":"x","post_id":"y","action":"follow"}'` → 501 with `{error: "action_not_yet_migrated", action: "follow"}`.
+
+**Not done this session:**
+- **Consumer flip for /api/interact** — waiting until all 6 slices land. Every action must be migrated before we can flip, otherwise the AI reply trigger, follows, comments etc. break.
+- **Slice 2**: follow + react
+- **Slice 3**: comment + comment_like (without AI reply)
+- **Slice 4**: AI reply trigger + required AI infrastructure
+- **Slice 5**: coin award retrofit
+- **Slice 6**: subscribe-via-post glue
+
+**Safety notes:**
+- First hot-path write endpoint (millions of events/month). `interactions.toggleLike` queries are additive to existing traffic — the live aiglitch.app still handles the hot path until the consumer flips.
+- `trackInterest` performs parallel upserts via `Promise.all`; under very high concurrency a session_id could see `human_interests` rows double-bump. Legacy has the same race. Not fixing here — identical write shape is more important than correctness drift mid-migration.
+
+---
 
 ### 2026-04-19 (session 12) — /api/channels migration (GET + POST, first write)
 
