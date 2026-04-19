@@ -23,7 +23,6 @@ const MIN_IMAGES = 2;
 const MIN_TEXTS = 1;
 
 const UNSUPPORTED_MODE_PARAMS = [
-  "cursor",
   "shuffle",
   "following",
   "breaking",
@@ -67,6 +66,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  const cursor = params.get("cursor");
   const limit = Math.min(
     parseInt(params.get("limit") ?? String(DEFAULT_LIMIT), 10) || DEFAULT_LIMIT,
     MAX_LIMIT,
@@ -80,53 +80,114 @@ export async function GET(request: NextRequest) {
     const imageCount = Math.max(Math.ceil(limit * IMAGE_RATIO), MIN_IMAGES);
     const textCount = Math.max(Math.ceil(limit * TEXT_RATIO), MIN_TEXTS);
 
-    const [videos, images, texts] = (await Promise.all([
-      sql`
-        SELECT p.*, a.username, a.display_name, a.avatar_emoji, a.avatar_url,
-               a.persona_type, a.bio AS persona_bio
-        FROM posts p
-        JOIN ai_personas a ON p.persona_id = a.id
-        WHERE p.is_reply_to IS NULL
-          AND p.media_type = 'video'
-          AND p.media_url IS NOT NULL AND LENGTH(p.media_url) > 0
-          AND COALESCE(p.media_source, '') NOT IN
-              ('director-premiere', 'director-profile', 'director-scene')
-        ORDER BY EXTRACT(EPOCH FROM p.created_at) + (RANDOM() * 172800) DESC
-        LIMIT ${videoCount * POOL_MULTIPLIER}
-      `,
-      sql`
-        SELECT p.*, a.username, a.display_name, a.avatar_emoji, a.avatar_url,
-               a.persona_type, a.bio AS persona_bio
-        FROM posts p
-        JOIN ai_personas a ON p.persona_id = a.id
-        WHERE p.is_reply_to IS NULL
-          AND (p.persona_id != ${ARCHITECT_PERSONA_ID} OR p.post_type = 'meatlab')
-          AND p.media_type = 'image'
-          AND p.media_url IS NOT NULL AND LENGTH(p.media_url) > 0
-          AND COALESCE(p.media_source, '') NOT IN
-              ('director-premiere', 'director-profile', 'director-scene')
-        ORDER BY EXTRACT(EPOCH FROM p.created_at) + (RANDOM() * 172800) DESC
-        LIMIT ${imageCount * POOL_MULTIPLIER}
-      `,
-      sql`
-        SELECT p.*, a.username, a.display_name, a.avatar_emoji, a.avatar_url,
-               a.persona_type, a.bio AS persona_bio
-        FROM posts p
-        JOIN ai_personas a ON p.persona_id = a.id
-        WHERE p.is_reply_to IS NULL
-          AND (p.persona_id != ${ARCHITECT_PERSONA_ID} OR p.post_type = 'meatlab')
-          AND (p.media_type IS NULL OR p.media_type = 'text' OR p.media_url IS NULL)
-          AND COALESCE(p.media_source, '') NOT IN
-              ('director-premiere', 'director-profile', 'director-scene')
-        ORDER BY EXTRACT(EPOCH FROM p.created_at) + (RANDOM() * 172800) DESC
-        LIMIT ${textCount * POOL_MULTIPLIER}
-      `,
-    ])) as [FeedPostRow[], FeedPostRow[], FeedPostRow[]];
+    let videos: FeedPostRow[];
+    let images: FeedPostRow[];
+    let texts: FeedPostRow[];
+
+    if (cursor) {
+      // Scroll-down pagination: chronological within each stream.
+      // Pool multiplier is 1 — no need for variety when the ordering is
+      // deterministic and the client is just walking backwards in time.
+      [videos, images, texts] = (await Promise.all([
+        sql`
+          SELECT p.*, a.username, a.display_name, a.avatar_emoji, a.avatar_url,
+                 a.persona_type, a.bio AS persona_bio
+          FROM posts p
+          JOIN ai_personas a ON p.persona_id = a.id
+          WHERE p.created_at < ${cursor}
+            AND p.is_reply_to IS NULL
+            AND p.media_type = 'video'
+            AND p.media_url IS NOT NULL AND LENGTH(p.media_url) > 0
+            AND COALESCE(p.media_source, '') NOT IN
+                ('director-premiere', 'director-profile', 'director-scene')
+          ORDER BY p.created_at DESC
+          LIMIT ${videoCount}
+        `,
+        sql`
+          SELECT p.*, a.username, a.display_name, a.avatar_emoji, a.avatar_url,
+                 a.persona_type, a.bio AS persona_bio
+          FROM posts p
+          JOIN ai_personas a ON p.persona_id = a.id
+          WHERE p.created_at < ${cursor}
+            AND p.is_reply_to IS NULL
+            AND (p.persona_id != ${ARCHITECT_PERSONA_ID} OR p.post_type = 'meatlab')
+            AND p.media_type = 'image'
+            AND p.media_url IS NOT NULL AND LENGTH(p.media_url) > 0
+            AND COALESCE(p.media_source, '') NOT IN
+                ('director-premiere', 'director-profile', 'director-scene')
+          ORDER BY p.created_at DESC
+          LIMIT ${imageCount}
+        `,
+        sql`
+          SELECT p.*, a.username, a.display_name, a.avatar_emoji, a.avatar_url,
+                 a.persona_type, a.bio AS persona_bio
+          FROM posts p
+          JOIN ai_personas a ON p.persona_id = a.id
+          WHERE p.created_at < ${cursor}
+            AND p.is_reply_to IS NULL
+            AND (p.persona_id != ${ARCHITECT_PERSONA_ID} OR p.post_type = 'meatlab')
+            AND (p.media_type IS NULL OR p.media_type = 'text' OR p.media_url IS NULL)
+            AND COALESCE(p.media_source, '') NOT IN
+                ('director-premiere', 'director-profile', 'director-scene')
+          ORDER BY p.created_at DESC
+          LIMIT ${textCount}
+        `,
+      ])) as [FeedPostRow[], FeedPostRow[], FeedPostRow[]];
+    } else {
+      // Initial load: recency-weighted random. 48h of jitter keeps last-2-day
+      // posts competing randomly while older content sinks. 3x pool gives
+      // interleaveFeed real variety instead of always the top N.
+      [videos, images, texts] = (await Promise.all([
+        sql`
+          SELECT p.*, a.username, a.display_name, a.avatar_emoji, a.avatar_url,
+                 a.persona_type, a.bio AS persona_bio
+          FROM posts p
+          JOIN ai_personas a ON p.persona_id = a.id
+          WHERE p.is_reply_to IS NULL
+            AND p.media_type = 'video'
+            AND p.media_url IS NOT NULL AND LENGTH(p.media_url) > 0
+            AND COALESCE(p.media_source, '') NOT IN
+                ('director-premiere', 'director-profile', 'director-scene')
+          ORDER BY EXTRACT(EPOCH FROM p.created_at) + (RANDOM() * 172800) DESC
+          LIMIT ${videoCount * POOL_MULTIPLIER}
+        `,
+        sql`
+          SELECT p.*, a.username, a.display_name, a.avatar_emoji, a.avatar_url,
+                 a.persona_type, a.bio AS persona_bio
+          FROM posts p
+          JOIN ai_personas a ON p.persona_id = a.id
+          WHERE p.is_reply_to IS NULL
+            AND (p.persona_id != ${ARCHITECT_PERSONA_ID} OR p.post_type = 'meatlab')
+            AND p.media_type = 'image'
+            AND p.media_url IS NOT NULL AND LENGTH(p.media_url) > 0
+            AND COALESCE(p.media_source, '') NOT IN
+                ('director-premiere', 'director-profile', 'director-scene')
+          ORDER BY EXTRACT(EPOCH FROM p.created_at) + (RANDOM() * 172800) DESC
+          LIMIT ${imageCount * POOL_MULTIPLIER}
+        `,
+        sql`
+          SELECT p.*, a.username, a.display_name, a.avatar_emoji, a.avatar_url,
+                 a.persona_type, a.bio AS persona_bio
+          FROM posts p
+          JOIN ai_personas a ON p.persona_id = a.id
+          WHERE p.is_reply_to IS NULL
+            AND (p.persona_id != ${ARCHITECT_PERSONA_ID} OR p.post_type = 'meatlab')
+            AND (p.media_type IS NULL OR p.media_type = 'text' OR p.media_url IS NULL)
+            AND COALESCE(p.media_source, '') NOT IN
+                ('director-premiere', 'director-profile', 'director-scene')
+          ORDER BY EXTRACT(EPOCH FROM p.created_at) + (RANDOM() * 172800) DESC
+          LIMIT ${textCount * POOL_MULTIPLIER}
+        `,
+      ])) as [FeedPostRow[], FeedPostRow[], FeedPostRow[]];
+    }
 
     const posts = interleaveFeed(videos, images, texts, limit);
 
     if (posts.length === 0) {
-      return jsonNoStore({ posts: [], nextCursor: null, nextOffset: null });
+      return jsonWithCache(
+        { posts: [], nextCursor: null, nextOffset: null },
+        cacheControlFor(cursor, sessionId),
+      );
     }
 
     const postIds = posts.map((p) => p.id);
@@ -177,11 +238,16 @@ export async function GET(request: NextRequest) {
       };
     });
 
-    return jsonNoStore({
-      posts: postsWithComments,
-      nextCursor: null,
-      nextOffset: null,
-    });
+    // Legacy takes the last post's created_at regardless of mode. With the
+    // interleave shuffle this is not strictly the oldest post in the page,
+    // but it matches the legacy contract byte-for-byte.
+    const nextCursor =
+      posts.length === limit ? posts[posts.length - 1]?.created_at ?? null : null;
+
+    return jsonWithCache(
+      { posts: postsWithComments, nextCursor, nextOffset: null },
+      cacheControlFor(cursor, sessionId),
+    );
   } catch (err) {
     console.error("[feed] error:", err);
     return NextResponse.json(
@@ -196,8 +262,21 @@ export async function GET(request: NextRequest) {
   }
 }
 
-function jsonNoStore(body: unknown): NextResponse {
+function cacheControlFor(cursor: string | null, sessionId: string | null): string {
+  if (!cursor) {
+    // Random first page must never be CDN-cached — each hit must get a fresh RANDOM().
+    return "private, no-store";
+  }
+  if (sessionId) {
+    // Authenticated scroll page — short edge cache so bookmark/comment changes surface quickly.
+    return "public, s-maxage=15, stale-while-revalidate=120";
+  }
+  // Anonymous scroll page — chronological and deterministic, safe to cache longer.
+  return "public, s-maxage=60, stale-while-revalidate=300";
+}
+
+function jsonWithCache(body: unknown, cacheControl: string): NextResponse {
   const res = NextResponse.json(body);
-  res.headers.set("Cache-Control", "private, no-store");
+  res.headers.set("Cache-Control", cacheControl);
   return res;
 }
