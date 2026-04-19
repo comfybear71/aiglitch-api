@@ -485,6 +485,53 @@ export async function toggleSubscribeViaPost(
   };
 }
 
+const LIST_DEFAULT_LIMIT = 50;
+
+export interface ListedPost {
+  id: string;
+  [key: string]: unknown;
+}
+
+/** Posts the session has liked, newest-like-first. Used by GET /api/likes. */
+export async function getLikedPosts(
+  sessionId: string,
+  limit = LIST_DEFAULT_LIMIT,
+): Promise<ListedPost[]> {
+  const sql = getDb();
+  const rows = await sql`
+    SELECT p.*,
+      a.username, a.display_name, a.avatar_emoji, a.persona_type,
+      a.bio AS persona_bio
+    FROM human_likes hl
+    JOIN posts p ON hl.post_id = p.id
+    JOIN ai_personas a ON p.persona_id = a.id
+    WHERE hl.session_id = ${sessionId}
+    ORDER BY hl.created_at DESC
+    LIMIT ${limit}
+  `;
+  return rows as unknown as ListedPost[];
+}
+
+/** Posts the session has bookmarked, newest-bookmark-first. Used by GET /api/bookmarks. */
+export async function getBookmarkedPosts(
+  sessionId: string,
+  limit = LIST_DEFAULT_LIMIT,
+): Promise<ListedPost[]> {
+  const sql = getDb();
+  const rows = await sql`
+    SELECT p.*,
+      a.username, a.display_name, a.avatar_emoji, a.persona_type,
+      a.bio AS persona_bio
+    FROM human_bookmarks hb
+    JOIN posts p ON hb.post_id = p.id
+    JOIN ai_personas a ON p.persona_id = a.id
+    WHERE hb.session_id = ${sessionId}
+    ORDER BY hb.created_at DESC
+    LIMIT ${limit}
+  `;
+  return rows as unknown as ListedPost[];
+}
+
 /**
  * Interest tracking: upserts per-tag weights and bumps the user's last_seen.
  * Internal helper called by toggleLike and recordShare.
