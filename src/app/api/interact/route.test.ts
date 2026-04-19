@@ -67,7 +67,7 @@ function sqlOf(call: SqlCall): string {
   return call.strings.join("?");
 }
 
-describe("POST /api/interact (Slice 1)", () => {
+describe("POST /api/interact (Slices 1 + 2)", () => {
   // ── Validation ─────────────────────────────────────────────────────
 
   it("400 on invalid JSON", async () => {
@@ -97,8 +97,8 @@ describe("POST /api/interact (Slice 1)", () => {
 
   // ── Deferred actions ───────────────────────────────────────────────
 
-  it.each(["follow", "react", "comment", "comment_like", "subscribe"])(
-    "501 action_not_yet_migrated for %s",
+  it.each(["comment", "comment_like", "subscribe"])(
+    "501 action_not_yet_migrated for %s (Slice 2 removes follow + react from this list)",
     async (action) => {
       const res = await callPost({ session_id: "u-1", post_id: "p-1", action });
       expect(res.status).toBe(501);
@@ -254,5 +254,190 @@ describe("POST /api/interact (Slice 1)", () => {
     const body = (await res.json()) as { error: string; detail: string };
     expect(body.error).toBe("Failed to record interaction");
     expect(body.detail).toBe("neon down");
+  });
+
+  // ── Slice 2 — follow ───────────────────────────────────────────────
+
+  it("follow: 400 on missing persona_id", async () => {
+    const res = await callPost({ session_id: "u-1", action: "follow" });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("Missing persona_id");
+  });
+
+  it("follow: first press inserts subscription + increments follower_count", async () => {
+    // Stub Math.random so maybeAIFollowBack doesn't fire (skip the follow-back SQL).
+    const rng = vi.spyOn(Math, "random").mockReturnValue(0.99);
+    try {
+      fake.results = [
+        [], // no existing subscription
+        [], // INSERT ack
+        [], // UPDATE follower_count
+      ];
+      const res = await callPost({
+        session_id: "u-1",
+        persona_id: "glitch-001",
+        action: "follow",
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { success: boolean; action: string };
+      expect(body).toEqual({ success: true, action: "followed" });
+
+      expect(sqlOf(fake.calls[1]!)).toContain("INSERT INTO human_subscriptions");
+      expect(sqlOf(fake.calls[2]!)).toContain("follower_count = follower_count + 1");
+    } finally {
+      rng.mockRestore();
+    }
+  });
+
+  it("follow: second press deletes + decrements with GREATEST guard", async () => {
+    fake.results = [[{ id: "sub-1" }], [], []];
+    const res = await callPost({
+      session_id: "u-1",
+      persona_id: "glitch-001",
+      action: "follow",
+    });
+    const body = (await res.json()) as { action: string };
+    expect(body.action).toBe("unfollowed");
+    expect(sqlOf(fake.calls[2]!)).toContain("GREATEST(0, follower_count - 1)");
+  });
+
+  it("follow: maybeAIFollowBack fires when roll passes + AI not already following", async () => {
+    const rng = vi.spyOn(Math, "random").mockReturnValue(0.01); // < 0.40
+    try {
+      fake.results = [
+        [], // no existing subscription
+        [], // INSERT human_subscriptions
+        [], // UPDATE follower_count
+        [], // maybeAIFollowBack: not already following
+        [], // INSERT ai_persona_follows
+        [{ display_name: "Architect Bot" }], // SELECT display_name
+        [], // INSERT notifications
+      ];
+      const res = await callPost({
+        session_id: "u-1",
+        persona_id: "glitch-001",
+        action: "follow",
+      });
+      expect(res.status).toBe(200);
+      expect(fake.calls).toHaveLength(7);
+      expect(sqlOf(fake.calls[4]!)).toContain("INSERT INTO ai_persona_follows");
+      expect(sqlOf(fake.calls[6]!)).toContain("INSERT INTO notifications");
+      expect(fake.calls[6]!.values.some((v) => String(v).includes("Architect Bot"))).toBe(true);
+    } finally {
+      rng.mockRestore();
+    }
+  });
+
+  it("follow: maybeAIFollowBack skipped when AI already follows", async () => {
+    const rng = vi.spyOn(Math, "random").mockReturnValue(0.01);
+    try {
+      fake.results = [
+        [], // no existing subscription
+        [], // INSERT human_subscriptions
+        [], // UPDATE follower_count
+        [{ id: "already" }], // AI already follows
+      ];
+      const res = await callPost({
+        session_id: "u-1",
+        persona_id: "glitch-001",
+        action: "follow",
+      });
+      expect(res.status).toBe(200);
+      // Exactly 4 calls — no follow-back insert, no notification insert.
+      expect(fake.calls).toHaveLength(4);
+    } finally {
+      rng.mockRestore();
+    }
+  });
+
+  // ── Slice 2 — react ────────────────────────────────────────────────
+
+  it("react: 400 on missing post_id", async () => {
+    const res = await callPost({
+      session_id: "u-1",
+      emoji: "funny",
+      action: "react",
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("react: 400 on missing emoji", async () => {
+    const res = await callPost({
+      session_id: "u-1",
+      post_id: "p-1",
+      action: "react",
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("react: 400 with 'Invalid emoji:' on invalid emoji value", async () => {
+    fake.results = [[]]; // existing check fires before validation throws? no — validation first, no DB hit.
+    const res = await callPost({
+      session_id: "u-1",
+      post_id: "p-1",
+      emoji: "rainbow",
+      action: "react",
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain("Invalid emoji");
+  });
+
+  it("react: first press inserts + upserts content_feedback with scored formula", async () => {
+    fake.results = [
+      [], // no existing reaction
+      [], // INSERT emoji_reactions
+      [{ channel_id: "ch-1" }], // SELECT posts.channel_id
+      [], // INSERT content_feedback (on conflict upsert)
+      [{ hashtags: "foo", persona_type: "comic" }], // trackInterest lookup
+      [], [], // interest upserts (comic, foo)
+      [], // human_users upsert
+      // getReactionCounts
+      [
+        { emoji: "funny", count: 1 },
+      ],
+    ];
+    const res = await callPost({
+      session_id: "u-1",
+      post_id: "p-1",
+      emoji: "funny",
+      action: "react",
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      success: boolean;
+      action: string;
+      emoji: string;
+      counts: Record<string, number>;
+    };
+    expect(body.success).toBe(true);
+    expect(body.action).toBe("reacted");
+    expect(body.emoji).toBe("funny");
+    expect(body.counts).toEqual({ funny: 1, sad: 0, shocked: 0, crap: 0 });
+
+    const upsertSql = sqlOf(fake.calls[3]!);
+    expect(upsertSql).toContain("INSERT INTO content_feedback");
+    expect(upsertSql).toContain("ON CONFLICT (post_id)");
+  });
+
+  it("react: second press deletes + decrements with GREATEST guard", async () => {
+    fake.results = [
+      [{ id: "r-1" }], // existing reaction
+      [], // DELETE emoji_reactions
+      [], // UPDATE content_feedback
+      // getReactionCounts
+      [],
+    ];
+    const res = await callPost({
+      session_id: "u-1",
+      post_id: "p-1",
+      emoji: "sad",
+      action: "react",
+    });
+    const body = (await res.json()) as { action: string; counts: Record<string, number> };
+    expect(body.action).toBe("unreacted");
+    expect(body.counts).toEqual({ funny: 0, sad: 0, shocked: 0, crap: 0 });
+    expect(sqlOf(fake.calls[2]!)).toContain("GREATEST(0, sad_count");
   });
 });
