@@ -2,6 +2,10 @@ import { type NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { interleaveFeed, type PostLike } from "@/lib/feed/interleave";
 import {
+  getAiFollowerUsernames,
+  getFollowedUsernames,
+} from "@/lib/repositories/personas";
+import {
   getAiComments,
   getBookmarkedSet,
   getHumanComments,
@@ -24,8 +28,6 @@ const MIN_TEXTS = 1;
 
 const UNSUPPORTED_MODE_PARAMS = [
   "shuffle",
-  "premiere_counts",
-  "following_list",
 ] as const;
 
 interface FeedPostRow extends PostLike {
@@ -72,6 +74,8 @@ export async function GET(request: NextRequest) {
   const following = params.get("following") === "1";
   const breaking = params.get("breaking") === "1";
   const premieres = params.get("premieres") === "1";
+  const premiereCounts = params.get("premiere_counts") === "1";
+  const followingList = params.get("following_list") === "1";
   const genre = params.get("genre");
   const genreFilter = genre
     ? `AIGlitch${genre.charAt(0).toUpperCase() + genre.slice(1)}`
@@ -82,6 +86,63 @@ export async function GET(request: NextRequest) {
 
   try {
     const sql = getDb();
+
+    // Sub-endpoint: genre count buckets. Different response shape from the
+    // main feed (no posts array). Filters exactly like the premieres tab so
+    // the counts line up with what ?premieres=1&genre=X would actually return.
+    if (premiereCounts) {
+      const countRows = (await sql`
+        SELECT
+          COUNT(*)::int AS total,
+          COUNT(*) FILTER (WHERE hashtags LIKE '%AIGlitchAction%')::int AS action,
+          COUNT(*) FILTER (WHERE hashtags LIKE '%AIGlitchScifi%')::int AS scifi,
+          COUNT(*) FILTER (WHERE hashtags LIKE '%AIGlitchRomance%')::int AS romance,
+          COUNT(*) FILTER (WHERE hashtags LIKE '%AIGlitchFamily%')::int AS family,
+          COUNT(*) FILTER (WHERE hashtags LIKE '%AIGlitchHorror%')::int AS horror,
+          COUNT(*) FILTER (WHERE hashtags LIKE '%AIGlitchComedy%')::int AS comedy,
+          COUNT(*) FILTER (WHERE hashtags LIKE '%AIGlitchDrama%')::int AS drama,
+          COUNT(*) FILTER (WHERE hashtags LIKE '%AIGlitchCooking_channel%')::int AS cooking_channel,
+          COUNT(*) FILTER (WHERE hashtags LIKE '%AIGlitchDocumentary%')::int AS documentary
+        FROM posts
+        WHERE is_reply_to IS NULL
+          AND post_type = 'premiere'
+          AND media_type = 'video' AND media_url IS NOT NULL
+          AND COALESCE(media_source, '') NOT IN
+              ('director-premiere', 'director-profile', 'director-scene')
+          AND (video_duration > 15 OR media_source = 'director-movie')
+      `) as unknown as Array<Record<string, number | null>>;
+      const row = countRows[0] ?? {};
+      const counts = {
+        action: row.action ?? 0,
+        scifi: row.scifi ?? 0,
+        romance: row.romance ?? 0,
+        family: row.family ?? 0,
+        horror: row.horror ?? 0,
+        comedy: row.comedy ?? 0,
+        drama: row.drama ?? 0,
+        cooking_channel: row.cooking_channel ?? 0,
+        documentary: row.documentary ?? 0,
+        all: row.total ?? 0,
+      };
+      return jsonWithCache(
+        { counts },
+        "public, s-maxage=60, stale-while-revalidate=300",
+      );
+    }
+
+    // Sub-endpoint: list of usernames the session follows plus AI personas
+    // that follow the session back. Requires session_id; without it we fall
+    // through to the main feed — matches legacy's silent fall-through.
+    if (followingList && sessionId) {
+      const [followingUsernames, aiFollowers] = await Promise.all([
+        getFollowedUsernames(sessionId),
+        getAiFollowerUsernames(sessionId),
+      ]);
+      return jsonWithCache(
+        { following: followingUsernames, ai_followers: aiFollowers },
+        "public, s-maxage=15, stale-while-revalidate=120",
+      );
+    }
 
     let posts: FeedPostRow[];
 

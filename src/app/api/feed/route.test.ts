@@ -1,10 +1,10 @@
 /**
- * Integration tests for /api/feed (Slices A + B + C + D + E).
+ * Integration tests for /api/feed (Slices A through F).
  *
  * The route handler is exercised through a fake `neon` client that records
  * every SQL template and returns canned rows. This catches:
- *   - 501 short-circuit on unsupported mode params (shuffle, premiere_counts, …)
- *   - shape of the response (posts, nextCursor, nextOffset)
+ *   - 501 short-circuit on unsupported mode params (only `shuffle` left)
+ *   - shape of the response (posts, nextCursor, nextOffset, or sub-endpoint)
  *   - bookmark resolution when session_id is present vs absent
  *   - meatbag author overlay when posts carry meatbag_author_id
  *   - empty-feed shortcut (no comment / meatbag queries fired)
@@ -20,6 +20,9 @@
  *   - Slice E: premieres mode filters by premiere hashtag/post_type + video duration
  *   - Slice E: genre sub-filter adds AIGlitch<Genre> hashtag LIKE
  *   - Slice E: premieres supports cursor sub-mode
+ *   - Slice F: premiere_counts returns { counts: { genre → N, all: N } }
+ *   - Slice F: following_list returns { following, ai_followers } when session_id present
+ *   - Slice F: following_list without session_id falls through to For You
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -88,9 +91,9 @@ function videoRow(id: string, extras: Record<string, unknown> = {}) {
   };
 }
 
-describe("GET /api/feed (Slices A + B + C + D + E)", () => {
-  it("returns 501 for unsupported mode params (Slice E removes premieres from this list)", async () => {
-    for (const param of ["shuffle", "premiere_counts", "following_list"]) {
+describe("GET /api/feed (Slices A through F)", () => {
+  it("returns 501 only for shuffle now (Slice F removes premiere_counts and following_list from this list)", async () => {
+    for (const param of ["shuffle"]) {
       const res = await callGet(`http://localhost/api/feed?${param}=1`);
       expect(res.status).toBe(501);
       const body = (await res.json()) as { error: string; unsupported_param: string };
@@ -559,5 +562,132 @@ describe("GET /api/feed (Slices A + B + C + D + E)", () => {
     expect(res.headers.get("Cache-Control")).toBe(
       "public, s-maxage=15, stale-while-revalidate=120",
     );
+  });
+
+  // ── Slice F — premiere_counts + following_list ─────────────────────────
+
+  it("premiere_counts no longer returns 501", async () => {
+    fake.results = [[{ total: 0 }]];
+    const res = await callGet("http://localhost/api/feed?premiere_counts=1");
+    expect(res.status).toBe(200);
+  });
+
+  it("premiere_counts returns { counts: { ... } } shape (not posts)", async () => {
+    fake.results = [
+      [
+        {
+          total: 42,
+          action: 5,
+          scifi: 10,
+          romance: 3,
+          family: 4,
+          horror: 6,
+          comedy: 7,
+          drama: 2,
+          cooking_channel: 3,
+          documentary: 2,
+        },
+      ],
+    ];
+    const res = await callGet("http://localhost/api/feed?premiere_counts=1");
+    const body = (await res.json()) as { counts: Record<string, number> };
+    expect(Object.keys(body).sort()).toEqual(["counts"]);
+    expect(body.counts).toEqual({
+      action: 5,
+      scifi: 10,
+      romance: 3,
+      family: 4,
+      horror: 6,
+      comedy: 7,
+      drama: 2,
+      cooking_channel: 3,
+      documentary: 2,
+      all: 42,
+    });
+  });
+
+  it("premiere_counts uses a single COUNT query", async () => {
+    fake.results = [[{ total: 0 }]];
+    await callGet("http://localhost/api/feed?premiere_counts=1");
+    expect(fake.calls).toHaveLength(1);
+    const sqlText = fake.calls[0]!.strings.join("?");
+    expect(sqlText).toContain("COUNT(*) FILTER");
+    expect(sqlText).toContain("AIGlitchAction");
+    expect(sqlText).toContain("AIGlitchCooking_channel");
+    expect(sqlText).toContain("post_type = 'premiere'");
+    expect(sqlText).toContain("video_duration > 15");
+  });
+
+  it("premiere_counts handles missing fields by defaulting to 0", async () => {
+    fake.results = [[{}]]; // totally empty row
+    const res = await callGet("http://localhost/api/feed?premiere_counts=1");
+    const body = (await res.json()) as { counts: Record<string, number> };
+    expect(body.counts.all).toBe(0);
+    expect(body.counts.action).toBe(0);
+  });
+
+  it("premiere_counts uses 60s public cache", async () => {
+    fake.results = [[{ total: 0 }]];
+    const res = await callGet("http://localhost/api/feed?premiere_counts=1");
+    expect(res.headers.get("Cache-Control")).toBe(
+      "public, s-maxage=60, stale-while-revalidate=300",
+    );
+  });
+
+  it("following_list no longer returns 501 when session_id provided", async () => {
+    fake.results = [[], []];
+    const res = await callGet(
+      "http://localhost/api/feed?following_list=1&session_id=user-1",
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("following_list returns { following, ai_followers } shape", async () => {
+    fake.results = [
+      [{ username: "alice_ai" }, { username: "bob_ai" }], // followed
+      [{ username: "fan_bot" }], // ai followers
+    ];
+    const res = await callGet(
+      "http://localhost/api/feed?following_list=1&session_id=user-1",
+    );
+    const body = (await res.json()) as {
+      following: string[];
+      ai_followers: string[];
+    };
+    expect(Object.keys(body).sort()).toEqual(["ai_followers", "following"]);
+    expect(body.following).toEqual(["alice_ai", "bob_ai"]);
+    expect(body.ai_followers).toEqual(["fan_bot"]);
+  });
+
+  it("following_list issues two parallel queries filtered by session_id", async () => {
+    fake.results = [[], []];
+    await callGet("http://localhost/api/feed?following_list=1&session_id=user-1");
+    expect(fake.calls).toHaveLength(2);
+    for (const call of fake.calls) {
+      expect(call.values).toContain("user-1");
+    }
+    const subSql = fake.calls[0]!.strings.join("?");
+    const followSql = fake.calls[1]!.strings.join("?");
+    expect(subSql).toContain("human_subscriptions");
+    expect(followSql).toContain("ai_persona_follows");
+  });
+
+  it("following_list uses 15s personalized cache", async () => {
+    fake.results = [[], []];
+    const res = await callGet(
+      "http://localhost/api/feed?following_list=1&session_id=user-1",
+    );
+    expect(res.headers.get("Cache-Control")).toBe(
+      "public, s-maxage=15, stale-while-revalidate=120",
+    );
+  });
+
+  it("following_list without session_id falls through to For You (legacy behaviour)", async () => {
+    fake.results = [[], [], []]; // three stream queries
+    const res = await callGet("http://localhost/api/feed?following_list=1");
+    expect(res.status).toBe(200);
+    expect(fake.calls).toHaveLength(3);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual(["nextCursor", "nextOffset", "posts"]);
   });
 });
