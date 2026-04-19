@@ -1,9 +1,10 @@
 /**
  * Human ↔ content interactions.
  *
- * Slice 1 scope: like, bookmark, share, view (+ internal trackInterest).
+ * Slice 1 + 2 scope: like, bookmark, share, view, follow, react
+ * (+ internal trackInterest, maybeAIFollowBack).
+ *
  * Deferred to later slices:
- *   - Slice 2: follow, react
  *   - Slice 3: comment, comment_like
  *   - Slice 4: AI auto-reply trigger (requires AI engine port)
  *   - Slice 5: coin awards (requires users-repo + COIN_REWARDS port)
@@ -17,6 +18,27 @@
 
 import { randomUUID } from "node:crypto";
 import { getDb } from "@/lib/db";
+
+/**
+ * Legacy value from `AI_BEHAVIOR.followBackProb` in bible/constants.ts.
+ * Inlined here because only this slice cares; extract to a shared constants
+ * file when a second slice needs AI_BEHAVIOR values.
+ */
+const AI_FOLLOW_BACK_PROB = 0.40;
+
+const VALID_EMOJIS = ["funny", "sad", "shocked", "crap"] as const;
+export type ReactionEmoji = (typeof VALID_EMOJIS)[number];
+
+/**
+ * Emoji → content_feedback score delta (applied on add).
+ * Matches the exact legacy formula.
+ */
+const EMOJI_SCORE_DELTA: Record<ReactionEmoji, number> = {
+  funny: 3,
+  shocked: 2,
+  sad: 1,
+  crap: -2,
+};
 
 /** Toggle a like row + post counter. Returns the new state. */
 export async function toggleLike(
@@ -92,6 +114,182 @@ export async function recordView(postId: string, sessionId: string): Promise<voi
     INSERT INTO human_view_history (id, post_id, session_id, viewed_at)
     VALUES (${randomUUID()}, ${postId}, ${sessionId}, NOW())
   `;
+}
+
+/**
+ * Toggle follow on an AI persona. Returns the new state. On a new follow,
+ * rolls `maybeAIFollowBack` which probabilistically makes the persona
+ * follow back and notifies the human.
+ */
+export async function toggleFollow(
+  personaId: string,
+  sessionId: string,
+): Promise<"followed" | "unfollowed"> {
+  const sql = getDb();
+  const existing = (await sql`
+    SELECT id FROM human_subscriptions
+    WHERE persona_id = ${personaId} AND session_id = ${sessionId}
+  `) as unknown as Array<{ id: string }>;
+
+  if (existing.length === 0) {
+    await sql`
+      INSERT INTO human_subscriptions (id, persona_id, session_id)
+      VALUES (${randomUUID()}, ${personaId}, ${sessionId})
+    `;
+    await sql`
+      UPDATE ai_personas SET follower_count = follower_count + 1 WHERE id = ${personaId}
+    `;
+    await maybeAIFollowBack(personaId, sessionId);
+    return "followed";
+  }
+
+  await sql`
+    DELETE FROM human_subscriptions
+    WHERE persona_id = ${personaId} AND session_id = ${sessionId}
+  `;
+  await sql`
+    UPDATE ai_personas
+    SET follower_count = GREATEST(0, follower_count - 1)
+    WHERE id = ${personaId}
+  `;
+  return "unfollowed";
+}
+
+/**
+ * With probability `AI_FOLLOW_BACK_PROB` (40%), insert an `ai_persona_follows`
+ * row (AI → human) and drop a notification. Silently returns if the roll
+ * fails or the persona already follows the session.
+ *
+ * Internal — only `toggleFollow` calls this.
+ */
+async function maybeAIFollowBack(personaId: string, sessionId: string): Promise<void> {
+  if (Math.random() >= AI_FOLLOW_BACK_PROB) return;
+
+  const sql = getDb();
+  const alreadyFollows = (await sql`
+    SELECT id FROM ai_persona_follows
+    WHERE persona_id = ${personaId} AND session_id = ${sessionId}
+  `) as unknown as Array<{ id: string }>;
+  if (alreadyFollows.length > 0) return;
+
+  await sql`
+    INSERT INTO ai_persona_follows (id, persona_id, session_id)
+    VALUES (${randomUUID()}, ${personaId}, ${sessionId})
+  `;
+
+  const persona = (await sql`
+    SELECT display_name FROM ai_personas WHERE id = ${personaId}
+  `) as unknown as Array<{ display_name: string }>;
+  if (persona.length > 0) {
+    const preview = `${persona[0]!.display_name} followed you back! 🤖`;
+    await sql`
+      INSERT INTO notifications (id, session_id, type, persona_id, content_preview)
+      VALUES (${randomUUID()}, ${sessionId}, 'ai_follow', ${personaId}, ${preview})
+    `;
+  }
+}
+
+export interface ReactionResult {
+  action: "reacted" | "unreacted";
+  emoji: string;
+  counts: Record<string, number>;
+}
+
+/**
+ * Toggle an emoji reaction on a post. On add, upserts content_feedback with
+ * a scored formula (funny+3, shocked+2, sad+1, crap-2). On remove, decrements
+ * with a GREATEST(0, …) guard and recomputes the score. Throws on invalid
+ * emoji so the route can 400 cleanly.
+ */
+export async function toggleReaction(
+  postId: string,
+  sessionId: string,
+  emoji: string,
+): Promise<ReactionResult> {
+  if (!(VALID_EMOJIS as readonly string[]).includes(emoji)) {
+    throw new Error(`Invalid emoji: ${emoji}`);
+  }
+  const sql = getDb();
+  const existing = (await sql`
+    SELECT id FROM emoji_reactions
+    WHERE post_id = ${postId} AND session_id = ${sessionId} AND emoji = ${emoji}
+  `) as unknown as Array<{ id: string }>;
+
+  const isFunny = emoji === "funny" ? 1 : 0;
+  const isSad = emoji === "sad" ? 1 : 0;
+  const isShocked = emoji === "shocked" ? 1 : 0;
+  const isCrap = emoji === "crap" ? 1 : 0;
+  const scoreDelta = EMOJI_SCORE_DELTA[emoji as ReactionEmoji];
+
+  if (existing.length === 0) {
+    await sql`
+      INSERT INTO emoji_reactions (id, post_id, session_id, emoji)
+      VALUES (${randomUUID()}, ${postId}, ${sessionId}, ${emoji})
+    `;
+    const postRow = (await sql`
+      SELECT channel_id FROM posts WHERE id = ${postId}
+    `) as unknown as Array<{ channel_id: string | null }>;
+    const channelId = postRow[0]?.channel_id ?? null;
+    await sql`
+      INSERT INTO content_feedback (
+        id, post_id, channel_id, funny_count, sad_count, shocked_count, crap_count, score
+      )
+      VALUES (
+        ${randomUUID()}, ${postId}, ${channelId},
+        ${isFunny}, ${isSad}, ${isShocked}, ${isCrap}, ${scoreDelta}
+      )
+      ON CONFLICT (post_id) DO UPDATE SET
+        funny_count = content_feedback.funny_count + ${isFunny},
+        sad_count = content_feedback.sad_count + ${isSad},
+        shocked_count = content_feedback.shocked_count + ${isShocked},
+        crap_count = content_feedback.crap_count + ${isCrap},
+        score = (content_feedback.funny_count + ${isFunny}) * 3
+              + (content_feedback.shocked_count + ${isShocked}) * 2
+              + (content_feedback.sad_count + ${isSad})
+              - (content_feedback.crap_count + ${isCrap}) * 2,
+        updated_at = NOW()
+    `;
+    await trackInterest(sessionId, postId);
+  } else {
+    await sql`
+      DELETE FROM emoji_reactions
+      WHERE post_id = ${postId} AND session_id = ${sessionId} AND emoji = ${emoji}
+    `;
+    await sql`
+      UPDATE content_feedback SET
+        funny_count = GREATEST(0, funny_count - ${isFunny}),
+        sad_count = GREATEST(0, sad_count - ${isSad}),
+        shocked_count = GREATEST(0, shocked_count - ${isShocked}),
+        crap_count = GREATEST(0, crap_count - ${isCrap}),
+        score = GREATEST(0, funny_count - ${isFunny}) * 3
+              + GREATEST(0, shocked_count - ${isShocked}) * 2
+              + GREATEST(0, sad_count - ${isSad})
+              - GREATEST(0, crap_count - ${isCrap}) * 2,
+        updated_at = NOW()
+      WHERE post_id = ${postId}
+    `;
+  }
+
+  const counts = await getReactionCounts(postId);
+  return {
+    action: existing.length === 0 ? "reacted" : "unreacted",
+    emoji,
+    counts,
+  };
+}
+
+/** Aggregate emoji counts for a post, used in the reaction response body. */
+export async function getReactionCounts(
+  postId: string,
+): Promise<Record<string, number>> {
+  const sql = getDb();
+  const rows = (await sql`
+    SELECT emoji, COUNT(*)::int AS count FROM emoji_reactions
+    WHERE post_id = ${postId} GROUP BY emoji
+  `) as unknown as Array<{ emoji: string; count: number }>;
+  const counts: Record<string, number> = { funny: 0, sad: 0, shocked: 0, crap: 0 };
+  for (const row of rows) counts[row.emoji] = row.count;
+  return counts;
 }
 
 /**
