@@ -36,25 +36,23 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 - Vitest config + 10 passing tests covering all status transitions.
 - `/status` page rendering the health report as a table.
 - `/docs` page placeholder listing the one migrated endpoint.
-- GitHub Actions CI workflow (`.github/workflows/ci.yml`): typecheck + lint + test on PR / push to master.
+- GitHub Actions CI workflow (`.github/workflows/ci.yml`): typecheck + test on PR / push to master.
+- `vercel.json` declaring Next.js framework (fixed first two failed deploys).
 
 **Verification gates:**
 - `npm run typecheck` — **passing**
 - `npm test` — **passing** (10/10)
-- `npm run lint` — **FAILING** (see open issue below)
-- `npm run build` — not yet run
+- `npm run build` — **passing** locally (Next.js 16 Turbopack)
+- Vercel preview deploy — **passing** after `vercel.json` framework declaration
 - Manual hit of `/api/health` on preview deploy — not yet done
 
-**Open issue — ESLint 10 incompatibility (FIX SPIRAL STOPPED):**
-`eslint-plugin-react` (bundled transitively by `eslint-config-next@16.2.4`) uses the removed `context.getFilename()` API and crashes under ESLint 10. This is an ecosystem bug waiting on an upstream plugin update. Three resolution paths logged in-session:
-- (a) Drop lint from CI for now and revisit when ecosystem catches up.
-- (b) Pin `eslint@^9` and retry.
-- (c) Switch to `biome` or `oxlint`.
-User to choose before next session. CI will report failing lint until resolved.
+**Resolved this session — lint:**
+User chose option (a): dropped ESLint entirely from the project. `eslint.config.mjs`, the `lint` script, and `eslint` + `eslint-config-next` deps removed; CI no longer runs lint. Revisit on a dedicated branch once the ESLint 10 / eslint-plugin-react API compat lands upstream, or when switching to Biome/oxlint.
+
+**Resolved this session — Vercel framework:**
+First two deploys failed with `No Output Directory named "public" found` because the Vercel project preset was stuck on the static-site default (it was linked before any package.json existed). Fixed by committing `vercel.json` with `{"framework": "nextjs"}` so the config lives in the repo.
 
 **Not done (next session):**
-- Resolve ESLint 10 issue (user's chosen path above).
-- Run `npm run build` to verify production build works.
 - Manual hit of `/api/health` on a preview deploy against real Neon DB.
 - Wire `/status` to real health data (currently fetches from itself — works in prod, not in preview for same-origin reasons).
 - `/docs` OpenAPI generation from route handlers.
