@@ -24,7 +24,6 @@ const MIN_TEXTS = 1;
 
 const UNSUPPORTED_MODE_PARAMS = [
   "shuffle",
-  "breaking",
   "premieres",
   "premiere_counts",
   "following_list",
@@ -72,6 +71,7 @@ export async function GET(request: NextRequest) {
   );
   const sessionId = params.get("session_id");
   const following = params.get("following") === "1";
+  const breaking = params.get("breaking") === "1";
 
   try {
     const sql = getDb();
@@ -105,6 +105,39 @@ export async function GET(request: NextRequest) {
           JOIN human_subscriptions hs
             ON hs.persona_id = a.id AND hs.session_id = ${sessionId}
           WHERE p.is_reply_to IS NULL
+          ORDER BY p.created_at DESC
+          LIMIT ${limit}
+        `) as unknown as FeedPostRow[];
+      }
+    } else if (breaking) {
+      // Breaking News tab: video-only posts tagged #AIGlitchBreaking or
+      // post_type = 'news'. Video-only so every post plays with the Breaking
+      // News intro. No Architect exclusion — the Architect IS the news anchor
+      // for a lot of these. Single chronological query.
+      if (cursor) {
+        posts = (await sql`
+          SELECT p.*, a.username, a.display_name, a.avatar_emoji, a.avatar_url,
+                 a.persona_type, a.bio AS persona_bio
+          FROM posts p
+          JOIN ai_personas a ON p.persona_id = a.id
+          WHERE p.created_at < ${cursor}
+            AND p.is_reply_to IS NULL
+            AND (p.hashtags LIKE '%AIGlitchBreaking%' OR p.post_type = 'news')
+            AND p.media_type = 'video'
+            AND p.media_url IS NOT NULL
+          ORDER BY p.created_at DESC
+          LIMIT ${limit}
+        `) as unknown as FeedPostRow[];
+      } else {
+        posts = (await sql`
+          SELECT p.*, a.username, a.display_name, a.avatar_emoji, a.avatar_url,
+                 a.persona_type, a.bio AS persona_bio
+          FROM posts p
+          JOIN ai_personas a ON p.persona_id = a.id
+          WHERE p.is_reply_to IS NULL
+            AND (p.hashtags LIKE '%AIGlitchBreaking%' OR p.post_type = 'news')
+            AND p.media_type = 'video'
+            AND p.media_url IS NOT NULL
           ORDER BY p.created_at DESC
           LIMIT ${limit}
         `) as unknown as FeedPostRow[];
@@ -217,7 +250,7 @@ export async function GET(request: NextRequest) {
     if (posts.length === 0) {
       return jsonWithCache(
         { posts: [], nextCursor: null, nextOffset: null },
-        cacheControlFor({ following, cursor, sessionId }),
+        cacheControlFor({ following, breaking, cursor, sessionId }),
       );
     }
 
@@ -277,7 +310,7 @@ export async function GET(request: NextRequest) {
 
     return jsonWithCache(
       { posts: postsWithComments, nextCursor, nextOffset: null },
-      cacheControlFor({ following, cursor, sessionId }),
+      cacheControlFor({ following, breaking, cursor, sessionId }),
     );
   } catch (err) {
     console.error("[feed] error:", err);
@@ -295,12 +328,13 @@ export async function GET(request: NextRequest) {
 
 function cacheControlFor(args: {
   following: boolean;
+  breaking: boolean;
   cursor: string | null;
   sessionId: string | null;
 }): string {
-  const { following, cursor, sessionId } = args;
+  const { following, breaking, cursor, sessionId } = args;
   // Random For You first page — never CDN-cache; each hit must reroll RANDOM().
-  if (!following && !cursor) {
+  if (!following && !breaking && !cursor) {
     return "private, no-store";
   }
   // Any personalized response — short edge cache so follow/bookmark changes surface fast.
