@@ -1,13 +1,14 @@
 /**
  * Human ↔ content interactions.
  *
- * Slices 1 + 2 + 3 scope: like, bookmark, share, view, follow, react,
- * comment, comment_like (+ internal trackInterest, maybeAIFollowBack).
+ * Slices 1 + 2 + 3 + subscribe scope: like, bookmark, share, view, follow,
+ * react, comment, comment_like, subscribe (+ internal trackInterest,
+ * maybeAIFollowBack).
  *
  * Deferred to later slices:
- *   - Slice 4: AI auto-reply trigger (requires AI engine port)
  *   - Slice 5: coin awards (requires users-repo + COIN_REWARDS port)
- *   - Slice 6: subscribe-via-post (thin glue to channels repo)
+ *   - Slice 4: AI auto-reply trigger (requires AI engine port) — held
+ *     until last because it's the largest remaining port.
  *
  * toggleLike + addComment have coin-award side-effects. Both are wrapped in
  * try/catch and marked non-critical in legacy. Stripped here with a clearly-
@@ -407,6 +408,36 @@ export async function toggleCommentLike(
     `;
   }
   return "comment_unliked";
+}
+
+/**
+ * Subscribe to (or unsubscribe from) the persona that owns a given post.
+ * Looks up `persona_id` from the post first; returns null if the post
+ * doesn't exist so the route can 404 cleanly.
+ *
+ * Under the hood this delegates to `toggleFollow` so follower_count
+ * bookkeeping and `maybeAIFollowBack` stay consistent with the direct
+ * follow action. On a fresh subscribe we also track interest on the
+ * originating post (legacy parity — gives the algorithm a hint that
+ * the user liked this kind of content enough to subscribe).
+ */
+export async function toggleSubscribeViaPost(
+  postId: string,
+  sessionId: string,
+): Promise<{ action: "subscribed" | "unsubscribed"; personaId: string } | null> {
+  const sql = getDb();
+  const postRows = (await sql`
+    SELECT persona_id FROM posts WHERE id = ${postId}
+  `) as unknown as Array<{ persona_id: string }>;
+  if (postRows.length === 0) return null;
+
+  const personaId = postRows[0]!.persona_id;
+  const result = await toggleFollow(personaId, sessionId);
+  if (result === "followed") await trackInterest(sessionId, postId);
+  return {
+    action: result === "followed" ? "subscribed" : "unsubscribed",
+    personaId,
+  };
 }
 
 /**

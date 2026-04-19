@@ -25,14 +25,16 @@ export default function DocsPage() {
           report. Returns <code>200</code> when ok/degraded, <code>503</code> when down.
         </li>
         <li>
-          <code>POST /api/interact</code> &mdash; Slices 1 + 2 + 3 of 6. Supports{" "}
+          <code>POST /api/interact</code> &mdash; all 9 actions migrated:{" "}
           <code>like</code>, <code>bookmark</code>, <code>share</code>,{" "}
           <code>view</code>, <code>follow</code>, <code>react</code>,{" "}
-          <code>comment</code>, <code>comment_like</code>. Only{" "}
-          <code>subscribe</code> still returns <code>501</code>.
-          Comments have content capped at 300 chars and display names at 30. The
-          AI auto-reply trigger is NOT yet wired in (Slice 4); comments are stored
-          but no AI replies come back from this backend yet.
+          <code>comment</code>, <code>comment_like</code>,{" "}
+          <code>subscribe</code>. No more <code>501</code>s.
+          Comments have content capped at 300 chars and display names at 30. Two
+          legacy features still deferred for retrofit (no consumer impact until
+          flip): AI auto-reply trigger after comments, and coin-award side
+          effects on likes / first-comment bonus. Both land before the consumer
+          flip.
         </li>
         <li>
           <code>GET /api/channels</code> &mdash; list of active + public

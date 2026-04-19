@@ -24,13 +24,44 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/channels` POST | tested | session 12 | subscribe / unsubscribe. **First write endpoint on the new backend.** INSERT + counter UPDATE match legacy non-transactional shape. `crypto.randomUUID()` for row ids (no deps added). |
 | `/api/interact` (Slice 1 — like, bookmark, share, view) | tested | session 13 | Hot write path. Coin awards stripped (deferred to Slice 5). |
 | `/api/interact` (Slice 2 — follow, react) | tested | session 14 | `follow` toggles human_subscriptions + maybeAIFollowBack (40% prob). `react` 4-emoji enum with scored content_feedback upsert. |
-| `/api/interact` (Slice 3 — comment, comment_like) | tested | session 15 | `comment` inserts human_comments (content/name truncation) + increments post counter. `comment_like` dispatches on `comment_type`: human → human_comments.like_count, else → posts.like_count. 8 of 9 actions live. AI auto-reply trigger deferred to Slice 4. |
-| `/api/interact` (Slices 4–6) | not-started | — | AI reply trigger · coin awards · subscribe-via-post |
+| `/api/interact` (Slice 3 — comment, comment_like) | tested | session 15 | `comment` inserts human_comments (content/name truncation) + increments post counter. `comment_like` dispatches on `comment_type`. |
+| `/api/interact` subscribe (was Slice 6, re-ordered early) | tested | session 16 | `subscribe` looks up persona_id from post, delegates to `toggleFollow`, tracks interest on fresh subscribe. 404 on missing post. **All 9 actions now migrated.** |
+| `/api/interact` coin-award retrofit | not-started | — | Re-slice: was Slice 5, still pending. users-repo + COIN_REWARDS port. |
+| `/api/interact` AI auto-reply trigger | not-started | — | Re-slice: was Slice 4, now last. AI engine port (xAI/Anthropic clients + circuit breaker + cost ledger + generateReplyToHuman). Biggest remaining lift. |
 | *(all other 177 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-19 (session 16) — /api/interact subscribe (re-ordered ahead of coins + AI reply)
+
+**Branch:** `claude/migrate-interact-subscribe`
+
+**Slice re-order:** originally Slice 6, pulled forward as the smallest remaining slice so all 9 actions clear their 501 state together. New ordering: **subscribe (this) → coin awards (was Slice 5) → AI auto-reply (was Slice 4, now last because it's the biggest remaining port)**.
+
+**Done:**
+- `toggleSubscribeViaPost(postId, sessionId)` in `src/lib/repositories/interactions.ts` — looks up `persona_id` from the post, delegates to `toggleFollow` (so follower_count + maybeAIFollowBack stay consistent), calls `trackInterest` on fresh subscribe only. Returns `null` when the post doesn't exist so the route can 404.
+- Wired into `src/app/api/interact/route.ts`: `subscribe` branch validates `post_id`, 404s on missing post, returns `{success: true, action: "subscribed" | "unsubscribed"}`. `UNSUPPORTED_ACTIONS` is now `[]`.
+- 4 new integration tests: 400 on missing post_id, 404 on ghost post, 200 subscribed on fresh follow, 200 unsubscribed on existing follow. Suite now 140/140, up from 136.
+
+**No more 501s.** All nine `/api/interact` actions are served by this backend. Two legacy side-effects remain un-ported (AI auto-reply, coin awards) — both invisible until consumer flip, both documented with TODO markers in the repo.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (140/140)
+- `npm run build` — passing
+- Post-deploy smoke: `curl -X POST https://api.aiglitch.app/api/interact -d '{"session_id":"<uuid>","post_id":"<id>","action":"subscribe"}'` → `{success: true, action: "subscribed"}` or `"unsubscribed"`; `{"post_id":"nope","action":"subscribe"}` → 404 with `"Post not found"`.
+
+**Not done this session:**
+- Coin-award retrofit (was Slice 5). Ports `users.awardCoins` + `users.awardPersonaCoins` + `COIN_REWARDS` constants. Retrofits TODOs in `toggleLike` and `addComment`.
+- AI auto-reply trigger (was Slice 4). Biggest remaining port: xAI / Anthropic clients, circuit breaker, cost ledger, `generateReplyToHuman`. Consumer flip on `/api/interact` waits until this lands.
+
+**Safety notes:**
+- `toggleSubscribeViaPost` delegates to `toggleFollow` so the AI-follow-back probability roll still happens on fresh subscribes — identical to legacy.
+- `trackInterest` only fires on the `followed` result path (legacy parity). An unsubscribe does not remove interest weight.
+
+---
 
 ### 2026-04-19 (session 15) — /api/interact Slice 3 (comment + comment_like)
 

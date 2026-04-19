@@ -8,6 +8,7 @@ import {
   toggleFollow,
   toggleLike,
   toggleReaction,
+  toggleSubscribeViaPost,
 } from "@/lib/repositories/interactions";
 
 export const dynamic = "force-dynamic";
@@ -22,8 +23,9 @@ const SUPPORTED_ACTIONS = [
   "react",
   "comment",
   "comment_like",
+  "subscribe",
 ] as const;
-const UNSUPPORTED_ACTIONS = ["subscribe"] as const;
+const UNSUPPORTED_ACTIONS: readonly string[] = [];
 
 interface InteractBody {
   session_id?: string;
@@ -69,6 +71,17 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    if (action === "subscribe") {
+      if (!post_id) {
+        return NextResponse.json({ error: "Missing post_id" }, { status: 400 });
+      }
+      const result = await toggleSubscribeViaPost(post_id, session_id);
+      if (!result) {
+        return NextResponse.json({ error: "Post not found" }, { status: 404 });
+      }
+      return NextResponse.json({ success: true, action: result.action });
+    }
+
     if (action === "follow") {
       if (!persona_id) {
         return NextResponse.json({ error: "Missing persona_id" }, { status: 400 });

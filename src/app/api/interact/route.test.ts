@@ -67,7 +67,7 @@ function sqlOf(call: SqlCall): string {
   return call.strings.join("?");
 }
 
-describe("POST /api/interact (Slices 1 + 2 + 3)", () => {
+describe("POST /api/interact (all 9 actions)", () => {
   // ── Validation ─────────────────────────────────────────────────────
 
   it("400 on invalid JSON", async () => {
@@ -97,14 +97,11 @@ describe("POST /api/interact (Slices 1 + 2 + 3)", () => {
 
   // ── Deferred actions ───────────────────────────────────────────────
 
-  it.each(["subscribe"])(
-    "501 action_not_yet_migrated for %s (Slice 3 removes comment + comment_like from this list)",
+  it.each(["honk"])(
+    "400 Invalid action for unknown %s (no more 501s — all 9 actions migrated)",
     async (action) => {
       const res = await callPost({ session_id: "u-1", post_id: "p-1", action });
-      expect(res.status).toBe(501);
-      const body = (await res.json()) as { error: string; action: string };
-      expect(body.error).toBe("action_not_yet_migrated");
-      expect(body.action).toBe(action);
+      expect(res.status).toBe(400);
     },
   );
 
@@ -623,5 +620,69 @@ describe("POST /api/interact (Slices 1 + 2 + 3)", () => {
     const body = (await res.json()) as { action: string };
     expect(body.action).toBe("comment_unliked");
     expect(sqlOf(fake.calls[2]!)).toContain("GREATEST(0, like_count - 1)");
+  });
+
+  // ── subscribe (was Slice 6, ran early) ─────────────────────────────
+
+  it("subscribe: 400 on missing post_id", async () => {
+    const res = await callPost({ session_id: "u-1", action: "subscribe" });
+    expect(res.status).toBe(400);
+  });
+
+  it("subscribe: 404 when post doesn't exist", async () => {
+    fake.results = [[]]; // persona_id lookup empty
+    const res = await callPost({
+      session_id: "u-1",
+      post_id: "ghost",
+      action: "subscribe",
+    });
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("Post not found");
+  });
+
+  it("subscribe: 200 with action 'subscribed' on fresh follow", async () => {
+    // Stub Math.random so maybeAIFollowBack skips.
+    const rng = vi.spyOn(Math, "random").mockReturnValue(0.99);
+    try {
+      fake.results = [
+        [{ persona_id: "glitch-001" }], // SELECT persona_id
+        [], // toggleFollow existing check (no row)
+        [], // INSERT human_subscriptions
+        [], // UPDATE follower_count
+        // trackInterest (post lookup)
+        [{ hashtags: null, persona_type: null }],
+        // human_users upsert
+        [],
+      ];
+      const res = await callPost({
+        session_id: "u-1",
+        post_id: "p-1",
+        action: "subscribe",
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { success: boolean; action: string };
+      expect(body).toEqual({ success: true, action: "subscribed" });
+    } finally {
+      rng.mockRestore();
+    }
+  });
+
+  it("subscribe: 200 with action 'unsubscribed' when already followed", async () => {
+    fake.results = [
+      [{ persona_id: "glitch-001" }], // persona_id lookup
+      [{ id: "sub-1" }], // existing subscription
+      [], // DELETE human_subscriptions
+      [], // UPDATE follower_count GREATEST
+      // NO trackInterest on the unsubscribe path
+    ];
+    const res = await callPost({
+      session_id: "u-1",
+      post_id: "p-1",
+      action: "subscribe",
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { success: boolean; action: string };
+    expect(body).toEqual({ success: true, action: "unsubscribed" });
   });
 });
