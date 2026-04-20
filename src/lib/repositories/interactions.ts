@@ -1,7 +1,7 @@
 /**
  * Human ↔ content interactions.
  *
- * All nine /api/interact actions are now wired:
+ * All nine /api/interact actions are wired, plus AI auto-reply:
  *   like, bookmark, share, view, follow, react, comment, comment_like, subscribe.
  *
  * Coin-award side-effects on the like + first-comment paths are retrofitted
@@ -9,13 +9,15 @@
  * in try/catch because legacy marks them non-critical — a failed coin credit
  * must never break the main action.
  *
- * Still pending: AI auto-reply trigger after addComment (Slice 4, the final
- * internal port before /api/interact consumer flip).
+ * AI auto-reply (triggerAIReply): fires fire-and-forget after addComment for
+ * top-level comments. 30% probability. Errors swallowed — never blocks the
+ * original comment response.
  */
 
 import { randomUUID } from "node:crypto";
 import { getDb } from "@/lib/db";
 import { awardCoins, awardPersonaCoins } from "@/lib/repositories/users";
+import { generateReplyToHuman } from "@/lib/ai/generate";
 
 /**
  * Legacy value from `AI_BEHAVIOR.followBackProb` in bible/constants.ts.
@@ -35,7 +37,10 @@ const COIN_REWARDS = {
   firstComment: 15,
   personaLikeReceived: 1,
   friendBonus: 25,
+  aiReply: 5,
 } as const;
+
+const AI_REPLY_PROB = 0.30;
 
 const VALID_EMOJIS = ["funny", "sad", "shocked", "crap"] as const;
 export type ReactionEmoji = (typeof VALID_EMOJIS)[number];
@@ -484,6 +489,91 @@ export async function toggleSubscribeViaPost(
     action: result === "followed" ? "subscribed" : "unsubscribed",
     personaId,
   };
+}
+
+/**
+ * Fire-and-forget AI auto-reply for human comments.
+ *
+ * Rules:
+ *   - Only top-level comments (parentCommentId absent) get a reply.
+ *   - 30% probability per comment — not every comment gets one.
+ *   - On success: inserts a reply post, bumps comment_count, notifies human,
+ *     and awards 5 GLITCH to the persona.
+ *   - All errors are swallowed. Never throws — the original comment has
+ *     already been saved before this fires.
+ */
+export async function triggerAIReply(opts: {
+  postId: string;
+  sessionId: string;
+  humanComment: string;
+  parentCommentId?: string | null;
+}): Promise<void> {
+  if (opts.parentCommentId) return;
+  if (Math.random() >= AI_REPLY_PROB) return;
+
+  try {
+    const sql = getDb();
+
+    const rows = (await sql`
+      SELECT p.id, p.content, p.persona_id,
+             a.display_name, a.bio, a.persona_type
+      FROM posts p
+      JOIN ai_personas a ON p.persona_id = a.id
+      WHERE p.id = ${opts.postId}
+      LIMIT 1
+    `) as unknown as Array<{
+      id: string;
+      content: string;
+      persona_id: string;
+      display_name: string;
+      bio: string | null;
+      persona_type: string | null;
+    }>;
+
+    if (rows.length === 0) return;
+    const post = rows[0]!;
+
+    const replyText = await generateReplyToHuman({
+      persona: {
+        personaId: post.persona_id,
+        displayName: post.display_name,
+        bio: post.bio ?? undefined,
+        personality: post.persona_type ?? undefined,
+      },
+      humanMessage: opts.humanComment,
+      postContext: post.content,
+    });
+
+    if (!replyText?.trim()) return;
+
+    const replyId = randomUUID();
+    const postType = "ai_comment";
+    await sql`
+      INSERT INTO posts (id, persona_id, content, post_type, is_reply_to)
+      VALUES (${replyId}, ${post.persona_id}, ${replyText.trim()}, ${postType}, ${opts.postId})
+    `;
+    await sql`
+      UPDATE posts SET comment_count = comment_count + 1 WHERE id = ${opts.postId}
+    `;
+    const notifType = "ai_reply";
+    const preview = post.display_name + " replied to your comment";
+    await sql`
+      INSERT INTO notifications
+        (id, session_id, type, persona_id, post_id, reply_id, content_preview)
+      VALUES (
+        ${randomUUID()}, ${opts.sessionId}, ${notifType},
+        ${post.persona_id}, ${opts.postId}, ${replyId}, ${preview}
+      )
+    `;
+
+    try {
+      await awardPersonaCoins(post.persona_id, COIN_REWARDS.aiReply);
+    } catch {
+      // non-critical
+    }
+  } catch {
+    // Fire-and-forget: errors must never propagate to the caller.
+  }
 }
 
 const LIST_DEFAULT_LIMIT = 50;

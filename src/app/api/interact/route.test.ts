@@ -39,6 +39,11 @@ vi.mock("@neondatabase/serverless", () => ({
   neon: () => fakeSql,
 }));
 
+// Prevents triggerAIReply from making real AI API calls in tests.
+vi.mock("@/lib/ai/generate", () => ({
+  generateReplyToHuman: vi.fn().mockResolvedValue(""),
+}));
+
 beforeEach(() => {
   fake.calls = [];
   fake.results = [];
@@ -825,5 +830,39 @@ describe("POST /api/interact (all 9 actions)", () => {
       c.strings.join("?").includes("INSERT INTO glitch_coins"),
     );
     expect(coinCall).toBeUndefined();
+  });
+
+  // ── AI auto-reply (triggerAIReply) ──────────────────────────────────
+
+  it("comment: response is unaffected by fire-and-forget AI auto-reply", async () => {
+    // Response must be correct even when triggerAIReply fires async.
+    fake.results = [[], [], []];
+    const res = await callPost({
+      session_id: "u-1",
+      post_id: "p-1",
+      content: "nice post",
+      action: "comment",
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { success: boolean; action: string };
+    expect(body.success).toBe(true);
+    expect(body.action).toBe("commented");
+  });
+
+  it("comment: AI auto-reply not triggered for reply comments (parent set)", async () => {
+    // When parent_comment_id is present the trigger must skip immediately —
+    // verify the response is still 200 with no regression.
+    fake.results = [[], [], []];
+    const res = await callPost({
+      session_id: "u-1",
+      post_id: "p-1",
+      content: "replying to you",
+      parent_comment_id: "parent-comment-99",
+      parent_comment_type: "human",
+      action: "comment",
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { action: string };
+    expect(body.action).toBe("commented");
   });
 });

@@ -59,12 +59,34 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/coins` (Slice 4 — purchase_ad_free + check_ad_free) | tested | session 33 | 20 GLITCH for 30 days. Requires linked phantom_wallet_address (403 without). Stacks on unexpired window. `check_ad_free` returns `{ ad_free, ad_free_until }`. |
 | `/api/coins` (Slice 5 — seed_personas + persona_balances) | tested | session 33 | Bulk initial seed (200 base + min(followers/100, 1800) bonus per zero-balance persona). Leaderboard top 50 active personas by balance DESC. **All 8 /api/coins actions now migrated.** |
 | Phase 5 AI engine (`src/lib/ai/`) | tested | session 42 | xAI + Anthropic clients + circuit breaker + cost ledger + generate functions. **Unblocks Phase 4 bestie, Phase 6 cron fleet, and AI auto-reply.** |
-| `/api/interact` AI auto-reply trigger | deferred | — | Now unblocked by Phase 5 AI engine. Can be wired in next admin/cron session. |
+| `/api/interact` AI auto-reply trigger | tested | session 43 | `triggerAIReply` in interactions.ts — 30% probability, top-level only, fire-and-forget. INSERT reply `posts` + bump `comment_count` + `notifications` + +5 GLITCH to persona. |
 | *(all other 177 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-20 (session 43) — /api/interact AI auto-reply trigger
+
+**Branch:** `claude/review-master-rules-YLOHK`
+
+**Done:**
+- New `triggerAIReply(opts)` exported from `src/lib/repositories/interactions.ts`.
+  - Guards: skips if `parentCommentId` is set (replies-to-replies never trigger a chain); skips if `Math.random() >= 0.30` (30% probability).
+  - On roll success: SELECTs post + persona, calls `generateReplyToHuman`, INSERTs a `posts` row with `post_type='ai_comment'` and `is_reply_to=postId`, INSERTs an `ai_reply` notification for the human session, and awards 5 GLITCH to the persona via `awardPersonaCoins`. All wrapped in a top-level try/catch — errors are swallowed (fire-and-forget contract).
+  - `COIN_REWARDS.aiReply = 5` added to the constants block.
+- `src/app/api/interact/route.ts`: wired `void triggerAIReply(...)` after `addComment` returns, replacing the `// TODO(Slice 4)` comment. Import added.
+- `src/app/api/interact/route.test.ts`: added `vi.mock("@/lib/ai/generate")` guard at module level; 2 new tests (response unaffected by async trigger, trigger skips on reply comments).
+- New `src/lib/repositories/interactions.test.ts`: 10 direct unit tests for `triggerAIReply` (probability gate, parent skip, post-not-found exit, empty-reply exit, SQL shapes, error swallowing, bio/persona_type forwarding).
+- Suite now **534/534**, up from 522.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (534/534)
+
+**What this unlocks:** `/api/interact` is now fully migrated (all 9 actions + AI auto-reply). Consumer flip candidate — no remaining blockers.
+
+---
 
 ### 2026-04-20 (session 42) — Phase 5 AI engine
 
