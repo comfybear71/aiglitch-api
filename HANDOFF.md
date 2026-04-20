@@ -58,12 +58,44 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/coins` (Slice 3 — send_to_persona + send_to_human) | tested | session 29 | Transfer pair. §10,000 cap, 402 insufficient, 404 recipient not found, 400 self-transfer. Non-transactional (legacy parity). New repo helpers: `deductCoins`, `getUserByUsername`, `getIdAndDisplayName`. |
 | `/api/coins` (Slice 4 — purchase_ad_free + check_ad_free) | tested | session 33 | 20 GLITCH for 30 days. Requires linked phantom_wallet_address (403 without). Stacks on unexpired window. `check_ad_free` returns `{ ad_free, ad_free_until }`. |
 | `/api/coins` (Slice 5 — seed_personas + persona_balances) | tested | session 33 | Bulk initial seed (200 base + min(followers/100, 1800) bonus per zero-balance persona). Leaderboard top 50 active personas by balance DESC. **All 8 /api/coins actions now migrated.** |
-| `/api/interact` AI auto-reply trigger | deferred | — | Biggest remaining internal port. Not a blocker for consumer work — see session 17 notes. |
+| Phase 5 AI engine (`src/lib/ai/`) | tested | session 42 | xAI + Anthropic clients + circuit breaker + cost ledger + generate functions. **Unblocks Phase 4 bestie, Phase 6 cron fleet, and AI auto-reply.** |
+| `/api/interact` AI auto-reply trigger | deferred | — | Now unblocked by Phase 5 AI engine. Can be wired in next admin/cron session. |
 | *(all other 177 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-20 (session 42) — Phase 5 AI engine
+
+**Branch:** `claude/review-master-rules-YLOHK`
+
+**Done:**
+- New `src/lib/ai/types.ts` — shared types: `AiProvider`, `AiTaskType`, `AiCompletionRequest`, `AiCompletionResult`.
+- New `src/lib/ai/xai.ts` — OpenAI-compatible client pointed at `https://api.x.ai/v1`, model `grok-3`. Cost: $3/M input, $15/M output. Lazy singleton with `__resetXaiClient` test helper.
+- New `src/lib/ai/claude.ts` — Anthropic SDK client, model `claude-opus-4-7`. Cost: $15/M input, $75/M output. Concatenates multi-block responses, ignores non-text blocks. Lazy singleton with `__resetClaudeClient` test helper.
+- New `src/lib/ai/circuit-breaker.ts` — Redis-backed (Upstash), fail-open per safety rule 7. States: `closed → open → half_open`. Failure threshold 5 in 60s → OPEN for 60s. `canProceed` / `recordSuccess` / `recordFailure` API. Entirely transparent when Redis env vars are absent.
+- New `src/lib/ai/cost-ledger.ts` — fire-and-forget `logAiCost(entry)` → INSERT into `ai_cost_log` (provider, task_type, model, input_tokens, output_tokens, estimated_usd). Errors swallowed; never blocks a generation call.
+- New `src/lib/ai/generate.ts` — routing (85% Grok / 15% Claude via `selectProvider()`), circuit-breaker fallback (primary OPEN → try fallback; both OPEN → throw), and three public generation functions: `generateReplyToHuman`, `generateAIInteraction`, `generateBeefPost`. `buildPersonaSystem` constructs a system prompt from `PersonaContext`. Temperature clamped to ≤1.0 for Anthropic.
+- New packages: `openai` (OpenAI-compatible SDK for xAI) + `@anthropic-ai/sdk`.
+- 47 new tests (7 xai + 7 claude + 14 circuit-breaker + 4 cost-ledger + 15 generate).
+- Suite now **522/522**, up from 475.
+
+**Env vars required on Vercel:**
+- `XAI_API_KEY` — required for Grok calls. Without it, xAI client throws; circuit breaker records failure and falls back to Anthropic.
+- `ANTHROPIC_API_KEY` — required for Claude calls. Same fallback behaviour.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (522/522)
+
+**Unlocks:**
+- `/api/messages` bestie chat (Phase 4)
+- All 21 cron content-generation routes (Phase 6)
+- `/api/interact` AI auto-reply trigger (was deferred from Slice 4/5)
+- Every AI-dependent admin route in Phase 7 (persona-generate, content-generate, screenplay, etc.)
+
+---
 
 ### 2026-04-20 (session 41) — /api/auth/admin (unblocks Phase 7)
 
