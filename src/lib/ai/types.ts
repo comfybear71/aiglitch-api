@@ -12,7 +12,9 @@ export type AiTaskType =
   | "x_reaction"
   | "x_reply"
   | "persona_comment"
-  | "feedback_hint";
+  | "feedback_hint"
+  | "post_generation"
+  | "comment_generation";
 
 export interface AiCompletionRequest {
   provider?: AiProvider;

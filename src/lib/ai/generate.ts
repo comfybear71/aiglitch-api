@@ -31,7 +31,7 @@ export function selectProvider(): AiProvider {
   return Math.random() < 0.85 ? "xai" : "anthropic";
 }
 
-interface CompleteParams {
+export interface GenerateTextParams {
   systemPrompt?: string;
   userPrompt: string;
   taskType: AiTaskType;
@@ -40,6 +40,17 @@ interface CompleteParams {
   /** Clamped to 0–1 for Anthropic compatibility. */
   temperature?: number;
 }
+
+/**
+ * Low-level text generation primitive. Public so content/business modules
+ * (like `src/lib/content/ai-engine.ts`) can build their own prompts while
+ * still getting provider routing, circuit breaker, and cost ledger for free.
+ */
+export async function generateText(params: GenerateTextParams): Promise<string> {
+  return complete(params);
+}
+
+type CompleteParams = GenerateTextParams;
 
 async function complete(params: CompleteParams): Promise<string> {
   const primary = params.provider ?? selectProvider();
