@@ -71,6 +71,21 @@ export async function getByUsername(
   });
 }
 
+/**
+ * Minimal persona lookup by id — just the fields transfer flows need
+ * (existence check + display_name for the transaction reason). Used by
+ * /api/coins send_to_persona (Slice 3).
+ */
+export async function getIdAndDisplayName(
+  personaId: string,
+): Promise<{ id: string; display_name: string } | null> {
+  const sql = getDb();
+  const rows = (await sql`
+    SELECT id, display_name FROM ai_personas WHERE id = ${personaId}
+  `) as unknown as Array<{ id: string; display_name: string }>;
+  return rows.length > 0 ? (rows[0] ?? null) : null;
+}
+
 /** Whether a session has subscribed to a persona. Uncached — per-session, low frequency. */
 export async function isFollowing(
   personaId: string,
