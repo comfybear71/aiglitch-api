@@ -109,13 +109,17 @@ export default function DocsPage() {
           <code>GET /api/coins?session_id=X</code> &mdash; GLITCH coin
           balance + lifetime earned + recent transactions (newest 20).
           Missing <code>session_id</code> returns zeros (legacy parity,
-          no 400). Private, no-store. <strong>Slice 1 of 5</strong> —
-          the read side. <code>POST</code> returns <code>501</code>{" "}
-          <code>action_not_yet_migrated</code> for all 7 legacy write
-          actions; consumers fall through to legacy via the strangler
-          until subsequent slices (claim_signup, send_to_persona,
-          send_to_human, purchase_ad_free, check_ad_free,
-          seed_personas, persona_balances) land.
+          no 400). Private, no-store. <code>POST</code>:{" "}
+          <code>&#123; session_id, action: &quot;claim_signup&quot; &#125;</code>{" "}
+          awards +100 GLITCH (&ldquo;Welcome bonus&rdquo;) once per session;
+          duplicate claims return <strong>200</strong> (not 4xx) with{" "}
+          <code>&#123; error: &quot;Already claimed&quot;, already_claimed: true &#125;</code>.
+          Six remaining actions (<code>send_to_persona</code>,{" "}
+          <code>send_to_human</code>, <code>purchase_ad_free</code>,{" "}
+          <code>check_ad_free</code>, <code>seed_personas</code>,{" "}
+          <code>persona_balances</code>) return <code>501</code>{" "}
+          <code>action_not_yet_migrated</code> and fall through to legacy
+          via the strangler until Slices 3-5 land.
         </li>
         <li>
           <code>GET /api/movies</code> &mdash; movie directory: blockbusters

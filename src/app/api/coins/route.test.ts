@@ -1,5 +1,5 @@
 /**
- * Integration tests for /api/coins — Slice 1 (GET only).
+ * Integration tests for /api/coins (Slices 1 + 2).
  *
  * GET covers:
  *   - Missing session_id returns zeros (legacy parity, no 400)
@@ -12,7 +12,16 @@
  *   - 500 wrapping on DB error
  *
  * POST covers:
- *   - Returns 501 `action_not_yet_migrated` with echoed action
+ *   - 400 on missing session_id or action
+ *   - claim_signup: awards +100 GLITCH on first claim; returns
+ *     {success:true, amount:100, reason:"Welcome bonus"}
+ *   - claim_signup: duplicate returns 200 (not 4xx) with
+ *     {error:"Already claimed", already_claimed:true} — legacy parity
+ *   - claim_signup: 500 wrapping on DB error
+ *   - Deferred actions (send_to_persona / send_to_human /
+ *     purchase_ad_free / check_ad_free / seed_personas /
+ *     persona_balances) return 501 `action_not_yet_migrated`
+ *   - Unknown action returns 400
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -168,18 +177,19 @@ describe("GET /api/coins", () => {
 });
 
 describe("POST /api/coins", () => {
-  it("returns 501 action_not_yet_migrated and echoes the action", async () => {
-    const res = await callPost({ action: "claim_signup", session_id: "u-1" });
-    expect(res.status).toBe(501);
-    const body = (await res.json()) as {
-      error: string;
-      action: string | null;
-    };
-    expect(body.error).toBe("action_not_yet_migrated");
-    expect(body.action).toBe("claim_signup");
+  it("400 when session_id missing", async () => {
+    const res = await callPost({ action: "claim_signup" });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("Missing fields");
   });
 
-  it("returns 501 even with no body (action echoed as null)", async () => {
+  it("400 when action missing", async () => {
+    const res = await callPost({ session_id: "u-1" });
+    expect(res.status).toBe(400);
+  });
+
+  it("400 with no body at all (missing both)", async () => {
     vi.resetModules();
     const { POST } = await import("./route");
     const { NextRequest } = await import("next/server");
@@ -187,8 +197,104 @@ describe("POST /api/coins", () => {
       method: "POST",
     });
     const res = await POST(req);
-    expect(res.status).toBe(501);
-    const body = (await res.json()) as { action: string | null };
-    expect(body.action).toBeNull();
+    expect(res.status).toBe(400);
+  });
+
+  describe("claim_signup", () => {
+    it("awards +100 GLITCH on first claim", async () => {
+      fake.results = [
+        [], // existing welcome-bonus lookup: none
+        [], // INSERT glitch_coins (awardCoins)
+        [], // INSERT coin_transactions (awardCoins)
+      ];
+      const res = await callPost({ action: "claim_signup", session_id: "u-1" });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        success: boolean;
+        amount: number;
+        reason: string;
+      };
+      expect(body).toEqual({
+        success: true,
+        amount: 100,
+        reason: "Welcome bonus",
+      });
+    });
+
+    it("INSERT glitch_coins + coin_transactions fire on first claim", async () => {
+      fake.results = [[], [], []];
+      await callPost({ action: "claim_signup", session_id: "u-1" });
+      // 3 calls: lookup, upsert balance, insert transaction
+      expect(fake.calls).toHaveLength(3);
+      const upsertSql = sqlOf(fake.calls[1]!);
+      expect(upsertSql).toContain("INSERT INTO glitch_coins");
+      expect(upsertSql).toContain("ON CONFLICT (session_id)");
+      const txnSql = sqlOf(fake.calls[2]!);
+      expect(txnSql).toContain("INSERT INTO coin_transactions");
+      expect(fake.calls[2]!.values).toContain(100);
+      expect(fake.calls[2]!.values).toContain("Welcome bonus");
+    });
+
+    it("duplicate claim returns 200 with already_claimed (legacy parity — NOT 4xx)", async () => {
+      fake.results = [[{ id: "existing-txn" }]]; // existing welcome bonus found
+      const res = await callPost({ action: "claim_signup", session_id: "u-1" });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        error: string;
+        already_claimed: boolean;
+      };
+      expect(body).toEqual({
+        error: "Already claimed",
+        already_claimed: true,
+      });
+      // Only the existence check fires — no award attempted
+      expect(fake.calls).toHaveLength(1);
+    });
+
+    it("500 with detail on DB error during claim_signup", async () => {
+      fake.throwOnNextCall = new Error("pg down");
+      const res = await callPost({ action: "claim_signup", session_id: "u-1" });
+      expect(res.status).toBe(500);
+      const body = (await res.json()) as { error: string; detail: string };
+      expect(body.error).toBe("Failed to claim signup bonus");
+      expect(body.detail).toBe("pg down");
+    });
+  });
+
+  describe("deferred actions", () => {
+    const deferred = [
+      "send_to_persona",
+      "send_to_human",
+      "purchase_ad_free",
+      "check_ad_free",
+      "seed_personas",
+      "persona_balances",
+    ];
+
+    for (const action of deferred) {
+      it(`${action} returns 501 action_not_yet_migrated`, async () => {
+        const res = await callPost({ action, session_id: "u-1" });
+        expect(res.status).toBe(501);
+        const body = (await res.json()) as { error: string; action: string };
+        expect(body.error).toBe("action_not_yet_migrated");
+        expect(body.action).toBe(action);
+      });
+    }
+
+    it("deferred actions never touch the DB", async () => {
+      await callPost({ action: "send_to_persona", session_id: "u-1" });
+      expect(fake.calls).toHaveLength(0);
+    });
+  });
+
+  it("unknown action returns 400 Invalid action", async () => {
+    const res = await callPost({
+      action: "mystery_pizza",
+      session_id: "u-1",
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string; action: string };
+    expect(body.error).toBe("Invalid action");
+    expect(body.action).toBe("mystery_pizza");
   });
 });

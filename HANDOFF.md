@@ -38,13 +38,35 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/movies` | tested | session 26 | Merges `director_movies` (blockbusters) with premiere video posts (trailers). `?genre=` / `?director=` filters. Response carries `genreCounts`, `directors[]` with per-director `movieCount`, and `genreLabels`. Slim DIRECTORS + GENRE_LABELS ported (Phase 5 AI engine still owns the full profile). |
 | `/api/hatchery` | tested | session 26 | Paginated public list of hatched personas; `?limit` (≤50) + `?offset`. Returns `{hatchlings, total, hasMore}`. |
 | `/api/coins` (Slice 1 — GET) | tested | session 27 | Balance + lifetime_earned + recent transactions (newest 20). Missing session_id returns zeros (legacy parity). `private, no-store`. Closes the loop on coin writes already live inside `/api/interact`. |
-| `/api/coins` (Slices 2-5 — POST actions) | deferred | — | 7 write actions left: `claim_signup`, `send_to_persona`, `send_to_human`, `purchase_ad_free`, `check_ad_free`, `seed_personas`, `persona_balances`. Return 501 via strangler until ported. |
+| `/api/coins` (Slice 2 — claim_signup) | tested | session 28 | POST `{session_id, action:"claim_signup"}` awards +100 GLITCH once per session (idempotent on `coin_transactions.reason = 'Welcome bonus'`). Duplicate claims return 200 with `already_claimed:true` (legacy parity — NOT 4xx). |
+| `/api/coins` (Slices 3-5 — POST actions) | deferred | — | 6 write actions left: `send_to_persona`, `send_to_human`, `purchase_ad_free`, `check_ad_free`, `seed_personas`, `persona_balances`. Return 501 via strangler until ported. |
 | `/api/interact` AI auto-reply trigger | deferred | — | Biggest remaining internal port. Not a blocker for consumer work — see session 17 notes. |
 | *(all other 177 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-20 (session 28) — /api/coins Slice 2 (claim_signup)
+
+**Branch:** `claude/migrate-coins-slice-2-signup`
+
+**Done:**
+- New `claimSignupBonus(sessionId)` in `src/lib/repositories/users.ts` returning a discriminated union (`{kind: "already_claimed"} | {kind: "awarded", amount}`). Idempotency keyed on `coin_transactions.reason = 'Welcome bonus'` — matches legacy's duplicate check.
+- Exported `SIGNUP_BONUS = 100` constant (matches `COIN_REWARDS.signup` in legacy `bible/constants.ts`).
+- `POST /api/coins` now dispatches on `action`. `claim_signup` wired. Other 6 actions (`send_to_persona`, `send_to_human`, `purchase_ad_free`, `check_ad_free`, `seed_personas`, `persona_balances`) return 501 via a shared `UNSUPPORTED_ACTIONS` set. Unknown action → 400.
+- **Legacy-parity quirk:** duplicate claim returns **200** (not 400/409) with `{error: "Already claimed", already_claimed: true}`. Mid-migration consumers expect that shape.
+- 13 new POST tests (3 validation + 4 claim_signup + 6 deferred + 1 unknown). Suite now **263/263**, up from 250.
+- `/docs` page updated to describe Slice 2.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (263/263)
+- `npm run build` — passing; `/api/coins` listed as dynamic route
+
+**Phase 3 progress:** 4 of ~20 small routes + 2 of 5 coin slices.
+
+---
 
 ### 2026-04-20 (session 27) — /api/coins Slice 1 (GET only)
 
