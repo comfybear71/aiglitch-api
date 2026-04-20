@@ -20,6 +20,11 @@ import { getDb } from "@/lib/db";
 export const SIGNUP_BONUS = 100;
 export const MAX_TRANSFER = 10_000;
 
+/** Ad-free subscription cost + duration — /api/coins Slice 4. */
+export const AD_FREE_COST = 20;
+export const AD_FREE_DAYS = 30;
+const AD_FREE_MS = AD_FREE_DAYS * 24 * 60 * 60 * 1000;
+
 export interface HumanUser {
   id: string;
   session_id: string;
@@ -193,4 +198,91 @@ export async function awardPersonaCoins(
       updated_at = NOW()
   `;
   return amount;
+}
+
+export type PurchaseAdFreeResult =
+  | { kind: "no_wallet" }
+  | { kind: "insufficient"; balance: number; shortfall: number }
+  | { kind: "purchased"; adFreeUntil: string; newBalance: number };
+
+/**
+ * Buy 30 days of ad-free. Requires a linked phantom_wallet_address on
+ * human_users, 20 GLITCH balance. Stacks on top of any unexpired window.
+ *
+ * Balance check happens twice (here and again inside `deductCoins`) —
+ * matches legacy, which wants the 402 `balance + shortfall` shape on the
+ * pre-check and the plain-402 shape on the race-condition post-check.
+ */
+export async function purchaseAdFree(
+  sessionId: string,
+): Promise<PurchaseAdFreeResult> {
+  const sql = getDb();
+
+  const userRows = (await sql`
+    SELECT phantom_wallet_address FROM human_users WHERE session_id = ${sessionId}
+  `) as unknown as Array<{ phantom_wallet_address: string | null }>;
+  if (userRows.length === 0 || !userRows[0]!.phantom_wallet_address) {
+    return { kind: "no_wallet" };
+  }
+
+  const { balance } = await getCoinBalance(sessionId);
+  if (balance < AD_FREE_COST) {
+    return {
+      kind: "insufficient",
+      balance,
+      shortfall: AD_FREE_COST - balance,
+    };
+  }
+
+  const existing = (await sql`
+    SELECT ad_free_until FROM human_users WHERE session_id = ${sessionId}
+  `) as unknown as Array<{ ad_free_until: string | null }>;
+  const currentExpiry = existing[0]?.ad_free_until
+    ? new Date(existing[0].ad_free_until)
+    : null;
+  const now = new Date();
+  const startDate = currentExpiry && currentExpiry > now ? currentExpiry : now;
+  const newExpiry = new Date(startDate.getTime() + AD_FREE_MS);
+
+  const deductResult = await deductCoins(
+    sessionId,
+    AD_FREE_COST,
+    "Ad-free (30 days)",
+  );
+  if (!deductResult.success) {
+    return {
+      kind: "insufficient",
+      balance: deductResult.newBalance,
+      shortfall: AD_FREE_COST - deductResult.newBalance,
+    };
+  }
+
+  await sql`
+    UPDATE human_users SET ad_free_until = ${newExpiry.toISOString()}, updated_at = NOW()
+    WHERE session_id = ${sessionId}
+  `;
+
+  return {
+    kind: "purchased",
+    adFreeUntil: newExpiry.toISOString(),
+    newBalance: deductResult.newBalance,
+  };
+}
+
+/** Current ad-free subscription status. */
+export async function getAdFreeStatus(
+  sessionId: string,
+): Promise<{ adFree: boolean; adFreeUntil: string | null }> {
+  const sql = getDb();
+  const rows = (await sql`
+    SELECT ad_free_until FROM human_users WHERE session_id = ${sessionId}
+  `) as unknown as Array<{ ad_free_until: string | null }>;
+  if (rows.length === 0) return { adFree: false, adFreeUntil: null };
+  const expiryStr = rows[0]?.ad_free_until ?? null;
+  if (!expiryStr) return { adFree: false, adFreeUntil: null };
+  const isActive = new Date(expiryStr) > new Date();
+  return {
+    adFree: isActive,
+    adFreeUntil: isActive ? expiryStr : null,
+  };
 }
