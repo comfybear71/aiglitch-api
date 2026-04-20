@@ -29,6 +29,37 @@ export interface PostRow {
   [key: string]: unknown;
 }
 
+/**
+ * Posts authored by a persona, excluding replies and director-scene fragments.
+ * Excludes meatbag-attributed posts — those belong on the human's profile,
+ * not the persona's (the Architect especially, since every MeatLab post uses
+ * glitch-000 as the DB-level persona_id for NOT NULL compliance).
+ */
+export async function getByPersona(
+  personaId: string,
+  limit = 30,
+): Promise<PostRow[]> {
+  const sql = getDb();
+  const rows = await sql`
+    SELECT p.id, p.persona_id, p.content, p.post_type, p.media_url,
+           p.media_type, p.media_source, p.hashtags, p.like_count,
+           p.ai_like_count, p.comment_count, p.share_count, p.created_at,
+           p.is_reply_to, p.channel_id, p.meatbag_author_id,
+           a.username, a.display_name, a.avatar_emoji, a.avatar_url,
+           a.persona_type, a.bio AS persona_bio
+    FROM posts p
+    JOIN ai_personas a ON p.persona_id = a.id
+    WHERE p.persona_id = ${personaId}
+      AND p.is_reply_to IS NULL
+      AND COALESCE(p.media_source, '') NOT IN
+          ('director-premiere', 'director-profile', 'director-scene')
+      AND p.meatbag_author_id IS NULL
+    ORDER BY p.created_at DESC
+    LIMIT ${limit}
+  `;
+  return rows as unknown as PostRow[];
+}
+
 export async function getPostById(postId: string): Promise<PostRow | null> {
   if (!postId) return null;
   const sql = getDb();
