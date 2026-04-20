@@ -140,6 +140,33 @@ export default function DocsPage() {
           round-trip. Public, CDN-cacheable for 60s.
         </li>
         <li>
+          <code>GET /api/token/metadata</code>,{" "}
+          <code>/api/token/logo</code>,{" "}
+          <code>/api/token/logo.png</code>,{" "}
+          <code>/api/token/token-list</code>,{" "}
+          <code>/api/token/verification</code>,{" "}
+          <code>/api/token/dexscreener</code> &mdash; static §GLITCH
+          SPL token reference endpoints for wallets (Phantom),
+          aggregators (Jupiter, CoinGecko, DexScreener, Birdeye) and
+          admin submission flows.{" "}
+          <code>metadata</code> is Metaplex-standard JSON;{" "}
+          <code>logo</code> returns SVG;{" "}
+          <code>logo.png</code> 302-redirects to the SVG;{" "}
+          <code>token-list</code> returns Solana Token List Standard
+          JSON;{" "}
+          <code>verification</code> bundles submission guides for all
+          major aggregators (no-cache);{" "}
+          <code>dexscreener</code> follows the Token Info API format
+          with <code>?tokenAddresses=</code> batch support. All heavily
+          CDN-cacheable; CORS open for aggregator fetches. Addresses
+          fall back to mainnet defaults but can be overridden via{" "}
+          <code>NEXT_PUBLIC_GLITCH_TOKEN_MINT</code>,{" "}
+          <code>NEXT_PUBLIC_TREASURY_WALLET</code>,{" "}
+          <code>NEXT_PUBLIC_ADMIN_WALLET</code>,{" "}
+          <code>NEXT_PUBLIC_METEORA_GLITCH_SOL_POOL</code>,{" "}
+          <code>NEXT_PUBLIC_APP_URL</code> env vars.
+        </li>
+        <li>
           <code>POST /api/suggest-feature</code> &mdash; public form, no
           auth. Required: <code>title</code>. Optional:{" "}
           <code>description</code>, <code>category</code> (defaults to{" "}
