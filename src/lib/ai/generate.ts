@@ -236,3 +236,93 @@ export async function generateTelegramMessage(opts: {
     temperature: 0.9,
   });
 }
+
+export interface XReactionResult {
+  content: string;
+  hashtags: string[];
+}
+
+/**
+ * Generate an AIG!itch-side reaction post to a real tweet. The model is
+ * asked for JSON; if parsing fails we fall back to the raw text with
+ * default hashtags. Caller is expected to clamp content to 280 chars —
+ * we also do a defensive slice.
+ */
+export async function generateXReaction(opts: {
+  persona: PersonaContext;
+  tweetAuthorUsername: string;
+  tweetAuthorLabel: string;
+  tweetText: string;
+  provider?: AiProvider;
+}): Promise<XReactionResult> {
+  const systemPrompt =
+    buildPersonaSystem(opts.persona) +
+    "\nYou generate social media reactions as an AI persona. Always respond in valid JSON.";
+
+  const userPrompt =
+    `THE REAL @${opts.tweetAuthorUsername} (${opts.tweetAuthorLabel}) just posted on X/Twitter:\n` +
+    `"${opts.tweetText}"\n\n` +
+    `React to this tweet AS YOUR CHARACTER. Create a post about it for AIG!itch. You can:\n` +
+    `- Roast it, agree with it, mock it, philosophize about it, make it about yourself\n` +
+    `- Reference the real tweet naturally ("saw @${opts.tweetAuthorUsername} just posted...")\n` +
+    `- Stay completely in character\n\n` +
+    `Rules: under 280 characters, 1-3 hashtags max, NEVER break character, make it ENTERTAINING.\n\n` +
+    `Respond in JSON: {"content": "your reaction post", "hashtags": ["tag1", "tag2"]}`;
+
+  const raw = await complete({
+    systemPrompt,
+    userPrompt,
+    taskType: "x_reaction",
+    provider: opts.provider,
+    maxTokens: 400,
+    temperature: 0.95,
+  });
+
+  const jsonMatch = raw.match(/\{[\s\S]*\}/);
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[0]) as { content?: string; hashtags?: string[] };
+      if (parsed.content) {
+        return {
+          content: parsed.content.slice(0, 280),
+          hashtags: parsed.hashtags?.length ? parsed.hashtags : ["AIGlitch"],
+        };
+      }
+    } catch {
+      // fall through to raw text fallback
+    }
+  }
+  return { content: raw.slice(0, 280), hashtags: ["AIGlitch", "ElonWatch"] };
+}
+
+/**
+ * Generate a short direct reply to a real tweet on X. Returns plain
+ * text, trimmed of surrounding quotes, capped at 250 characters.
+ */
+export async function generateXReply(opts: {
+  persona: PersonaContext;
+  tweetAuthorUsername: string;
+  tweetText: string;
+  provider?: AiProvider;
+}): Promise<string> {
+  const systemPrompt =
+    buildPersonaSystem(opts.persona) +
+    "\nYou write witty social media replies. Short and punchy — no hashtags.";
+
+  const userPrompt =
+    `You're replying to a tweet by @${opts.tweetAuthorUsername}:\n` +
+    `"${opts.tweetText}"\n\n` +
+    `Write a SHORT, punchy reply (under 200 chars). Be funny, clever, or savage — but not mean-spirited. ` +
+    `Stay in character. Don't just agree — add something entertaining. Reply with JUST the text, nothing else.`;
+
+  const raw = await complete({
+    systemPrompt,
+    userPrompt,
+    taskType: "x_reply",
+    provider: opts.provider,
+    maxTokens: 200,
+    temperature: 0.95,
+  });
+
+  return raw.replace(/^["'\s]+|["'\s]+$/g, "").slice(0, 250);
+}
