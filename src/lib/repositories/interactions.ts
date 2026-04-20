@@ -34,6 +34,7 @@ const COIN_REWARDS = {
   firstLike: 2,
   firstComment: 15,
   personaLikeReceived: 1,
+  friendBonus: 25,
 } as const;
 
 const VALID_EMOJIS = ["funny", "sad", "shocked", "crap"] as const;
@@ -572,4 +573,137 @@ async function trackInterest(sessionId: string, postId: string): Promise<void> {
       DO UPDATE SET last_seen = NOW()
     `,
   ]);
+}
+
+// ── Friends (human ↔ human social graph) ────────────────────────────
+
+export interface FriendRow {
+  display_name: string;
+  username: string | null;
+  avatar_emoji: string;
+  avatar_url: string | null;
+  created_at: string;
+}
+
+export interface FollowingPersonaRow {
+  persona_id: string;
+  username: string;
+  display_name: string;
+  avatar_emoji: string;
+  persona_type: string;
+}
+
+export type AiFollowerRow = FollowingPersonaRow;
+
+/**
+ * Meatbag ↔ meatbag friends list for a session. Joins `human_friends`
+ * to `human_users` so the consumer gets display_name / avatar straight
+ * away. Ordered by friendship creation DESC.
+ */
+export async function getFriends(sessionId: string): Promise<FriendRow[]> {
+  const sql = getDb();
+  const rows = (await sql`
+    SELECT hu.display_name, hu.username, hu.avatar_emoji, hu.avatar_url, hf.created_at
+    FROM human_friends hf
+    JOIN human_users hu ON hf.friend_session_id = hu.session_id
+    WHERE hf.session_id = ${sessionId}
+    ORDER BY hf.created_at DESC
+  `) as unknown as FriendRow[];
+  return rows;
+}
+
+/** AI personas a human session has subscribed to (followed). Ordered by display_name. */
+export async function getFollowing(
+  sessionId: string,
+): Promise<FollowingPersonaRow[]> {
+  const sql = getDb();
+  const rows = (await sql`
+    SELECT hs.persona_id, a.username, a.display_name, a.avatar_emoji, a.persona_type
+    FROM human_subscriptions hs
+    JOIN ai_personas a ON hs.persona_id = a.id
+    WHERE hs.session_id = ${sessionId}
+    ORDER BY a.display_name
+  `) as unknown as FollowingPersonaRow[];
+  return rows;
+}
+
+/** AI personas that are following this human session (AI → human). Ordered by follow recency DESC. */
+export async function getAiFollowers(
+  sessionId: string,
+): Promise<AiFollowerRow[]> {
+  const sql = getDb();
+  const rows = (await sql`
+    SELECT af.persona_id, a.username, a.display_name, a.avatar_emoji, a.persona_type
+    FROM ai_persona_follows af
+    JOIN ai_personas a ON af.persona_id = a.id
+    WHERE af.session_id = ${sessionId}
+    ORDER BY af.created_at DESC
+  `) as unknown as AiFollowerRow[];
+  return rows;
+}
+
+export type AddFriendResult =
+  | { kind: "added"; friend: { session_id: string; username: string; display_name: string } }
+  | { kind: "user_not_found" }
+  | { kind: "self" }
+  | { kind: "already_friends" };
+
+/**
+ * Add a meatbag friend by username. Creates the bidirectional
+ * human_friends row pair (A→B and B→A with ON CONFLICT DO NOTHING for
+ * the reverse — matches legacy's non-transactional shape).
+ *
+ * Side effect: both parties earn +25 GLITCH "New friend bonus" via
+ * `awardCoins`. Wrapped in try/catch because legacy treats coin awards
+ * as non-critical — a failed credit must not block the friendship.
+ */
+export async function addFriend(
+  sessionId: string,
+  friendUsername: string,
+): Promise<AddFriendResult> {
+  const sql = getDb();
+
+  const friendRows = (await sql`
+    SELECT session_id, username, display_name FROM human_users
+    WHERE username = ${friendUsername.toLowerCase()}
+  `) as unknown as Array<{ session_id: string; username: string; display_name: string }>;
+  if (friendRows.length === 0) return { kind: "user_not_found" };
+
+  const friend = friendRows[0]!;
+  if (friend.session_id === sessionId) return { kind: "self" };
+
+  const existing = (await sql`
+    SELECT id FROM human_friends
+    WHERE session_id = ${sessionId} AND friend_session_id = ${friend.session_id}
+  `) as unknown as Array<{ id: string }>;
+  if (existing.length > 0) return { kind: "already_friends" };
+
+  await sql`
+    INSERT INTO human_friends (id, session_id, friend_session_id)
+    VALUES (${randomUUID()}, ${sessionId}, ${friend.session_id})
+  `;
+  await sql`
+    INSERT INTO human_friends (id, session_id, friend_session_id)
+    VALUES (${randomUUID()}, ${friend.session_id}, ${sessionId})
+    ON CONFLICT (session_id, friend_session_id) DO NOTHING
+  `;
+
+  try {
+    await awardCoins(
+      sessionId,
+      COIN_REWARDS.friendBonus,
+      "New friend bonus",
+      friend.session_id,
+    );
+    await awardCoins(
+      friend.session_id,
+      COIN_REWARDS.friendBonus,
+      "New friend bonus",
+      sessionId,
+    );
+  } catch {
+    // non-critical
+  }
+
+  return { kind: "added", friend };
 }
