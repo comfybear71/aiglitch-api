@@ -10,7 +10,8 @@ export type AiTaskType =
   | "bestie_chat"
   | "telegram_message"
   | "x_reaction"
-  | "x_reply";
+  | "x_reply"
+  | "persona_comment";
 
 export interface AiCompletionRequest {
   provider?: AiProvider;
