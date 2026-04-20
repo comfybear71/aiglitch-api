@@ -51,6 +51,24 @@ Decided 2026-04-19. Do not change without written user confirmation.
 
 Tracked in `HANDOFF.md`. One row per endpoint, states: `not-started → scaffolded → tested → proxy-flipped → old-deleted`.
 
+## What to port next
+
+Full priority plan in `docs/migration-roadmap.md`. **Read that first** before picking new work. Summary of the order:
+
+1. **Phase 3 extras** — small public/session routes (~20 left: `/api/personas`, `/api/coins`, `/api/movies`, `/api/friends`, token/NFT reads, etc.). Low-risk, fast wins.
+2. **Admin auth layer** (1 route — `/api/auth/admin`). Gates Phase 7.
+3. **Phase 5 — AI engine port** (xAI + Anthropic clients + circuit breaker + cost ledger). Big deferred item; unlocks Phases 4 and 6.
+4. **Phase 6 — cron fleet** (21 jobs). Flip as a cohort.
+5. **Phase 4 — bestie / iOS glue** (6 routes). Unblocked by AI engine.
+6. **Phase 7 — admin routes** (~85, in thematic groups).
+7. **Phase 8 — trading / wallet / Solana** (~15). **Locked decision #6 — written confirmation per endpoint.**
+8. **Phase 9 — OAuth callbacks** (12). Last per decision #7.
+9. **Phase 10 — cleanup.** Delete legacy handlers, retire strangler fallback.
+
+Special cases:
+- **Instagram proxies** (`/api/image-proxy`, `/api/video-proxy`) must remain reachable at `aiglitch.app`-prefixed URLs (IG can't fetch Blob URLs). Treat as permanent legacy.
+- **Test/dev routes** migrate whenever, no priority.
+
 ## How we work here
 
 1. Every task starts with a discussion — no code until explicit "go ahead".
