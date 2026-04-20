@@ -183,12 +183,102 @@ describe("GET /api/search", () => {
     expect(fake.calls[2]!.values).toContain(10);
   });
 
-  it("Cache-Control is public s-maxage=60 SWR=300 (safe — non-personalised)", async () => {
+  it("Cache-Control is public s-maxage=60 SWR=300 when no session_id (non-personalised)", async () => {
     fake.results = [[], [], []];
     const res = await callGet("?q=glitch");
     expect(res.headers.get("Cache-Control")).toBe(
       "public, s-maxage=60, stale-while-revalidate=300",
     );
+  });
+
+  it("B5: Cache-Control flips to private, no-store when session_id present", async () => {
+    fake.results = [[], [], []];
+    const res = await callGet("?q=glitch&session_id=user-1");
+    expect(res.headers.get("Cache-Control")).toBe("private, no-store");
+  });
+
+  it("B5: no liked lookup when session_id absent (3 calls only)", async () => {
+    fake.results = [
+      [
+        {
+          id: "p1",
+          content: "hello",
+          post_type: "text",
+          media_url: null,
+          media_type: null,
+          like_count: 0,
+          ai_like_count: 0,
+          created_at: "2026-04-20T00:00:00Z",
+          username: "alice",
+          display_name: "Alice",
+          avatar_emoji: "🤖",
+          avatar_url: null,
+        },
+      ],
+      [],
+      [],
+    ];
+    const res = await callGet("?q=hello");
+    const body = (await res.json()) as {
+      posts: Array<{ id: string; liked?: boolean }>;
+    };
+    expect(fake.calls).toHaveLength(3);
+    expect(body.posts[0]?.liked).toBeUndefined();
+  });
+
+  it("B5: session_id present attaches liked=true/false per post via human_likes lookup", async () => {
+    fake.results = [
+      [
+        {
+          id: "p1",
+          content: "hello",
+          post_type: "text",
+          media_url: null,
+          media_type: null,
+          like_count: 0,
+          ai_like_count: 0,
+          created_at: "2026-04-20T00:00:00Z",
+          username: "alice",
+          display_name: "Alice",
+          avatar_emoji: "🤖",
+          avatar_url: null,
+        },
+        {
+          id: "p2",
+          content: "world",
+          post_type: "text",
+          media_url: null,
+          media_type: null,
+          like_count: 0,
+          ai_like_count: 0,
+          created_at: "2026-04-20T00:00:00Z",
+          username: "bob",
+          display_name: "Bob",
+          avatar_emoji: "🤖",
+          avatar_url: null,
+        },
+      ],
+      [],
+      [],
+      [{ post_id: "p1" }], // liked lookup — session liked p1 only
+    ];
+    const res = await callGet("?q=hello&session_id=user-1");
+    const body = (await res.json()) as {
+      posts: Array<{ id: string; liked: boolean }>;
+    };
+    expect(fake.calls).toHaveLength(4);
+    expect(body.posts.find((p) => p.id === "p1")?.liked).toBe(true);
+    expect(body.posts.find((p) => p.id === "p2")?.liked).toBe(false);
+    const likedSql = fake.calls[3]!.strings.join("?");
+    expect(likedSql).toContain("human_likes");
+    expect(fake.calls[3]!.values).toContain("user-1");
+  });
+
+  it("B5: empty posts list skips the liked lookup entirely", async () => {
+    fake.results = [[], [], []]; // no posts matched
+    await callGet("?q=nonexistent&session_id=user-1");
+    // Only the three search queries fire — no liked lookup when posts.length === 0
+    expect(fake.calls).toHaveLength(3);
   });
 
   it("500 with detail on DB error", async () => {

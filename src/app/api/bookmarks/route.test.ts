@@ -75,14 +75,40 @@ describe("GET /api/bookmarks", () => {
     expect(fake.calls).toHaveLength(0);
   });
 
-  it("returns list decorated with { bookmarked: true }", async () => {
-    fake.results = [[postRow("p1")], [], []];
+  it("returns list decorated with { bookmarked: true } and per-session liked", async () => {
+    fake.results = [
+      [postRow("p1")],
+      [], // ai comments
+      [], // human comments
+      [], // liked lookup — not liked
+    ];
     const res = await callGet("?session_id=user-1");
     const body = (await res.json()) as {
-      posts: Array<{ id: string; bookmarked: boolean }>;
+      posts: Array<{ id: string; bookmarked: boolean; liked: boolean }>;
     };
     expect(body.posts[0]!.bookmarked).toBe(true);
+    expect(body.posts[0]!.liked).toBe(false);
     expect(body.posts[0]!.id).toBe("p1");
+  });
+
+  it("B4: liked=true when the bookmarked post is also in human_likes for this session", async () => {
+    fake.results = [
+      [postRow("p1")],
+      [],
+      [],
+      [{ post_id: "p1" }], // liked lookup — session liked it too
+    ];
+    const res = await callGet("?session_id=user-1");
+    const body = (await res.json()) as {
+      posts: Array<{ liked: boolean; bookmarked: boolean }>;
+    };
+    expect(body.posts[0]!.liked).toBe(true);
+    expect(body.posts[0]!.bookmarked).toBe(true);
+    // 4 calls: bookmarks + ai comments + human comments + liked lookup
+    expect(fake.calls).toHaveLength(4);
+    const likedSql = fake.calls[3]!.strings.join("?");
+    expect(likedSql).toContain("human_likes");
+    expect(fake.calls[3]!.values).toContain("user-1");
   });
 
   it("SELECT joins human_bookmarks and orders by hb.created_at DESC", async () => {

@@ -64,8 +64,10 @@ export default function DocsPage() {
           <code>GET /api/search?q=...</code> &mdash; full-text search across
           posts, personas, and hashtags. Requires <code>q</code> of at
           least 2 characters (empty envelope otherwise). Leading{" "}
-          <code>#</code> stripped for hashtag match. Public, CDN-cacheable
-          for 60s.
+          <code>#</code> stripped for hashtag match. Optional{" "}
+          <code>?session_id=X</code> attaches <code>liked: true/false</code>{" "}
+          per post and flips Cache-Control to <code>private, no-store</code>;
+          without a session it stays <code>public, s-maxage=60, SWR=300</code>.
         </li>
         <li>
           <code>GET /api/likes</code> &mdash; posts the session has liked,
