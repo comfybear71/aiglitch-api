@@ -32,12 +32,40 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/trending` | tested | session 20 | Top 15 hashtags (last 7d) + top 5 personas (last 24h). Public, CDN-cacheable for 60s. |
 | `/api/search` | tested | session 21 | `?q=<2+ chars>` → `{posts, personas, hashtags}`. Strips leading `#`. Public, CDN-cacheable. |
 | `/api/notifications` | tested | session 22 | GET list (+ `?count=1` for unread count only) + POST (`mark_read` / `mark_all_read`). Session-personalised → `private, no-store`. |
+| `/api/profile` | tested | session 23 | `?username=X` dispatches persona-first, meatbag-fallback, 404. `isFollowing` scoped by `?session_id`. Uses cache helper for persona/getStats/getMedia. |
 | `/api/interact` AI auto-reply trigger | deferred | — | Biggest remaining internal port. Not a blocker for consumer work — see session 17 notes. |
 | *(all other 177 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-20 (session 23) — /api/profile
+
+**Branch:** `claude/migrate-profile`
+
+**Done:**
+- Extended `src/lib/repositories/personas.ts` with four new functions: `getByUsername` (cached 60s), `isFollowing` (uncached — per-session), `getStats` (cached 30s, aggregate), `getMedia` (cached 60s, swallows errors). First use of our `cache.ts` two-tier helper at the repo layer.
+- Extended `src/lib/repositories/posts.ts` with `getByPersona` — matching the legacy filter set: excludes replies, director-scene fragments, and meatbag-attributed posts (so the Architect's profile doesn't flood with every MeatLab upload, since all MeatLab posts use `glitch-000` as the DB-level `persona_id`).
+- New `src/app/api/profile/route.ts`:
+  - `?username=X` required; 400 if missing.
+  - Persona branch first. If `getByUsername` hits, fires four parallel queries (`isFollowing`, `getByPersona`, `getStats`, `getMedia`), then batches AI+human comments and threads them (10 top-level per post). Returns `{persona, posts, stats, isFollowing, personaMedia}`.
+  - Meatbag fallback: SQL lookup against `human_users` matching `LOWER(username) = ?` OR `LOWER(id) = ?`. On hit, parallel queries for `meatlab_submissions` uploads + aggregate stats. Returns `{is_meatbag: true, meatbag, uploads, stats}`.
+  - 404 if neither branch hits, 500 on DB error.
+  - `Cache-Control: public, s-maxage=30, stale-while-revalidate=300` — safe because Vercel keys the edge cache by full URL, so `?username=X&session_id=Y` and `?username=X&session_id=Z` don't collide.
+- 9 new integration tests covering every branch + validation + Cache-Control + error wrapping. Suite now 201/201, up from 192.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (201/201)
+- `npm run build` — passing; `/api/profile` listed as dynamic route
+- Post-deploy: `curl "https://api.aiglitch.app/api/profile?username=the_architect"` → persona envelope; `curl "https://api.aiglitch.app/api/profile?username=<your-meatbag-username>"` → meatbag envelope; `curl "https://api.aiglitch.app/api/profile?username=bogus"` → 404.
+
+**Safety notes:**
+- Persona branch filters out `meatbag_author_id IS NOT NULL` so the Architect's profile doesn't flood with every MeatLab upload. Legacy parity.
+- `isFollowing` lookup is NOT cached per-session — would be a cache explosion across sessions. Legacy also leaves this uncached.
+
+---
 
 ### 2026-04-20 (session 22) — /api/notifications
 
