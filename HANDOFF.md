@@ -39,6 +39,8 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/hatchery` | tested | session 26 | Paginated public list of hatched personas; `?limit` (≤50) + `?offset`. Returns `{hatchlings, total, hasMore}`. |
 | `/api/friends` | tested | session 34 | GET default = `{friends}`; `?type=following` / `?type=ai_followers`. POST `add_friend` creates bidirectional row pair + awards +25 GLITCH both sides. 404/400/409 legacy error shapes. |
 | `/api/friend-shares` | tested | session 36 | GET inbox joins sender+post+persona; returns `{shares, unread}`. POST `share` (verifies friendship, INSERTs row) + `mark_read` (bulk update). 400/403/404 legacy error shapes. Private, no-store. |
+| `/api/suggest-feature` | tested | session 37 | Public POST form. GitHub Issues API (`GITHUB_TOKEN`) primary path; `feature_suggestions` table fallback. Always returns 200 on non-title path — best-effort. |
+| `/api/sponsor/inquiry` | tested | session 37 | Public POST form. 5-per-IP-per-hour in-memory rate limit. Validates company+email+message. INSERT `sponsors` with `status='inquiry'`. |
 | `/api/meatlab` GET + POST + PATCH | tested | session 34–35 | GET session 34 (public gallery / creator / own). POST session 35 = new submission to moderation queue (status=pending); sniffs image/video from URL or explicit media_type. PATCH session 35 = partial social-handle updates with COALESCE. `/api/meatlab/upload` (Vercel Blob client flow) still on legacy. |
 | `/api/coins` (Slice 1 — GET) | tested | session 27 | Balance + lifetime_earned + recent transactions (newest 20). Missing session_id returns zeros (legacy parity). `private, no-store`. Closes the loop on coin writes already live inside `/api/interact`. |
 | `/api/coins` (Slice 2 — claim_signup) | tested | session 28 | POST `{session_id, action:"claim_signup"}` awards +100 GLITCH once per session (idempotent on `coin_transactions.reason = 'Welcome bonus'`). Duplicate claims return 200 with `already_claimed:true` (legacy parity — NOT 4xx). |
@@ -51,6 +53,26 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 ---
 
 ## Session log
+
+### 2026-04-20 (session 37) — /api/suggest-feature + /api/sponsor/inquiry (public forms)
+
+**Branch:** `claude/migrate-public-forms`
+
+**Done:**
+- `/api/suggest-feature`: public POST form. Primary path hits GitHub Issues API in `comfybear71/aiglitch` when `GITHUB_TOKEN` is configured; fallback INSERTs into `feature_suggestions`. Title/description truncated to 100/2000 chars. Returns 200 with `issue_number` + `issue_url` on GitHub success, 200 with generic success message on any fallback path. 400 only when title is missing/whitespace. Legacy "best-effort — always 200" contract preserved.
+- `/api/sponsor/inquiry`: public POST form with in-memory per-IP rate limit (5/hour). Module-level Map — survives within a warm Lambda, resets on cold start. Legacy accepts this best-effort behaviour; no Redis introduced. Validates `company_name` / `contact_email` / message ≥ 10 chars / basic email format. INSERT `sponsors` with `status='inquiry'`; notes column concatenates message + optional `preferred_package` line. 429 on rate-limit, 400 on validation, 500 on DB error.
+- No new repo modules — both routes are thin enough to stay inline.
+- **Env var required (optional feature):** `GITHUB_TOKEN` on Vercel. Without it, `/api/suggest-feature` works via DB fallback only; consumers still get success responses but no GitHub issues are created. User added the token to Vercel mid-session.
+- 23 new tests (11 suggest-feature + 12 sponsor/inquiry). Suite now **385/385**, up from 362.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (385/385)
+- `npm run build` — passing; both routes registered as dynamic
+
+**Phase 3 progress:** 10 of ~20 small routes done. Remaining: `/api/activity`, `/api/activity-throttle`, `/api/token/*` (7), `/api/nft/*` (2), `/api/channels/feed`, `/api/personas/:id/wallet-balance`, `/api/meatlab/upload`.
+
+---
 
 ### 2026-04-20 (session 36) — /api/friend-shares
 
