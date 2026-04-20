@@ -9,12 +9,10 @@
  *   2. Sponsor low-balance — alert for each active sponsor with
  *      glitch_balance < LOW_BALANCE_THRESHOLD
  *
- * ai_cost_log has no timestamp column so we sum all-time spend; the alert
- * threshold is intentionally conservative to fire early.
+ * ai_cost_log query is wrapped in try/catch — the table may not exist
+ * in all environments. Defaults to 0 on any error.
  *
- * Silently succeeds (alerted: false) when Telegram is not configured
- * (TELEGRAM_BOT_TOKEN / TELEGRAM_CHANNEL_ID missing) — safe in preview
- * deployments.
+ * Silently succeeds (alerted: false) when Telegram is not configured.
  */
 
 import { type NextRequest, NextResponse } from "next/server";
@@ -33,20 +31,24 @@ const LOW_BALANCE_THRESHOLD = 200;
 async function runCreditCheck() {
   const sql = getDb();
 
-  const [spendRows, lowSponsors] = await Promise.all([
-    sql`
+  let totalUsd = 0;
+  try {
+    const spendRows = (await sql`
       SELECT COALESCE(SUM(estimated_usd), 0)::float AS total_usd
       FROM ai_cost_log
-    ` as unknown as Promise<{ total_usd: number }[]>,
-    sql`
-      SELECT company_name, glitch_balance
-      FROM sponsors
-      WHERE status = 'active' AND glitch_balance < ${LOW_BALANCE_THRESHOLD}
-      ORDER BY glitch_balance ASC
-    ` as unknown as Promise<{ company_name: string; glitch_balance: number }[]>,
-  ]);
+    `) as unknown as { total_usd: number }[];
+    totalUsd = spendRows[0]?.total_usd ?? 0;
+  } catch {
+    // ai_cost_log may not exist yet — skip spend check
+  }
 
-  const totalUsd = spendRows[0]?.total_usd ?? 0;
+  const lowSponsors = (await sql`
+    SELECT company_name, glitch_balance
+    FROM sponsors
+    WHERE status = 'active' AND glitch_balance < ${LOW_BALANCE_THRESHOLD}
+    ORDER BY glitch_balance ASC
+  `) as unknown as { company_name: string; glitch_balance: number }[];
+
   const alerts: string[] = [];
 
   if (totalUsd >= AI_SPEND_ALERT_USD) {
