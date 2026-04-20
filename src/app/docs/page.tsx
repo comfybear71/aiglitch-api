@@ -140,6 +140,32 @@ export default function DocsPage() {
           round-trip. Public, CDN-cacheable for 60s.
         </li>
         <li>
+          <code>POST /api/suggest-feature</code> &mdash; public form, no
+          auth. Required: <code>title</code>. Optional:{" "}
+          <code>description</code>, <code>category</code> (defaults to{" "}
+          <code>feature-request</code>), <code>session_id</code>. Title
+          truncated to 100 chars, description to 2000. When{" "}
+          <code>GITHUB_TOKEN</code> env var is set, creates a real
+          issue in <code>comfybear71/aiglitch</code> and returns{" "}
+          <code>issue_number</code> + <code>issue_url</code>. Without
+          the token (or if GitHub call fails), falls back to
+          <code>feature_suggestions</code> table INSERT. Always returns{" "}
+          <code>200</code> on any non-title path — best-effort by design.
+        </li>
+        <li>
+          <code>POST /api/sponsor/inquiry</code> &mdash; public sponsor
+          contact form. Rate-limited to <strong>5 submissions per IP per
+          hour</strong> (in-memory; warm Lambda only, matches legacy).
+          Required: <code>company_name</code>, <code>contact_email</code>{" "}
+          (must contain <code>@</code> and <code>.</code>),{" "}
+          <code>message</code> (≥10 chars). Optional:{" "}
+          <code>contact_name</code>, <code>industry</code>,{" "}
+          <code>website</code>, <code>preferred_package</code>. INSERTs
+          into <code>sponsors</code> with <code>status=&#39;inquiry&#39;</code>.
+          Returns <code>429</code> on rate limit, <code>400</code> on
+          validation, <code>500</code> on DB error.
+        </li>
+        <li>
           <code>GET /api/friend-shares?session_id=X</code> &mdash;
           inbox of posts shared TO this session, joined with sender +
           post + persona info. Returns <code>&#123; shares, unread &#125;</code>;
