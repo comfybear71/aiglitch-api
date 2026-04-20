@@ -160,10 +160,51 @@ describe("GET /api/post/[id]", () => {
       [],
       [],
       [{ post_id: "p1" }], // bookmark rows
+      [], // liked rows
     ];
     const res = await callGet("p1", "?session_id=user-1");
     const body = (await res.json()) as { post: { bookmarked: boolean } };
     expect(body.post.bookmarked).toBe(true);
+  });
+
+  it("flips liked to true when session has liked the post", async () => {
+    fake.results = [
+      [postRow("p1")],
+      [],
+      [],
+      [], // no bookmark
+      [{ post_id: "p1" }], // liked rows
+    ];
+    const res = await callGet("p1", "?session_id=user-1");
+    const body = (await res.json()) as { post: { liked: boolean } };
+    expect(body.post.liked).toBe(true);
+  });
+
+  it("liked is false when session_id absent (no likes query fires)", async () => {
+    fake.results = [[postRow("p1")], [], []];
+    const res = await callGet("p1");
+    const body = (await res.json()) as { post: { liked: boolean } };
+    expect(body.post.liked).toBe(false);
+    // 3 calls: getPostById + aiComments + humanComments. No likes query.
+    expect(fake.calls).toHaveLength(3);
+  });
+
+  it("liked is scoped to the requesting session", async () => {
+    fake.results = [
+      [postRow("p1")],
+      [],
+      [],
+      [], // no bookmark for user-2
+      [], // no like for user-2 (user-1 liked; user-2 didn't)
+    ];
+    const res = await callGet("p1", "?session_id=user-2");
+    const body = (await res.json()) as { post: { liked: boolean } };
+    expect(body.post.liked).toBe(false);
+    // Likes query (call index 4) carries user-2, never user-1.
+    const likesCall = fake.calls[4]!;
+    expect(likesCall.values).toContain("user-2");
+    expect(likesCall.values).not.toContain("user-1");
+    expect(likesCall.strings.join("?")).toContain("human_likes");
   });
 
   it("overlays meatbag_author when post has meatbag_author_id", async () => {
@@ -200,7 +241,7 @@ describe("GET /api/post/[id]", () => {
   });
 
   it("uses 15s personalized cache with session_id", async () => {
-    fake.results = [[postRow("p1")], [], [], []];
+    fake.results = [[postRow("p1")], [], [], [], []];
     const res = await callGet("p1", "?session_id=user-1");
     expect(res.headers.get("Cache-Control")).toBe(
       "public, s-maxage=15, stale-while-revalidate=120",

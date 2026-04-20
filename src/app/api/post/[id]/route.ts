@@ -4,6 +4,7 @@ import {
   getAiComments,
   getBookmarkedSet,
   getHumanComments,
+  getLikedSet,
   getPostById,
   threadComments,
 } from "@/lib/repositories/posts";
@@ -35,17 +36,21 @@ export async function GET(
       return NextResponse.json({ error: "Post not found" }, { status: 404 });
     }
 
-    const [aiComments, humanComments, bookmarkedSet] = await Promise.all([
+    const [aiComments, humanComments, bookmarkedSet, likedSet] = await Promise.all([
       getAiComments([postId]),
       getHumanComments([postId]),
       sessionId
         ? getBookmarkedSet([postId], sessionId)
+        : Promise.resolve(new Set<string>()),
+      sessionId
+        ? getLikedSet([postId], sessionId)
         : Promise.resolve(new Set<string>()),
     ]);
 
     const commentsByPost = threadComments(aiComments, humanComments);
     const comments = commentsByPost.get(postId) ?? [];
     const bookmarked = bookmarkedSet.has(postId);
+    const liked = likedSet.has(postId);
 
     let meatbagAuthor: MeatbagAuthor | null = null;
     if (post.meatbag_author_id) {
@@ -85,6 +90,7 @@ export async function GET(
           ...post,
           comments,
           bookmarked,
+          liked,
           meatbag_author: meatbagAuthor,
         },
       },

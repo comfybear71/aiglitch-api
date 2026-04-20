@@ -159,7 +159,7 @@ describe("GET /api/feed (Slices A through F)", () => {
     expect(fake.calls).toHaveLength(5);
   });
 
-  it("queries bookmarks when session_id is present", async () => {
+  it("queries bookmarks + likes when session_id is present", async () => {
     fake.results = [
       [videoRow("v1")],
       [],
@@ -167,13 +167,75 @@ describe("GET /api/feed (Slices A through F)", () => {
       [], // ai comments
       [], // human comments
       [{ post_id: "v1" }], // bookmark rows
+      [{ post_id: "v1" }], // liked rows
     ];
     const res = await callGet("http://localhost/api/feed?session_id=user-1");
-    const body = (await res.json()) as { posts: Array<{ id: string; bookmarked: boolean }> };
+    const body = (await res.json()) as {
+      posts: Array<{ id: string; bookmarked: boolean; liked: boolean }>;
+    };
     expect(body.posts[0]?.bookmarked).toBe(true);
-    expect(fake.calls).toHaveLength(6);
-    const bookmarkCall = fake.calls[5];
+    expect(body.posts[0]?.liked).toBe(true);
+    expect(fake.calls).toHaveLength(7);
+    const bookmarkCall = fake.calls[5]!;
+    const likedCall = fake.calls[6]!;
     expect(bookmarkCall.values).toContain("user-1");
+    expect(likedCall.values).toContain("user-1");
+    expect(likedCall.strings.join("?")).toContain("human_likes");
+  });
+
+  it("returns liked=false when session did not like the post", async () => {
+    fake.results = [
+      [videoRow("v1")],
+      [],
+      [],
+      [], // ai comments
+      [], // human comments
+      [], // no bookmarks
+      [], // no likes
+    ];
+    const res = await callGet("http://localhost/api/feed?session_id=user-1");
+    const body = (await res.json()) as {
+      posts: Array<{ liked: boolean }>;
+    };
+    expect(body.posts[0]?.liked).toBe(false);
+  });
+
+  it("liked flag is scoped per-session (another session's likes don't leak)", async () => {
+    fake.results = [
+      [videoRow("v1")],
+      [],
+      [],
+      [], // ai comments
+      [], // human comments
+      [], // bookmarks: none for user-2
+      [], // likes: none for user-2 (user-1 liked it, but not user-2)
+    ];
+    const res = await callGet("http://localhost/api/feed?session_id=user-2");
+    const body = (await res.json()) as {
+      posts: Array<{ liked: boolean }>;
+    };
+    expect(body.posts[0]?.liked).toBe(false);
+    // The likes query must carry user-2, not user-1, as the session filter.
+    const likedCall = fake.calls[6]!;
+    expect(likedCall.values).toContain("user-2");
+    expect(likedCall.values).not.toContain("user-1");
+  });
+
+  it("includes liked=false on every post when no session_id (no like query fires)", async () => {
+    fake.results = [
+      [videoRow("v1")],
+      [],
+      [],
+      [],
+      [],
+    ];
+    const res = await callGet();
+    const body = (await res.json()) as {
+      posts: Array<{ liked: boolean }>;
+    };
+    expect(body.posts[0]?.liked).toBe(false);
+    // 5 calls: 3 streams + 2 comment queries. No bookmark/liked queries without session.
+    expect(fake.calls).toHaveLength(5);
   });
 
   it("overlays meatbag author when post has meatbag_author_id", async () => {
@@ -351,12 +413,13 @@ describe("GET /api/feed (Slices A through F)", () => {
     expect(sqlText).toContain("ORDER BY p.created_at DESC");
   });
 
-  it("following mode assembles posts with comments + bookmarks + meatbag overlay", async () => {
+  it("following mode assembles posts with comments + bookmarks + likes + meatbag overlay", async () => {
     fake.results = [
       [videoRow("v1", { meatbag_author_id: "human-42" })],
       [], // ai comments
       [], // human comments
       [{ post_id: "v1" }], // bookmarks
+      [{ post_id: "v1" }], // likes
       [
         {
           id: "human-42",
@@ -377,10 +440,12 @@ describe("GET /api/feed (Slices A through F)", () => {
       posts: Array<{
         id: string;
         bookmarked: boolean;
+        liked: boolean;
         meatbag_author: { display_name: string } | null;
       }>;
     };
     expect(body.posts[0]?.bookmarked).toBe(true);
+    expect(body.posts[0]?.liked).toBe(true);
     expect(body.posts[0]?.meatbag_author?.display_name).toBe("Bob");
   });
 
@@ -454,12 +519,13 @@ describe("GET /api/feed (Slices A through F)", () => {
     );
   });
 
-  it("breaking mode assembles posts with comments + bookmarks + meatbag overlay", async () => {
+  it("breaking mode assembles posts with comments + bookmarks + likes + meatbag overlay", async () => {
     fake.results = [
       [videoRow("n1", { post_type: "news", meatbag_author_id: "human-7" })],
       [], // ai comments
       [], // human comments
       [{ post_id: "n1" }], // bookmarks
+      [], // likes (not liked by user-1 yet)
       [
         {
           id: "human-7",
@@ -475,9 +541,14 @@ describe("GET /api/feed (Slices A through F)", () => {
     ];
     const res = await callGet("http://localhost/api/feed?breaking=1&session_id=user-1");
     const body = (await res.json()) as {
-      posts: Array<{ bookmarked: boolean; meatbag_author: { display_name: string } | null }>;
+      posts: Array<{
+        bookmarked: boolean;
+        liked: boolean;
+        meatbag_author: { display_name: string } | null;
+      }>;
     };
     expect(body.posts[0]?.bookmarked).toBe(true);
+    expect(body.posts[0]?.liked).toBe(false);
     expect(body.posts[0]?.meatbag_author?.display_name).toBe("Chuck the News");
   });
 
