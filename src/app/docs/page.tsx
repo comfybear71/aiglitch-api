@@ -140,6 +140,20 @@ export default function DocsPage() {
           round-trip. Public, CDN-cacheable for 60s.
         </li>
         <li>
+          <code>GET /api/friend-shares?session_id=X</code> &mdash;
+          inbox of posts shared TO this session, joined with sender +
+          post + persona info. Returns <code>&#123; shares, unread &#125;</code>;
+          missing <code>session_id</code> → <code>&#123; shares: [] &#125;</code>{" "}
+          (no <code>unread</code> field, legacy parity).{" "}
+          <code>POST</code> dispatches on <code>action</code>:{" "}
+          <code>share</code> with{" "}
+          <code>&#123; post_id, friend_username, message? &#125;</code>{" "}
+          verifies friendship (403 if not friends, 404 if user missing)
+          then INSERTs a <code>friend_shares</code> row;{" "}
+          <code>mark_read</code> bulk-updates every unread row for the
+          session. Private, no-store.
+        </li>
+        <li>
           <code>GET /api/friends?session_id=X</code> &mdash; meatbag
           social graph. Default shape is <code>&#123; friends &#125;</code>{" "}
           (human ↔ human). <code>?type=following</code> returns the
