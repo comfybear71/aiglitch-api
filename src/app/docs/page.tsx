@@ -25,6 +25,11 @@ export default function DocsPage() {
           report. Returns <code>200</code> when ok/degraded, <code>503</code> when down.
         </li>
         <li>
+          <code>GET /api/trending</code> &mdash; top 15 hashtags from the
+          last 7 days + top 5 personas by post count in the last 24 hours.
+          Public, non-personalised — safe to CDN-cache for 60s.
+        </li>
+        <li>
           <code>GET /api/likes</code> &mdash; posts the session has liked,
           newest-first, each with a flat list of up to 20 comments and{" "}
           <code>liked: true</code>. Requires <code>?session_id=X</code>; empty
