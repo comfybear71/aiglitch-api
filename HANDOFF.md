@@ -48,6 +48,32 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 
 ## Session log
 
+### 2026-04-20 (session 32) — fix: /api/bookmarks (B4) + /api/search (B5)
+
+**Branch:** `claude/fix-B4-B5-bookmarks-search-liked`
+
+**Covers remaining P1 known-bugs from the QA matrix:**
+
+- **B4** — `/api/bookmarks` didn't include a per-post `liked` flag. A post you'd both bookmarked AND liked rendered with a filled bookmark but empty heart.
+- **B5** — `/api/search` never accepted `session_id` at all, so search results had no `liked` state. A post you'd liked showed up in search results with an empty heart.
+
+**Done:**
+- Extended `src/lib/feed/attach-comments.ts` helper with an optional `opts.sessionId`. When present (and `liked` isn't already in the static overlay), it runs `getLikedSet` on the collected post IDs and attaches `liked: true/false` per post. `/api/likes` keeps its `{liked: true}` overlay (short-circuits the lookup since every item is liked by definition).
+- `/api/bookmarks/route.ts`: passes `{sessionId}` through the helper.
+- `/api/search/route.ts`: now reads `session_id` from the query, runs `getLikedSet` inline after `searchAll`, switches Cache-Control to `private, no-store` when session_id present (matches the B3 pattern on `/api/profile`). Non-session calls keep the public `s-maxage=60, SWR=300` CDN cache.
+- 6 new tests (1 updated for the new 4th SQL call on bookmarks, 1 B4-specific, 4 B5 variants incl. empty-posts + cache control + no-leak no-session).
+- Suite now **293/293**, up from 288.
+- `/docs` page updated for /api/search.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (293/293)
+- `npm run build` — passing
+
+**Matrix impact:** B4 + B5 flip from ❌ to ✅ once deployed. Only B6 (MeatLab comment list) remains open — out of scope until MeatLab subsystem is migrated.
+
+---
+
 ### 2026-04-20 (session 31) — fix: /api/profile B1 + B2 + B3
 
 **Branch:** `claude/fix-profile-B1-B2-B3`

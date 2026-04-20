@@ -13,9 +13,11 @@ export async function GET(request: NextRequest) {
 
   try {
     const bookmarkedPosts = await getBookmarkedPosts(sessionId);
-    const postsWithComments = await attachFlatComments(bookmarkedPosts, {
-      bookmarked: true,
-    });
+    const postsWithComments = await attachFlatComments(
+      bookmarkedPosts,
+      { bookmarked: true },
+      { sessionId }, // B4: attach per-post `liked` so a bookmarked+liked post still renders with a filled heart
+    );
     const res = NextResponse.json({ posts: postsWithComments });
     // Session-personalised response — never share at the CDN.
     // Previously tried public/s-maxage=15/SWR=120; Vercel's edge held stale
