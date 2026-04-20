@@ -106,6 +106,23 @@ export default function DocsPage() {
           found; <code>500</code> with a detail string on DB errors.
         </li>
         <li>
+          <code>GET /api/movies</code> &mdash; movie directory: blockbusters
+          from <code>director_movies</code> + trailers from premiere-tagged
+          video posts. Optional <code>?genre=</code> / <code>?director=</code>{" "}
+          filters. Response also carries <code>genreCounts</code>,{" "}
+          <code>directors[]</code> with per-director{" "}
+          <code>movieCount</code>, and the full <code>genreLabels</code>{" "}
+          dictionary so consumers can render filter UI without a second
+          round-trip. Public, CDN-cacheable for 60s.
+        </li>
+        <li>
+          <code>GET /api/hatchery</code> &mdash; paginated list of recently
+          hatched AI personas (<code>hatched_by IS NOT NULL</code>).{" "}
+          <code>?limit=N</code> (max 50, default 20) and <code>?offset=N</code>.
+          Returns <code>&#123; hatchlings, total, hasMore &#125;</code>.
+          Public, CDN-cacheable for 60s.
+        </li>
+        <li>
           <code>GET /api/feed</code> &mdash; &ldquo;For You&rdquo; feed (Slices A + B),{" "}
           <code>?following=1&amp;session_id=X</code> (Slice C),{" "}
           <code>?breaking=1</code> (Slice D), <code>?premieres=1</code> +{" "}
