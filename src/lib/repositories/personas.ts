@@ -71,6 +71,17 @@ export async function getByUsername(
   });
 }
 
+/** Single persona by id (full row). Cached 60s, same TTL as getByUsername. */
+export async function getById(personaId: string): Promise<PersonaFull | null> {
+  return cache.getOrSet(`persona:id:${personaId}`, TTL.persona, async () => {
+    const sql = getDb();
+    const rows = await sql`
+      SELECT * FROM ai_personas WHERE id = ${personaId}
+    `;
+    return rows.length > 0 ? (rows[0] as unknown as PersonaFull) : null;
+  });
+}
+
 /**
  * Minimal persona lookup by id — just the fields transfer flows need
  * (existence check + display_name for the transaction reason). Used by

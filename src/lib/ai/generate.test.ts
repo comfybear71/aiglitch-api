@@ -243,3 +243,84 @@ describe("circuit breaker fallback", () => {
     ).rejects.toThrow("Both AI providers");
   });
 });
+
+describe("generateBestieReply", () => {
+  it("calls the selected provider with bestie_chat task type", async () => {
+    mockXaiComplete.mockResolvedValue(XAI_RESULT);
+    const { generateBestieReply } = await import("./generate");
+    const result = await generateBestieReply({
+      persona: PERSONA_A,
+      history: [],
+      userMessage: "hey friend",
+      provider: "xai",
+    });
+    expect(result).toBe("xai reply");
+    expect(mockXaiComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it("includes the latest user message in the prompt", async () => {
+    mockXaiComplete.mockResolvedValue(XAI_RESULT);
+    const { generateBestieReply } = await import("./generate");
+    await generateBestieReply({
+      persona: PERSONA_A,
+      history: [],
+      userMessage: "what's up",
+      provider: "xai",
+    });
+    const call = mockXaiComplete.mock.calls[0]![0] as { userPrompt: string };
+    expect(call.userPrompt).toContain('"what\'s up"');
+  });
+
+  it("includes conversation history when provided", async () => {
+    mockXaiComplete.mockResolvedValue(XAI_RESULT);
+    const { generateBestieReply } = await import("./generate");
+    await generateBestieReply({
+      persona: PERSONA_A,
+      history: [
+        { sender_type: "human", content: "hi" },
+        { sender_type: "ai", content: "hey there" },
+      ],
+      userMessage: "how are you",
+      provider: "xai",
+    });
+    const call = mockXaiComplete.mock.calls[0]![0] as { userPrompt: string };
+    expect(call.userPrompt).toContain("Human: hi");
+    expect(call.userPrompt).toContain("Glitch One: hey there");
+    expect(call.userPrompt).toContain("how are you");
+  });
+
+  it("caps history to the last 10 messages", async () => {
+    mockXaiComplete.mockResolvedValue(XAI_RESULT);
+    const { generateBestieReply } = await import("./generate");
+    const history = Array.from({ length: 15 }, (_, i) => ({
+      sender_type: (i % 2 === 0 ? "human" : "ai") as "human" | "ai",
+      content: `msg-${i}`,
+    }));
+    await generateBestieReply({
+      persona: PERSONA_A,
+      history,
+      userMessage: "test",
+      provider: "xai",
+    });
+    const call = mockXaiComplete.mock.calls[0]![0] as { userPrompt: string };
+    // Earliest 5 must have been dropped
+    expect(call.userPrompt).not.toContain("msg-0");
+    expect(call.userPrompt).not.toContain("msg-4");
+    // Last 10 must remain
+    expect(call.userPrompt).toContain("msg-5");
+    expect(call.userPrompt).toContain("msg-14");
+  });
+
+  it("uses bestie-chat tone in the system prompt", async () => {
+    mockXaiComplete.mockResolvedValue(XAI_RESULT);
+    const { generateBestieReply } = await import("./generate");
+    await generateBestieReply({
+      persona: PERSONA_A,
+      history: [],
+      userMessage: "hi",
+      provider: "xai",
+    });
+    const call = mockXaiComplete.mock.calls[0]![0] as { systemPrompt: string };
+    expect(call.systemPrompt).toContain("AI bestie");
+  });
+});

@@ -60,11 +60,37 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/coins` (Slice 5 — seed_personas + persona_balances) | tested | session 33 | Bulk initial seed (200 base + min(followers/100, 1800) bonus per zero-balance persona). Leaderboard top 50 active personas by balance DESC. **All 8 /api/coins actions now migrated.** |
 | Phase 5 AI engine (`src/lib/ai/`) | tested | session 42 | xAI + Anthropic clients + circuit breaker + cost ledger + generate functions. **Unblocks Phase 4 bestie, Phase 6 cron fleet, and AI auto-reply.** |
 | `/api/interact` AI auto-reply trigger | tested | session 43 | `triggerAIReply` in interactions.ts — 30% probability, top-level only, fire-and-forget. INSERT reply `posts` + bump `comment_count` + `notifications` + +5 GLITCH to persona. |
-| *(all other 177 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/messages` GET + POST + PATCH | tested | session 44 | Bestie chat. GET = history (creates conversation if missing). POST = save user msg + `generateBestieReply` + save AI msg. PATCH = touch `last_message_at`. AI failure: returns user_message + `ai_error`, never strands the user. `private, no-store`. |
+| *(all other 176 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-20 (session 44) — /api/messages (bestie chat)
+
+**Branch:** `claude/review-master-rules-YLOHK`
+
+**Done:**
+- New `src/lib/repositories/conversations.ts` — `getOrCreateConversation` (idempotent on session_id+persona_id), `getMessages` (windowed by limit, returned chronological asc), `addMessage` (INSERT + bump `last_message_at`), `touchConversation` (mark-as-seen).
+- New `getById(personaId)` on `repositories/personas.ts` — full row, cached 60s same as `getByUsername`.
+- New `generateBestieReply` on `lib/ai/generate.ts` — bestie-tone system prompt (`AI bestie` framing), feeds last 10 messages of conversation history into the user prompt, taskType `bestie_chat`. Capped to 320 tokens.
+- New `src/app/api/messages/route.ts` (GET + POST + PATCH):
+  - **GET** `?session_id=X&persona_id=Y` → `{conversation_id, persona, messages}`. Empty messages on a brand-new chat. 404 when persona missing, 400 on missing params.
+  - **POST** `{session_id, persona_id, content}` → `{user_message, ai_message}`. Trims content + truncates to 2000 chars. Saves user message **first** so it's never lost; if AI throws or returns empty, returns `{user_message, ai_message: null, ai_error}` at status 200 — the consumer renders the user msg and shows an error toast for the missing reply.
+  - **PATCH** `{session_id, persona_id}` → `{success, conversation_id}`. Touches `last_message_at` to NOW().
+  - All responses: `Cache-Control: private, no-store`.
+- 36 new tests (5 generateBestieReply + 9 conversations repo + 22 route).
+- Suite **570/570**, up from 534.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (570/570)
+- `npm run build` — passing; `/api/messages` registered as dynamic
+
+**Phase 4 progress:** 1 of 7 routes done. Remaining: `/api/bestie-health`, `/api/partner/bestie`, `/api/partner/briefing`, `/api/partner/push-token`, `/api/hatch`, `/api/hatch/telegram`. All need more spec digging — none documented in detail in the handoff docs.
+
+---
 
 ### 2026-04-20 (session 43) — /api/interact AI auto-reply trigger
 
