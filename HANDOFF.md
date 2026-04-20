@@ -38,6 +38,7 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/movies` | tested | session 26 | Merges `director_movies` (blockbusters) with premiere video posts (trailers). `?genre=` / `?director=` filters. Response carries `genreCounts`, `directors[]` with per-director `movieCount`, and `genreLabels`. Slim DIRECTORS + GENRE_LABELS ported (Phase 5 AI engine still owns the full profile). |
 | `/api/hatchery` | tested | session 26 | Paginated public list of hatched personas; `?limit` (≤50) + `?offset`. Returns `{hatchlings, total, hasMore}`. |
 | `/api/friends` | tested | session 34 | GET default = `{friends}`; `?type=following` / `?type=ai_followers`. POST `add_friend` creates bidirectional row pair + awards +25 GLITCH both sides. 404/400/409 legacy error shapes. |
+| `/api/friend-shares` | tested | session 36 | GET inbox joins sender+post+persona; returns `{shares, unread}`. POST `share` (verifies friendship, INSERTs row) + `mark_read` (bulk update). 400/403/404 legacy error shapes. Private, no-store. |
 | `/api/meatlab` GET + POST + PATCH | tested | session 34–35 | GET session 34 (public gallery / creator / own). POST session 35 = new submission to moderation queue (status=pending); sniffs image/video from URL or explicit media_type. PATCH session 35 = partial social-handle updates with COALESCE. `/api/meatlab/upload` (Vercel Blob client flow) still on legacy. |
 | `/api/coins` (Slice 1 — GET) | tested | session 27 | Balance + lifetime_earned + recent transactions (newest 20). Missing session_id returns zeros (legacy parity). `private, no-store`. Closes the loop on coin writes already live inside `/api/interact`. |
 | `/api/coins` (Slice 2 — claim_signup) | tested | session 28 | POST `{session_id, action:"claim_signup"}` awards +100 GLITCH once per session (idempotent on `coin_transactions.reason = 'Welcome bonus'`). Duplicate claims return 200 with `already_claimed:true` (legacy parity — NOT 4xx). |
@@ -50,6 +51,30 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 ---
 
 ## Session log
+
+### 2026-04-20 (session 36) — /api/friend-shares
+
+**Branch:** `claude/migrate-friend-shares-and-activity`
+
+**Done:**
+- New `src/lib/repositories/friend-shares.ts`: `listInbox`, `countUnread`, `findFriendSession`, `isFriendWith`, `createShare`, `markAllRead`.
+- New `src/app/api/friend-shares/route.ts`:
+  - GET: `{ shares, unread }` inbox for the session, joined in one query with sender + post + persona info so the consumer can render cards without a second round-trip. Missing `session_id` returns `{ shares: [] }` with no `unread` field — matches legacy exactly.
+  - POST: `share` verifies friendship (403 if not friends; 404 if target username doesn't resolve) then INSERTs; `mark_read` bulk-updates every unread row for the session. Unknown action → 400.
+- Cache-Control `private, no-store` (session-personalised).
+- 18 new tests. Suite now **362/362**, up from 344.
+- `/docs` entry added.
+
+**Scope note:** the originally-paired `/api/activity` was descoped. Legacy is 257 LOC with 12+ parallel queries + 5 try/catch blocks for tables owned by Phase 5 (AI engine) and Phase 6 (cron fleet) — `cron_runs`, `director_movies`, `multi_clip_scenes`, `platform_settings`, `daily_topics`. Porting now would ship a defensive empty-result route that only lights up once those phases land. Better to do `/api/activity` alongside the cron fleet migration when the tables actually exist in this repo's schema ownership.
+
+**Phase 3 progress:** 8 of ~20 small routes done. Remaining: `/api/activity`, `/api/activity-throttle`, `/api/token/*` (7), `/api/nft/*` (2), `/api/suggest-feature`, `/api/sponsor/inquiry`, `/api/channels/feed`, `/api/personas/:id/wallet-balance`, `/api/meatlab/upload`.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (362/362)
+- `npm run build` — passing
+
+---
 
 ### 2026-04-20 (session 35) — /api/meatlab POST + PATCH (finish the endpoint)
 
