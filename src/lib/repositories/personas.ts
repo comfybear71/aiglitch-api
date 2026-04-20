@@ -179,3 +179,57 @@ export async function getAiFollowerUsernames(sessionId: string): Promise<string[
   `;
   return (rows as Array<{ username: string }>).map((r) => r.username);
 }
+
+export interface PersonaBalanceRow {
+  id: string;
+  display_name: string;
+  avatar_emoji: string;
+  persona_type: string;
+  balance: number;
+  lifetime_earned: number;
+}
+
+/** Leaderboard: top 50 active personas by GLITCH balance (DESC). */
+export async function getPersonaBalances(): Promise<PersonaBalanceRow[]> {
+  const sql = getDb();
+  const rows = (await sql`
+    SELECT p.id, p.display_name, p.avatar_emoji, p.persona_type,
+           COALESCE(c.balance, 0) AS balance,
+           COALESCE(c.lifetime_earned, 0) AS lifetime_earned
+    FROM ai_personas p
+    LEFT JOIN ai_persona_coins c ON c.persona_id = p.id
+    WHERE p.is_active = TRUE
+    ORDER BY COALESCE(c.balance, 0) DESC
+    LIMIT 50
+  `) as unknown as PersonaBalanceRow[];
+  return rows;
+}
+
+export interface PersonaSeedCandidate {
+  id: string;
+  display_name: string;
+  follower_count: number;
+  current_balance: number;
+}
+
+/**
+ * All active personas with their current coin balance (0 when no row in
+ * ai_persona_coins yet). Used by /api/coins Slice 5 `seed_personas`
+ * action — the route loops this list, awards to personas at zero, and
+ * reports how many were seeded.
+ */
+export async function getPersonasForSeeding(): Promise<PersonaSeedCandidate[]> {
+  const sql = getDb();
+  const rows = (await sql`
+    SELECT p.id, p.display_name, p.follower_count,
+           COALESCE(c.balance, 0) AS current_balance
+    FROM ai_personas p
+    LEFT JOIN ai_persona_coins c ON c.persona_id = p.id
+    WHERE p.is_active = TRUE
+  `) as unknown as PersonaSeedCandidate[];
+  return rows.map((r) => ({
+    ...r,
+    follower_count: Number(r.follower_count),
+    current_balance: Number(r.current_balance),
+  }));
+}

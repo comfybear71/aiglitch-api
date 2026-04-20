@@ -562,27 +562,281 @@ describe("POST /api/coins", () => {
     });
   });
 
-  describe("deferred actions", () => {
-    const deferred = [
-      "purchase_ad_free",
-      "check_ad_free",
-      "seed_personas",
-      "persona_balances",
-    ];
-
-    for (const action of deferred) {
-      it(`${action} returns 501 action_not_yet_migrated`, async () => {
-        const res = await callPost({ action, session_id: "u-1" });
-        expect(res.status).toBe(501);
-        const body = (await res.json()) as { error: string; action: string };
-        expect(body.error).toBe("action_not_yet_migrated");
-        expect(body.action).toBe(action);
+  describe("purchase_ad_free", () => {
+    it("403 when session has no phantom_wallet_address", async () => {
+      fake.results = [[{ phantom_wallet_address: null }]];
+      const res = await callPost({
+        session_id: "u-1",
+        action: "purchase_ad_free",
       });
-    }
+      expect(res.status).toBe(403);
+      const body = (await res.json()) as { error: string };
+      expect(body.error).toBe("Phantom wallet required to purchase ad-free");
+    });
 
-    it("deferred actions never touch the DB", async () => {
-      await callPost({ action: "purchase_ad_free", session_id: "u-1" });
-      expect(fake.calls).toHaveLength(0);
+    it("403 when human_users row does not exist", async () => {
+      fake.results = [[]]; // no user row
+      const res = await callPost({
+        session_id: "u-1",
+        action: "purchase_ad_free",
+      });
+      expect(res.status).toBe(403);
+    });
+
+    it("402 Insufficient balance with balance + cost + shortfall", async () => {
+      fake.results = [
+        [{ phantom_wallet_address: "phantom123" }],
+        [{ balance: 5, lifetime_earned: 5 }],
+      ];
+      const res = await callPost({
+        session_id: "u-1",
+        action: "purchase_ad_free",
+      });
+      expect(res.status).toBe(402);
+      const body = (await res.json()) as {
+        error: string;
+        balance: number;
+        cost: number;
+        shortfall: number;
+      };
+      expect(body.error).toBe("Insufficient balance");
+      expect(body.balance).toBe(5);
+      expect(body.cost).toBe(20);
+      expect(body.shortfall).toBe(15);
+    });
+
+    it("happy path: 200 with ad_free_until ~30 days out + new_balance", async () => {
+      fake.results = [
+        [{ phantom_wallet_address: "phantom123" }], // wallet check
+        [{ balance: 100, lifetime_earned: 100 }], // getCoinBalance
+        [{ ad_free_until: null }], // existing expiry lookup
+        [{ balance: 100 }], // deduct: balance read
+        [], // deduct: UPDATE
+        [], // deduct: INSERT txn
+        [{ balance: 80 }], // deduct: post-update
+        [], // UPDATE ad_free_until
+      ];
+      const before = Date.now();
+      const res = await callPost({
+        session_id: "u-1",
+        action: "purchase_ad_free",
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        success: boolean;
+        ad_free_until: string;
+        new_balance: number;
+      };
+      expect(body.success).toBe(true);
+      expect(body.new_balance).toBe(80);
+      const expiry = new Date(body.ad_free_until).getTime();
+      const thirtyDays = 30 * 24 * 60 * 60 * 1000;
+      expect(expiry - before).toBeGreaterThan(thirtyDays - 10_000);
+      expect(expiry - before).toBeLessThan(thirtyDays + 10_000);
+    });
+
+    it("happy path with existing unexpired ad-free stacks on top of current expiry", async () => {
+      const existingExpiry = new Date(
+        Date.now() + 10 * 24 * 60 * 60 * 1000,
+      ).toISOString();
+      fake.results = [
+        [{ phantom_wallet_address: "phantom123" }],
+        [{ balance: 100, lifetime_earned: 100 }],
+        [{ ad_free_until: existingExpiry }],
+        [{ balance: 100 }],
+        [],
+        [],
+        [{ balance: 80 }],
+        [],
+      ];
+      const res = await callPost({
+        session_id: "u-1",
+        action: "purchase_ad_free",
+      });
+      const body = (await res.json()) as { ad_free_until: string };
+      const newExpiry = new Date(body.ad_free_until).getTime();
+      const expected =
+        new Date(existingExpiry).getTime() + 30 * 24 * 60 * 60 * 1000;
+      expect(Math.abs(newExpiry - expected)).toBeLessThan(1000);
+    });
+
+    it("500 on DB error during purchase_ad_free", async () => {
+      fake.throwOnNextCall = new Error("pg down");
+      const res = await callPost({
+        session_id: "u-1",
+        action: "purchase_ad_free",
+      });
+      expect(res.status).toBe(500);
+    });
+  });
+
+  describe("check_ad_free", () => {
+    it("ad_free:false when no user row", async () => {
+      fake.results = [[]];
+      const res = await callPost({
+        session_id: "u-1",
+        action: "check_ad_free",
+      });
+      const body = (await res.json()) as {
+        ad_free: boolean;
+        ad_free_until: string | null;
+      };
+      expect(body).toEqual({ ad_free: false, ad_free_until: null });
+    });
+
+    it("ad_free:false when ad_free_until is null", async () => {
+      fake.results = [[{ ad_free_until: null }]];
+      const res = await callPost({
+        session_id: "u-1",
+        action: "check_ad_free",
+      });
+      const body = (await res.json()) as { ad_free: boolean };
+      expect(body.ad_free).toBe(false);
+    });
+
+    it("ad_free:true when expiry is in the future", async () => {
+      const future = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString();
+      fake.results = [[{ ad_free_until: future }]];
+      const res = await callPost({
+        session_id: "u-1",
+        action: "check_ad_free",
+      });
+      const body = (await res.json()) as {
+        ad_free: boolean;
+        ad_free_until: string | null;
+      };
+      expect(body.ad_free).toBe(true);
+      expect(body.ad_free_until).toBe(future);
+    });
+
+    it("ad_free:false when expiry is in the past; ad_free_until nulled out", async () => {
+      const past = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString();
+      fake.results = [[{ ad_free_until: past }]];
+      const res = await callPost({
+        session_id: "u-1",
+        action: "check_ad_free",
+      });
+      const body = (await res.json()) as {
+        ad_free: boolean;
+        ad_free_until: string | null;
+      };
+      expect(body.ad_free).toBe(false);
+      expect(body.ad_free_until).toBeNull();
+    });
+  });
+
+  describe("seed_personas", () => {
+    it("seeds only personas with current_balance of 0; base + bonus math correct", async () => {
+      fake.results = [
+        [
+          { id: "p-1", display_name: "A", follower_count: 0, current_balance: 0 }, // seed 200
+          { id: "p-2", display_name: "B", follower_count: 500, current_balance: 0 }, // seed 200 + 5 = 205
+          { id: "p-3", display_name: "C", follower_count: 200_000, current_balance: 0 }, // capped bonus: 200 + 1800 = 2000
+          { id: "p-4", display_name: "D", follower_count: 100, current_balance: 50 }, // skipped
+        ],
+        // each surviving persona triggers one awardPersonaCoins INSERT
+        [],
+        [],
+        [],
+      ];
+      const res = await callPost({
+        session_id: "u-1",
+        action: "seed_personas",
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        success: boolean;
+        seeded: number;
+        total_personas: number;
+      };
+      expect(body).toMatchObject({
+        success: true,
+        seeded: 3,
+        total_personas: 4,
+      });
+
+      // 3 award calls: persona-ids + amounts land on the INSERT values
+      const awardCall1 = fake.calls[1]!;
+      const awardCall3 = fake.calls[3]!;
+      expect(awardCall1.values).toContain("p-1");
+      expect(awardCall1.values).toContain(200);
+      // p-3 hits the follower cap
+      expect(awardCall3.values).toContain("p-3");
+      expect(awardCall3.values).toContain(2000);
+    });
+
+    it("seeds zero when every persona already has a positive balance", async () => {
+      fake.results = [
+        [
+          { id: "p-1", display_name: "A", follower_count: 10, current_balance: 500 },
+          { id: "p-2", display_name: "B", follower_count: 10, current_balance: 10 },
+        ],
+      ];
+      const res = await callPost({
+        session_id: "u-1",
+        action: "seed_personas",
+      });
+      const body = (await res.json()) as { seeded: number; total_personas: number };
+      expect(body.seeded).toBe(0);
+      expect(body.total_personas).toBe(2);
+      // Only the lookup query ran — no award calls.
+      expect(fake.calls).toHaveLength(1);
+    });
+
+    it("500 on DB error during seed_personas", async () => {
+      fake.throwOnNextCall = new Error("pg down");
+      const res = await callPost({
+        session_id: "u-1",
+        action: "seed_personas",
+      });
+      expect(res.status).toBe(500);
+    });
+  });
+
+  describe("persona_balances", () => {
+    it("returns { balances } with up to 50 rows ordered by balance DESC", async () => {
+      fake.results = [
+        [
+          {
+            id: "p-1",
+            display_name: "Top",
+            avatar_emoji: "👑",
+            persona_type: "leader",
+            balance: 9000,
+            lifetime_earned: 10_000,
+          },
+          {
+            id: "p-2",
+            display_name: "Runner-up",
+            avatar_emoji: "🥈",
+            persona_type: "general",
+            balance: 500,
+            lifetime_earned: 800,
+          },
+        ],
+      ];
+      const res = await callPost({
+        session_id: "u-1",
+        action: "persona_balances",
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        balances: Array<{ id: string; balance: number }>;
+      };
+      expect(body.balances).toHaveLength(2);
+      expect(body.balances[0]?.id).toBe("p-1");
+      const sql = fake.calls[0]!.strings.join("?");
+      expect(sql).toContain("ORDER BY COALESCE(c.balance, 0) DESC");
+      expect(sql).toContain("LIMIT 50");
+    });
+
+    it("500 on DB error during persona_balances", async () => {
+      fake.throwOnNextCall = new Error("pg down");
+      const res = await callPost({
+        session_id: "u-1",
+        action: "persona_balances",
+      });
+      expect(res.status).toBe(500);
     });
   });
 

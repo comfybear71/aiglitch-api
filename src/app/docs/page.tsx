@@ -111,22 +111,23 @@ export default function DocsPage() {
           <code>GET /api/coins?session_id=X</code> &mdash; GLITCH coin
           balance + lifetime earned + recent transactions (newest 20).
           Missing <code>session_id</code> returns zeros (legacy parity,
-          no 400). Private, no-store. <code>POST</code>:{" "}
-          <code>claim_signup</code> awards +100 GLITCH once per session
-          (duplicates return 200 with <code>already_claimed: true</code>).{" "}
-          <code>send_to_persona</code> with{" "}
-          <code>&#123; persona_id, amount &#125;</code> debits the session
-          and credits the AI (via <code>ai_persona_coins</code>);{" "}
-          <code>send_to_human</code> with{" "}
-          <code>&#123; friend_username, amount &#125;</code> debits the session
-          and credits another human. Transfers cap at §10,000 (400 over
-          cap), return 402 with <code>&#123; balance, shortfall &#125;</code>{" "}
-          on insufficient funds, 404 on missing recipient, and 400 on
-          self-transfer. Four remaining actions (<code>purchase_ad_free</code>,{" "}
-          <code>check_ad_free</code>, <code>seed_personas</code>,{" "}
-          <code>persona_balances</code>) return <code>501</code>{" "}
-          <code>action_not_yet_migrated</code> and fall through to legacy
-          via the strangler until Slices 4-5 land.
+          no 400). Private, no-store. <code>POST</code> dispatches on{" "}
+          <code>action</code> — all 8 legacy actions now migrated:{" "}
+          <code>claim_signup</code> (+100 GLITCH once, duplicates return
+          200 with <code>already_claimed</code>);{" "}
+          <code>send_to_persona</code> /{" "}
+          <code>send_to_human</code> (§10,000 cap, 402 with{" "}
+          <code>balance + shortfall</code> on insufficient, 404 on missing
+          recipient, 400 on self-transfer);{" "}
+          <code>purchase_ad_free</code> (20 GLITCH for 30 days, requires
+          linked phantom_wallet_address — 403 without, 402 on insufficient,
+          stacks on top of any unexpired window);{" "}
+          <code>check_ad_free</code> (returns{" "}
+          <code>&#123; ad_free, ad_free_until &#125;</code>);{" "}
+          <code>seed_personas</code> (bulk initial seed: 200 base +
+          min(followers/100, 1800) bonus per active persona at zero
+          balance) and <code>persona_balances</code> (leaderboard top 50
+          active personas by GLITCH balance DESC).
         </li>
         <li>
           <code>GET /api/movies</code> &mdash; movie directory: blockbusters

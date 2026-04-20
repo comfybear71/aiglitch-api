@@ -40,13 +40,45 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/coins` (Slice 1 — GET) | tested | session 27 | Balance + lifetime_earned + recent transactions (newest 20). Missing session_id returns zeros (legacy parity). `private, no-store`. Closes the loop on coin writes already live inside `/api/interact`. |
 | `/api/coins` (Slice 2 — claim_signup) | tested | session 28 | POST `{session_id, action:"claim_signup"}` awards +100 GLITCH once per session (idempotent on `coin_transactions.reason = 'Welcome bonus'`). Duplicate claims return 200 with `already_claimed:true` (legacy parity — NOT 4xx). |
 | `/api/coins` (Slice 3 — send_to_persona + send_to_human) | tested | session 29 | Transfer pair. §10,000 cap, 402 insufficient, 404 recipient not found, 400 self-transfer. Non-transactional (legacy parity). New repo helpers: `deductCoins`, `getUserByUsername`, `getIdAndDisplayName`. |
-| `/api/coins` (Slices 4-5 — POST actions) | deferred | — | 4 write actions left: `purchase_ad_free`, `check_ad_free`, `seed_personas`, `persona_balances`. Return 501 via strangler until ported. |
+| `/api/coins` (Slice 4 — purchase_ad_free + check_ad_free) | tested | session 33 | 20 GLITCH for 30 days. Requires linked phantom_wallet_address (403 without). Stacks on unexpired window. `check_ad_free` returns `{ ad_free, ad_free_until }`. |
+| `/api/coins` (Slice 5 — seed_personas + persona_balances) | tested | session 33 | Bulk initial seed (200 base + min(followers/100, 1800) bonus per zero-balance persona). Leaderboard top 50 active personas by balance DESC. **All 8 /api/coins actions now migrated.** |
 | `/api/interact` AI auto-reply trigger | deferred | — | Biggest remaining internal port. Not a blocker for consumer work — see session 17 notes. |
 | *(all other 177 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-20 (session 33) — /api/coins Slices 4 + 5 (ad-free + persona admin)
+
+**Branch:** `claude/migrate-coins-slices-4-5`
+
+**Done — all 8 `/api/coins` actions now migrated.** Slices 4 and 5 shipped together because they're both small, independent, and share no state.
+
+**Slice 4 — ad-free subscription:**
+- New `purchaseAdFree(sessionId)` + `getAdFreeStatus(sessionId)` in `src/lib/repositories/users.ts`. `purchaseAdFree` returns a discriminated union (`no_wallet | insufficient | purchased`) so the route handler picks the right status code (403 / 402 / 200) without re-querying.
+- Constants exported: `AD_FREE_COST = 20`, `AD_FREE_DAYS = 30`.
+- Legacy stacking preserved — buying again while still active extends from the existing `ad_free_until` rather than resetting to "now + 30 days".
+
+**Slice 5 — persona coin admin:**
+- New `getPersonasForSeeding()` + `getPersonaBalances()` in `src/lib/repositories/personas.ts`.
+- `seed_personas` loops the candidates sequentially, awards (200 + min(followers/100, 1800)) to anyone at zero balance, reports `{seeded, total_personas}`.
+- `persona_balances` returns top 50 active personas ordered by GLITCH balance DESC.
+- `seed_personas` has no auth gate yet — `/api/auth/admin` lands with Phase 3 remnants and will eventually guard this action.
+
+**Route:**
+- Removed the `UNSUPPORTED_ACTIONS` set entirely — anything unrecognised now falls to the "Invalid action" 400 at the end of POST. Cleaner than maintaining a 501 passthrough list.
+
+**Tests:** 16 new POST tests covering: no wallet, no user row, insufficient balance, fresh purchase, stacking on active window, empty-expiry / future / past paths for `check_ad_free`, seed math (base + bonus + cap + skip-nonzero), empty-seed path, leaderboard shape + ordering, 500 wrapping on each action. Suite now **303/303**, up from 293.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (303/303)
+- `npm run build` — passing
+
+**Migration progress:** consumer read+write surface fully on new backend; `/api/coins` closed; 19 routes / 179 total (~11%). Next blocking unlock is Phase 5 (AI engine).
+
+---
 
 ### 2026-04-20 (session 32) — fix: /api/bookmarks (B4) + /api/search (B5)
 

@@ -1,36 +1,42 @@
 import { type NextRequest, NextResponse } from "next/server";
 import {
+  AD_FREE_COST,
+  AD_FREE_DAYS,
   MAX_TRANSFER,
   awardCoins,
   awardPersonaCoins,
   claimSignupBonus,
   deductCoins,
+  getAdFreeStatus,
   getCoinBalance,
   getTransactions,
   getUserByUsername,
+  purchaseAdFree,
 } from "@/lib/repositories/users";
-import { getIdAndDisplayName } from "@/lib/repositories/personas";
+import {
+  getIdAndDisplayName,
+  getPersonaBalances,
+  getPersonasForSeeding,
+} from "@/lib/repositories/personas";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
+const SEED_BASE = 200;
+const SEED_FOLLOWER_DIVISOR = 100;
+const SEED_MAX_BONUS = 1800;
+
 /**
- * Actions migrated so far:
- *   Slice 1: GET (balance + lifetime + transactions)            ✅
- *   Slice 2: claim_signup                                       ✅
- *   Slice 3: send_to_persona, send_to_human                     ✅ this session
- *   Slice 4: purchase_ad_free, check_ad_free                    ⏳
- *   Slice 5: seed_personas, persona_balances                    ⏳
+ * All 8 legacy actions now migrated:
+ *   GET            → balance + lifetime + transactions             ✅
+ *   claim_signup   → 100 GLITCH welcome bonus (one-shot)           ✅
+ *   send_to_persona / send_to_human                                ✅
+ *   purchase_ad_free / check_ad_free                               ✅
+ *   seed_personas / persona_balances                               ✅
  *
- * Unmigrated actions return 501 `action_not_yet_migrated`; consumers fall
- * through to the legacy backend via the strangler.
+ * No UNSUPPORTED_ACTIONS set anymore — anything unrecognised falls to
+ * the "Invalid action" 400 at the end of POST.
  */
-const UNSUPPORTED_ACTIONS = new Set([
-  "purchase_ad_free",
-  "check_ad_free",
-  "seed_personas",
-  "persona_balances",
-]);
 
 /**
  * GET /api/coins?session_id=X — GLITCH coin balance + recent transactions.
@@ -142,15 +148,20 @@ export async function POST(request: NextRequest) {
     return handleSendToHuman(session_id, body);
   }
 
-  if (UNSUPPORTED_ACTIONS.has(action)) {
-    return NextResponse.json(
-      {
-        error: "action_not_yet_migrated",
-        action,
-        note: "This /api/coins action lands in a later slice; use the legacy backend in the meantime.",
-      },
-      { status: 501 },
-    );
+  if (action === "purchase_ad_free") {
+    return handlePurchaseAdFree(session_id);
+  }
+
+  if (action === "check_ad_free") {
+    return handleCheckAdFree(session_id);
+  }
+
+  if (action === "seed_personas") {
+    return handleSeedPersonas();
+  }
+
+  if (action === "persona_balances") {
+    return handlePersonaBalances();
   }
 
   return NextResponse.json(
@@ -303,6 +314,127 @@ async function handleSendToHuman(
     return NextResponse.json(
       {
         error: "Failed to send coins",
+        detail: err instanceof Error ? err.message : String(err),
+      },
+      { status: 500 },
+    );
+  }
+}
+
+/**
+ * Slice 4: ad-free subscription — 20 GLITCH for 30 days. Requires a
+ * linked phantom_wallet_address on the session's human_users row; 403
+ * without one. Stacks: buying again while still active extends from the
+ * existing expiry rather than resetting to "now + 30 days".
+ */
+async function handlePurchaseAdFree(sessionId: string): Promise<NextResponse> {
+  try {
+    const result = await purchaseAdFree(sessionId);
+    if (result.kind === "no_wallet") {
+      return NextResponse.json(
+        { error: "Phantom wallet required to purchase ad-free" },
+        { status: 403 },
+      );
+    }
+    if (result.kind === "insufficient") {
+      return NextResponse.json(
+        {
+          error: "Insufficient balance",
+          balance: result.balance,
+          cost: AD_FREE_COST,
+          shortfall: result.shortfall,
+        },
+        { status: 402 },
+      );
+    }
+    return NextResponse.json({
+      success: true,
+      ad_free_until: result.adFreeUntil,
+      new_balance: result.newBalance,
+      message: `Ads disabled for ${AD_FREE_DAYS} days`,
+    });
+  } catch (err) {
+    console.error("[coins] purchase_ad_free error:", err);
+    return NextResponse.json(
+      {
+        error: "Failed to purchase ad-free",
+        detail: err instanceof Error ? err.message : String(err),
+      },
+      { status: 500 },
+    );
+  }
+}
+
+async function handleCheckAdFree(sessionId: string): Promise<NextResponse> {
+  try {
+    const { adFree, adFreeUntil } = await getAdFreeStatus(sessionId);
+    return NextResponse.json({
+      ad_free: adFree,
+      ad_free_until: adFreeUntil,
+    });
+  } catch (err) {
+    console.error("[coins] check_ad_free error:", err);
+    return NextResponse.json(
+      {
+        error: "Failed to check ad-free",
+        detail: err instanceof Error ? err.message : String(err),
+      },
+      { status: 500 },
+    );
+  }
+}
+
+/**
+ * Slice 5a: bulk initial seed for every active persona at zero balance.
+ * 200 base + min(followers/100, 1800) bonus. Sequential — matches
+ * legacy's one-shot awardPersonaCoins loop. Admin-ish; no auth gate yet
+ * (`/api/auth/admin` lands with Phase 3 remnants).
+ */
+async function handleSeedPersonas(): Promise<NextResponse> {
+  try {
+    const personas = await getPersonasForSeeding();
+    let seeded = 0;
+    for (const p of personas) {
+      if (p.current_balance > 0) continue;
+      const bonus = Math.min(
+        Math.floor(p.follower_count / SEED_FOLLOWER_DIVISOR),
+        SEED_MAX_BONUS,
+      );
+      await awardPersonaCoins(p.id, SEED_BASE + bonus);
+      seeded += 1;
+    }
+    return NextResponse.json({
+      success: true,
+      seeded,
+      total_personas: personas.length,
+      message: `Seeded ${seeded} personas with §GLITCH`,
+    });
+  } catch (err) {
+    console.error("[coins] seed_personas error:", err);
+    return NextResponse.json(
+      {
+        error: "Failed to seed personas",
+        detail: err instanceof Error ? err.message : String(err),
+      },
+      { status: 500 },
+    );
+  }
+}
+
+/**
+ * Slice 5b: leaderboard — top 50 active personas by GLITCH balance DESC.
+ * Public-ish read; no session required (every session sees the same
+ * leaderboard).
+ */
+async function handlePersonaBalances(): Promise<NextResponse> {
+  try {
+    const balances = await getPersonaBalances();
+    return NextResponse.json({ balances });
+  } catch (err) {
+    console.error("[coins] persona_balances error:", err);
+    return NextResponse.json(
+      {
+        error: "Failed to fetch persona balances",
         detail: err instanceof Error ? err.message : String(err),
       },
       { status: 500 },
