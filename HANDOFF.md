@@ -61,11 +61,38 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | Phase 5 AI engine (`src/lib/ai/`) | tested | session 42 | xAI + Anthropic clients + circuit breaker + cost ledger + generate functions. **Unblocks Phase 4 bestie, Phase 6 cron fleet, and AI auto-reply.** |
 | `/api/interact` AI auto-reply trigger | tested | session 43 | `triggerAIReply` in interactions.ts — 30% probability, top-level only, fire-and-forget. INSERT reply `posts` + bump `comment_count` + `notifications` + +5 GLITCH to persona. |
 | `/api/messages` GET + POST + PATCH | tested | session 44 | Bestie chat. GET = history (creates conversation if missing). POST = save user msg + `generateBestieReply` + save AI msg. PATCH = touch `last_message_at`. AI failure: returns user_message + `ai_error`, never strands the user. `private, no-store`. |
-| *(all other 176 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/partner/push-token` POST | tested | session 45 | Registers iOS push notification token. UPSERT into `device_push_tokens` (new table, created IF NOT EXISTS on first call). Body: `{session_id, token, platform?}`. |
+| `/api/partner/bestie` GET | tested | session 45 | Bestie profile card for iOS home screen. Returns full persona + conversation summary (`message_count`, `last_message_at`) without creating a conversation. `private, no-store`. |
+| `/api/partner/briefing` GET | tested | session 45 | Daily briefing aggregation for iOS. Returns `followed_count`, `unread_notifications`, and up to 5 recent conversations with last-message preview. `private, no-store`. |
+| *(all other 173 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-20 (session 45) — Phase 4 partner routes
+
+**Branch:** `claude/review-master-rules-YLOHK`
+
+**Done:**
+- `getConversationInfo(sessionId, personaId)` added to `src/lib/repositories/conversations.ts` — read-only lookup (no create side-effect), returns `{id, last_message_at, message_count}` or null.
+- New `src/lib/repositories/partner.ts` — two helpers:
+  - `registerPushToken(sessionId, token, platform)` — UPSERT into `device_push_tokens`. Runs `CREATE TABLE IF NOT EXISTS` once per Lambda instance (module-level flag) since this table is new to this repo. On conflict (same token) refreshes session_id + platform + updated_at.
+  - `getBriefingData(sessionId)` — three sequential queries: `human_subscriptions` COUNT, `notifications` unread COUNT, and a conversations+personas JOIN with correlated last-message subqueries. Returns `{followed_count, unread_notifications, conversations[]}`.
+- New `src/app/api/partner/push-token/route.ts` (POST) — validates body, calls `registerPushToken`, returns `{success: true}`.
+- New `src/app/api/partner/bestie/route.ts` (GET) — looks up persona (404 if missing), calls `getConversationInfo` (null if no conversation yet), returns `{persona, conversation}`.
+- New `src/app/api/partner/briefing/route.ts` (GET) — calls `getBriefingData`, returns the aggregated briefing object.
+- 19 new tests across 3 test files (7 push-token + 5 bestie + 7 briefing).
+- Suite **589/589**, up from 570.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (589/589)
+- `npm run build` — passing; all 3 routes registered as dynamic
+
+**Phase 4 progress:** 4 of 7 routes done. Remaining: `/api/bestie-health`, `/api/hatch`, `/api/hatch/telegram`. These need DB schema confirmation before building — `bestie_health` table is not in the documented 88-table schema, and `/api/hatch` logic is too complex to infer safely.
+
+---
 
 ### 2026-04-20 (session 44) — /api/messages (bestie chat)
 

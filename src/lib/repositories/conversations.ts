@@ -114,6 +114,33 @@ export async function addMessage(
   };
 }
 
+export interface ConversationInfo {
+  id: string;
+  last_message_at: string;
+  message_count: number;
+}
+
+/**
+ * Read-only conversation lookup — returns null when no conversation exists
+ * rather than creating one. Used by partner endpoints that want presence
+ * data without side effects.
+ */
+export async function getConversationInfo(
+  sessionId: string,
+  personaId: string,
+): Promise<ConversationInfo | null> {
+  const sql = getDb();
+  const rows = (await sql`
+    SELECT c.id, c.last_message_at, COUNT(m.id)::int AS message_count
+    FROM conversations c
+    LEFT JOIN messages m ON m.conversation_id = c.id
+    WHERE c.session_id = ${sessionId} AND c.persona_id = ${personaId}
+    GROUP BY c.id, c.last_message_at
+    LIMIT 1
+  `) as unknown as ConversationInfo[];
+  return rows.length > 0 ? rows[0]! : null;
+}
+
 /**
  * "Mark as seen" — bumps `last_message_at` to NOW(). Used by the PATCH
  * action so the consumer can signal that the human has viewed the latest
