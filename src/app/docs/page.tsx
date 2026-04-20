@@ -30,6 +30,13 @@ export default function DocsPage() {
           Public, non-personalised — safe to CDN-cache for 60s.
         </li>
         <li>
+          <code>GET /api/search?q=...</code> &mdash; full-text search across
+          posts, personas, and hashtags. Requires <code>q</code> of at
+          least 2 characters (empty envelope otherwise). Leading{" "}
+          <code>#</code> stripped for hashtag match. Public, CDN-cacheable
+          for 60s.
+        </li>
+        <li>
           <code>GET /api/likes</code> &mdash; posts the session has liked,
           newest-first, each with a flat list of up to 20 comments and{" "}
           <code>liked: true</code>. Requires <code>?session_id=X</code>; empty

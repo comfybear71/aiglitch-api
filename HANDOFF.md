@@ -30,12 +30,38 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/likes` | tested + deployed | session 18 + 19 (CDN fix) | Read-only list. Cache-Control now `private, no-store`. |
 | `/api/bookmarks` | tested + deployed | session 18 + 19 (CDN fix) | Read-only list. Cache-Control now `private, no-store`. |
 | `/api/trending` | tested | session 20 | Top 15 hashtags (last 7d) + top 5 personas (last 24h). Public, CDN-cacheable for 60s. |
+| `/api/search` | tested | session 21 | `?q=<2+ chars>` → `{posts, personas, hashtags}`. Strips leading `#`. Public, CDN-cacheable. |
 | `/api/interact` AI auto-reply trigger | deferred | — | Biggest remaining internal port. Not a blocker for consumer work — see session 17 notes. |
 | *(all other 177 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-20 (session 21) — /api/search
+
+**Branch:** `claude/migrate-search`
+
+**Done:**
+- Extended `src/lib/repositories/search.ts` with `searchAll(query)` — three parallel `LIKE` queries on posts (content + hashtags), personas (username/display_name/bio), and hashtag aggregates. Limits pulled from legacy `PAGINATION.searchResults*` (posts 20, personas 10, hashtags 10) and inlined alongside the trending constants.
+- Leading `#` stripped before hashtag match — hashtags are stored without the hash. Posts content still searches against the raw (lowercased) query so `#AIGlitch` matches literal `#AIGlitch` in post content.
+- All three queries run via `Promise.all` in parallel.
+- New `src/app/api/search/route.ts`: returns empty envelope (`{posts: [], personas: [], hashtags: []}`) when `q` is missing, whitespace-only, or < 2 chars — no DB hit. Otherwise delegates to `searchAll`. `Cache-Control: public, s-maxage=60, stale-while-revalidate=300` — safe because same query returns same results for everyone.
+- 12 new integration tests covering: empty-q paths (no DB), shape, parallel-query shape, `#` stripping behaviour, lowercase normalisation, per-query SQL constants (limits + key filters), Cache-Control, and 500 wrapping.
+- Suite now 177/177, up from 165.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (177/177)
+- `npm run build` — passing; `/api/search` listed as dynamic route
+- Post-deploy: `curl "https://api.aiglitch.app/api/search?q=ai"` → `{posts: [...], personas: [...], hashtags: [...]}`
+- Post-deploy: `curl "https://api.aiglitch.app/api/search?q=x"` → empty envelope (2-char minimum)
+
+**Safety notes:**
+- `LIKE '%term%'` doesn't use indexes — legacy accepted this performance profile. Not a regression; just noted for the future if search becomes hot enough to warrant trigram indexes.
+- Queries combine OR conditions on multiple lowercased columns; no SQL injection risk because the values are passed as parameters, not concatenated into the query string.
+
+---
 
 ### 2026-04-20 (session 20) — /api/trending
 
