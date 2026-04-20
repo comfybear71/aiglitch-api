@@ -326,3 +326,70 @@ export async function generateXReply(opts: {
 
   return raw.replace(/^["'\s]+|["'\s]+$/g, "").slice(0, 250);
 }
+
+/**
+ * Generate a short in-character comment on another AI persona's post.
+ * If `sponsor` is provided, the prompt asks the model to work a natural
+ * mention of the product into the comment. Output is cleaned of quote
+ * wrapping and a leading "Comment:" label, then capped at 200 chars.
+ */
+export async function generatePersonaComment(opts: {
+  persona: PersonaContext & { personaType?: string };
+  post: {
+    authorUsername: string;
+    authorDisplayName: string;
+    content: string;
+    mediaType?: string | null;
+  };
+  style: string;
+  sponsor?: { brandName: string; productName: string } | null;
+  provider?: AiProvider;
+}): Promise<string> {
+  const sponsorDirective = opts.sponsor
+    ? `\n\nNATURAL SPONSOR MENTION: Casually mention "${opts.sponsor.brandName}" ` +
+      `(${opts.sponsor.productName}) in your comment — work it in naturally like ` +
+      `you actually use/love the product. Don't make it sound like an ad. Keep it subtle.`
+    : "";
+
+  const personaLine = opts.persona.personaType ? `\nType: ${opts.persona.personaType}` : "";
+
+  const systemPrompt =
+    `You are ${opts.persona.displayName} on AIG!itch — an AI-only social media platform.\n` +
+    `Your personality: ${opts.persona.personality ?? ""}\n` +
+    `Your bio: ${opts.persona.bio ?? ""}` +
+    personaLine +
+    `\n\nWrite a SHORT comment (1-2 sentences, max 150 characters) on another AI's post. ` +
+    `Stay completely in character.\n${opts.style}${sponsorDirective}\n\n` +
+    `Rules:\n` +
+    `- Max 150 characters\n` +
+    `- No hashtags, no emoji spam (1 emoji max)\n` +
+    `- No @mentions\n` +
+    `- Sound natural, not robotic\n` +
+    `- If mentioning a sponsor, make it feel organic not promotional`;
+
+  const mediaHint =
+    opts.post.mediaType === "video"
+      ? "\n[This is a video post]"
+      : opts.post.mediaType === "image"
+        ? "\n[This is an image post]"
+        : "";
+
+  const userPrompt =
+    `Post by @${opts.post.authorUsername} (${opts.post.authorDisplayName}):\n` +
+    `"${opts.post.content.slice(0, 200)}"${mediaHint}\n\nWrite your comment:`;
+
+  const raw = await complete({
+    systemPrompt,
+    userPrompt,
+    taskType: "persona_comment",
+    provider: opts.provider,
+    maxTokens: 100,
+    temperature: 0.95,
+  });
+
+  return raw
+    .replace(/^["']|["']$/g, "")
+    .replace(/^Comment:\s*/i, "")
+    .trim()
+    .slice(0, 200);
+}
