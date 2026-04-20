@@ -40,6 +40,12 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/friends` | tested | session 34 | GET default = `{friends}`; `?type=following` / `?type=ai_followers`. POST `add_friend` creates bidirectional row pair + awards +25 GLITCH both sides. 404/400/409 legacy error shapes. |
 | `/api/friend-shares` | tested | session 36 | GET inbox joins sender+post+persona; returns `{shares, unread}`. POST `share` (verifies friendship, INSERTs row) + `mark_read` (bulk update). 400/403/404 legacy error shapes. Private, no-store. |
 | `/api/suggest-feature` | tested | session 37 | Public POST form. GitHub Issues API (`GITHUB_TOKEN`) primary path; `feature_suggestions` table fallback. Always returns 200 on non-title path — best-effort. |
+| `/api/token/metadata` | tested | session 38 | Metaplex SPL token metadata JSON for §GLITCH. Public CDN (1h fresh, 1d SWR). CORS open. |
+| `/api/token/logo` | tested | session 38 | SVG logo. Public CDN (1d fresh, 7d SWR). CORS open. |
+| `/api/token/logo.png` | tested | session 38 | 302 redirect to `/api/token/logo`. |
+| `/api/token/token-list` | tested | session 38 | Jupiter-compatible Solana Token List Standard JSON. |
+| `/api/token/verification` | tested | session 38 | Admin reference bundle with submission guides for Jupiter / CoinGecko / CMC / DexScreener / Birdeye. `no-cache`. |
+| `/api/token/dexscreener` | tested | session 38 | DexScreener Enhanced Token Info. `?tokenAddresses=` batch support (returns `[]` when GLITCH not in the list). |
 | `/api/sponsor/inquiry` | tested | session 37 | Public POST form. 5-per-IP-per-hour in-memory rate limit. Validates company+email+message. INSERT `sponsors` with `status='inquiry'`. |
 | `/api/meatlab` GET + POST + PATCH | tested | session 34–35 | GET session 34 (public gallery / creator / own). POST session 35 = new submission to moderation queue (status=pending); sniffs image/video from URL or explicit media_type. PATCH session 35 = partial social-handle updates with COALESCE. `/api/meatlab/upload` (Vercel Blob client flow) still on legacy. |
 | `/api/coins` (Slice 1 — GET) | tested | session 27 | Balance + lifetime_earned + recent transactions (newest 20). Missing session_id returns zeros (legacy parity). `private, no-store`. Closes the loop on coin writes already live inside `/api/interact`. |
@@ -53,6 +59,26 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 ---
 
 ## Session log
+
+### 2026-04-20 (session 38) — /api/token/* batch (6 routes)
+
+**Branch:** `claude/migrate-token-routes`
+
+**Done:**
+- Ported all 6 `/api/token/*` routes: `metadata`, `logo`, `logo.png`, `token-list`, `verification`, `dexscreener`.
+- New `src/lib/solana-config.ts`: slim config module with `getAppBaseUrl`, `GLITCH_TOKEN_MINT_STR`, `TREASURY_WALLET_STR`, `ADMIN_WALLET_STR`, `METEORA_GLITCH_SOL_POOL`. Every value reads an `NEXT_PUBLIC_*` env var with a mainnet-default fallback. No `@solana/web3.js` dependency — these routes are pure string/JSON generation; the full Solana client ports later with Phase 8 trading.
+- **Base URL gotcha preserved.** `getAppBaseUrl()` defaults to `https://aiglitch.app`, not `https://api.aiglitch.app`. Aggregators (Jupiter, DexScreener, CoinGecko) cached the on-chain metadata URI that points at the consumer domain; the frontend's `beforeFiles` rewrite proxies `/api/token/*` back to this backend. Returning `api.aiglitch.app` in metadata would drift aggregator caches. Override via `NEXT_PUBLIC_APP_URL` if the on-chain URI ever changes.
+- 9 smoke tests consolidated into one file (`src/app/api/token/all-token-routes.test.ts`) since these endpoints are pure static JSON/SVG/302 with no inputs. Covers Content-Type, Cache-Control, CORS, key body fields per endpoint, and DexScreener batch filtering.
+- Suite now **394/394**, up from 385.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (394/394)
+- `npm run build` — passing; all 6 token routes registered as dynamic
+
+**Phase 3 progress:** 16 of ~20 small routes done. Remaining: `/api/activity`, `/api/activity-throttle`, `/api/nft/image`, `/api/nft/metadata`, `/api/channels/feed`, `/api/personas/:id/wallet-balance`, `/api/meatlab/upload`.
+
+---
 
 ### 2026-04-20 (session 37) — /api/suggest-feature + /api/sponsor/inquiry (public forms)
 
