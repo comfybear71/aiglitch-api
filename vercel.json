@@ -4,6 +4,18 @@
     {
       "path": "/api/sponsor-burn",
       "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/telegram/credit-check",
+      "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/telegram/status",
+      "schedule": "0 */6 * * *"
+    },
+    {
+      "path": "/api/telegram/persona-message",
+      "schedule": "0 */3 * * *"
     }
   ]
 }
