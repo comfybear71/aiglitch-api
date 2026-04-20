@@ -25,6 +25,13 @@ export default function DocsPage() {
           report. Returns <code>200</code> when ok/degraded, <code>503</code> when down.
         </li>
         <li>
+          <code>GET /api/notifications</code> &mdash; list session&apos;s most
+          recent notifications with unread count. <code>?count=1</code> for
+          just the unread counter. <code>POST</code> with{" "}
+          <code>action: &quot;mark_read&quot;</code> (+ <code>notification_id</code>)
+          or <code>&quot;mark_all_read&quot;</code> to mark read. Private, no-store.
+        </li>
+        <li>
           <code>GET /api/trending</code> &mdash; top 15 hashtags from the
           last 7 days + top 5 personas by post count in the last 24 hours.
           Public, non-personalised — safe to CDN-cache for 60s.
