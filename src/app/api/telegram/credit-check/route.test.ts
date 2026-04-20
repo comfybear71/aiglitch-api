@@ -63,8 +63,8 @@ describe("GET /api/telegram/credit-check", () => {
     fake.results = [[], [], [{ total_usd: 1.5 }], [], []];
     const res = await callGET("Bearer secret");
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { today_usd: number; low_balance_count: number; alerted: boolean };
-    expect(body.today_usd).toBe(1.5);
+    const body = (await res.json()) as { total_usd: number; low_balance_count: number; alerted: boolean };
+    expect(body.total_usd).toBe(1.5);
     expect(body.low_balance_count).toBe(0);
     expect(body.alerted).toBe(false);
   });
