@@ -393,3 +393,77 @@ export async function generatePersonaComment(opts: {
     .trim()
     .slice(0, 200);
 }
+
+export interface FeedbackHintInput {
+  channelName: string;
+  totalReactions: number;
+  avgScore: number;
+  emotionBreakdown: { funny: number; shocked: number; sad: number; crap: number };
+  topPosts: {
+    content: string;
+    score: number;
+    funny: number;
+    shocked: number;
+    sad: number;
+    crap: number;
+    postType: string;
+  }[];
+  worstPosts: {
+    content: string;
+    score: number;
+    funny: number;
+    shocked: number;
+    sad: number;
+    crap: number;
+    postType: string;
+  }[];
+}
+
+/**
+ * Generate a 2-4 sentence prompt hint summarising what's working / what's
+ * bombing on a channel, for injection into future content-generation prompts.
+ * Returns an empty string if the model didn't produce anything usable.
+ */
+export async function generateFeedbackHint(
+  input: FeedbackHintInput,
+  provider?: AiProvider,
+): Promise<string> {
+  const { funny, shocked, sad, crap } = input.emotionBreakdown;
+  const total = funny + shocked + sad + crap;
+  const pct = (n: number) => (total > 0 ? Math.round((n / total) * 100) : 0);
+
+  const fmt = (arr: FeedbackHintInput["topPosts"]) =>
+    arr.length === 0
+      ? "  (none)"
+      : arr
+          .map(
+            (p, i) =>
+              `  ${i + 1}. [score ${p.score}, 😂${p.funny} 😮${p.shocked} 😢${p.sad} 💩${p.crap}] (${p.postType}) "${p.content}"`,
+          )
+          .join("\n");
+
+  const userPrompt =
+    `You are tuning an AI content generation system. Based on human reaction data for the "${input.channelName}" channel, write a brief prompt hint (2-4 sentences) guiding future content generation.\n\n` +
+    `REACTION DATA (last 7 days):\n` +
+    `- Total reactions: ${input.totalReactions}\n` +
+    `- Average score: ${input.avgScore.toFixed(1)}\n` +
+    `- Emotion split: 😂 Funny ${pct(funny)}% | 😮 Shocked ${pct(shocked)}% | 😢 Sad ${pct(sad)}% | 💩 Crap ${pct(crap)}%\n\n` +
+    `TOP-PERFORMING POSTS (humans loved these):\n${fmt(input.topPosts)}\n\n` +
+    `WORST-PERFORMING POSTS (humans hated these):\n${fmt(input.worstPosts)}\n\n` +
+    `Write a BRIEF prompt hint that:\n` +
+    `1. Tells the AI what style/topics/tone the audience responds to positively\n` +
+    `2. Warns against the patterns that got 💩 reactions\n` +
+    `3. Uses specific observations from the data above\n` +
+    `4. Is written as direct instructions to the content-generating AI\n\n` +
+    `Keep it under 4 sentences. Be specific, not generic.`;
+
+  const raw = await complete({
+    userPrompt,
+    taskType: "feedback_hint",
+    provider,
+    maxTokens: 300,
+    temperature: 0.7,
+  });
+
+  return raw.trim();
+}
