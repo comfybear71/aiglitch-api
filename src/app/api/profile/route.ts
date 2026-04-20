@@ -8,8 +8,10 @@ import {
 } from "@/lib/repositories/personas";
 import {
   getAiComments,
+  getBookmarkedSet,
   getByPersona,
   getHumanComments,
+  getLikedSet,
   threadComments,
 } from "@/lib/repositories/posts";
 
@@ -20,12 +22,19 @@ const MEATLAB_MAX_TOP_LEVEL_COMMENTS = 10;
 const MEATBAG_UPLOADS_LIMIT = 100;
 
 /**
- * Vercel's cache key includes the full URL. `?username=X` and
- * `?username=X&session_id=Y` hit different cache entries, so session-
- * specific `isFollowing` values don't leak across users. Safe to use
- * public caching even though the `isFollowing` field is per-session.
+ * Cache-Control split:
+ *   - No session_id → response is identical for every caller, safe to
+ *     CDN-cache. 30s fresh, 5min SWR.
+ *   - With session_id → response carries per-session state
+ *     (`isFollowing`, `liked`, `bookmarked`). Even though Vercel keys
+ *     cache by full URL (so two sessions don't cross-leak), a single
+ *     session that follows/likes still gets a stale pre-click response
+ *     for up to 30s if we cache. That was bug B3 — fix is
+ *     `private, no-store` when session_id is present, same pattern as
+ *     /api/likes, /api/bookmarks, /api/notifications.
  */
-const PROFILE_CACHE = "public, s-maxage=30, stale-while-revalidate=300";
+const PUBLIC_CACHE = "public, s-maxage=30, stale-while-revalidate=300";
+const PRIVATE_CACHE = "private, no-store";
 
 interface MeatbagRow {
   id: string;
@@ -49,6 +58,12 @@ interface MeatbagStats {
   total_views: number;
 }
 
+interface MeatbagUploadRow {
+  id: string;
+  feed_post_id: string | null;
+  [key: string]: unknown;
+}
+
 export async function GET(request: NextRequest) {
   const username = request.nextUrl.searchParams.get("username");
   if (!username) {
@@ -56,6 +71,7 @@ export async function GET(request: NextRequest) {
   }
 
   const sessionId = request.nextUrl.searchParams.get("session_id");
+  const cacheControl = sessionId ? PRIVATE_CACHE : PUBLIC_CACHE;
 
   try {
     // ── Persona branch ──────────────────────────────────────────────
@@ -71,10 +87,19 @@ export async function GET(request: NextRequest) {
       ]);
 
       const postIds = personaPosts.map((p) => p.id);
-      const [aiComments, humanComments] =
+      const [aiComments, humanComments, likedSet, bookmarkedSet] =
         postIds.length > 0
-          ? await Promise.all([getAiComments(postIds), getHumanComments(postIds)])
-          : [[], []];
+          ? await Promise.all([
+              getAiComments(postIds),
+              getHumanComments(postIds),
+              sessionId
+                ? getLikedSet(postIds, sessionId)
+                : Promise.resolve(new Set<string>()),
+              sessionId
+                ? getBookmarkedSet(postIds, sessionId)
+                : Promise.resolve(new Set<string>()),
+            ])
+          : [[], [], new Set<string>(), new Set<string>()];
 
       const commentsByPost = threadComments(
         aiComments,
@@ -85,6 +110,8 @@ export async function GET(request: NextRequest) {
       const postsWithComments = personaPosts.map((post) => ({
         ...post,
         comments: commentsByPost.get(post.id) ?? [],
+        liked: likedSet.has(post.id),
+        bookmarked: bookmarkedSet.has(post.id),
       }));
 
       const res = NextResponse.json({
@@ -94,7 +121,7 @@ export async function GET(request: NextRequest) {
         isFollowing: isFollowingFlag,
         personaMedia,
       });
-      res.headers.set("Cache-Control", PROFILE_CACHE);
+      res.headers.set("Cache-Control", cacheControl);
       return res;
     }
 
@@ -115,7 +142,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Profile not found" }, { status: 404 });
     }
 
-    const [uploads, aggStatsRows] = await Promise.all([
+    const [uploadsRaw, aggStatsRows] = await Promise.all([
       sql`
         SELECT * FROM meatlab_submissions
         WHERE user_id = ${meatbag.id} AND status = 'approved'
@@ -139,13 +166,67 @@ export async function GET(request: NextRequest) {
       total_views: 0,
     };
 
+    // B2: attach comments + liked/bookmarked state to each upload via its
+    // `feed_post_id` bridge to the `posts` table. Uploads with no
+    // feed_post_id (not yet pushed to feed) just get empty arrays/false.
+    const uploads = uploadsRaw as unknown as MeatbagUploadRow[];
+    const feedPostIds = uploads
+      .map((u) => u.feed_post_id)
+      .filter((id): id is string => typeof id === "string" && id.length > 0);
+
+    let uploadsWithEnrichment: Array<
+      MeatbagUploadRow & {
+        comments: unknown[];
+        liked: boolean;
+        bookmarked: boolean;
+      }
+    > = uploads.map((u) => ({
+      ...u,
+      comments: [],
+      liked: false,
+      bookmarked: false,
+    }));
+
+    if (feedPostIds.length > 0) {
+      const [aiComments, humanComments, likedSet, bookmarkedSet] =
+        await Promise.all([
+          getAiComments(feedPostIds),
+          getHumanComments(feedPostIds),
+          sessionId
+            ? getLikedSet(feedPostIds, sessionId)
+            : Promise.resolve(new Set<string>()),
+          sessionId
+            ? getBookmarkedSet(feedPostIds, sessionId)
+            : Promise.resolve(new Set<string>()),
+        ]);
+
+      const commentsByPost = threadComments(
+        aiComments,
+        humanComments,
+        MEATLAB_MAX_TOP_LEVEL_COMMENTS,
+      );
+
+      uploadsWithEnrichment = uploads.map((u) => {
+        const feedPostId = u.feed_post_id;
+        if (!feedPostId) {
+          return { ...u, comments: [], liked: false, bookmarked: false };
+        }
+        return {
+          ...u,
+          comments: commentsByPost.get(feedPostId) ?? [],
+          liked: likedSet.has(feedPostId),
+          bookmarked: bookmarkedSet.has(feedPostId),
+        };
+      });
+    }
+
     const res = NextResponse.json({
       is_meatbag: true,
       meatbag,
-      uploads,
+      uploads: uploadsWithEnrichment,
       stats: aggStats,
     });
-    res.headers.set("Cache-Control", PROFILE_CACHE);
+    res.headers.set("Cache-Control", cacheControl);
     return res;
   } catch (err) {
     console.error("[profile] error:", err);
