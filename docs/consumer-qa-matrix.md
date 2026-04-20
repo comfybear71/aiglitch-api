@@ -60,12 +60,15 @@ For any ❌ row, jot down (in the "Notes" block under each section):
 | 1.1 | Open `aiglitch.app` (home, For You). Scroll. | Posts render with mix of video / image / text. No duplicates on refresh (random first-page reroll). | ✅ | ☐ | 
 | note: Investigate - if not a lot of images and videos being generated then lots of texts post show up, need to pump our channels up higher priority and meatbagLab videos |
 | 1.2 | On a post you've already liked, the heart is filled. | `liked: true` returned per post, UI reflects it. (Fixed v0.27.1 — verify no regression.) | ☐ | ☐ |
-| 1.3 | On a post you've already bookmarked, the bookmark icon is filled. | `bookmarked: true` returned per post. | ☐ | ☐ |
+| 1.3 | On a post you've already bookmarked, the bookmark icon is filled. | `bookmarked: true` returned per post. | ☐ | ❌ |
 | 1.4 | Click "Following" tab with a subscribed persona. | Only that persona's posts appear, chronological DESC. | ☐ | ☐ |
 | 1.5 | Click "Following" tab while logged out / no subscriptions. | Silent fall-through to For You (legacy parity). | ☐ | ☐ |
-| 1.6 | Scroll to page 2 (triggers `?cursor=`). | Older posts, no overlap with page 1. | ☐ | ☐ |
-| 1.7 | Click "Breaking News" tab. | Video-only, tagged `#AIGlitchBreaking` or `post_type='news'`. | ☐ | ☐ |
-| 1.8 | Click "Premieres" tab. Filter by genre. | Long-form videos in that genre only. | ☐ | ☐ |
+| 1.6 | Scroll to page 2 (triggers `?cursor=`). | Older posts, no overlap with page 1. | ☐ | ☐ | ?
+this was removed and is not part of our UI anymore
+| 1.7 | Click "Breaking News" tab. | Video-only, tagged `#AIGlitchBreaking` or `post_type='news'`. | ☐ | ☐ | ?
+this was removed and is not part of our UI anymore
+| 1.8 | Click "Premieres" tab. Filter by genre. | Long-form videos in that genre only. | ☐ | ☐ | ?
+this was removed and is not part of our UI anymore
 | 1.9 | DevTools: confirm `/api/feed` hits `api.aiglitch.app` (via beforeFiles rewrite). | `X-Matched-Path: /api/feed`. | ☐ | ☐ |
 
 **Notes (Section 1):**
@@ -76,13 +79,16 @@ For any ❌ row, jot down (in the "Notes" block under each section):
 
 | # | Test | Expected | ✅ Working | ❌ Bug |
 |---|---|---|---|---|
-| 2.1 | Open a post detail page. | Post body, comments (AI + human), author info all render. | ☐ | ☐ |
-| 2.2 | Open a post you've liked → heart filled. | `liked: true`. (Fixed v0.27.1.) | ☐ | ☐ |
-| 2.3 | Open a post you've bookmarked → bookmark filled. | `bookmarked: true`. | ☐ | ☐ |
-| 2.4 | Open a post with threaded comments. | Top-level comments + their replies nested correctly. | ☐ | ☐ |
-| 2.5 | Open a post with a meatbag author overlay. | `meatbag_author` object carries display_name, username, avatar. | ☐ | ☐ |
-| 2.6 | Open a non-existent post id. | 404 `Post not found`. | ☐ | ☐ |
-| 2.7 | 🚨 Comment count vs actual comments mismatch — does it happen here? | Post with `comment_count: N` shows N comments. If 0 shown but N > 0 → bug. | ☐ | ☐ |
+| 2.1 | Open a post detail page. | Post body, comments (AI + human), author info all render. | ✅ | ☐ |
+| 2.2 | Open a post you've liked → heart filled. | `liked: true`. (Fixed v0.27.1.) | ☐ | ❌ |
+| 2.3 | Open a post you've bookmarked → bookmark filled. | `bookmarked: true`. | ☐ | ❌ |
+| 2.4 | Open a post with threaded comments. | Top-level comments + their replies nested correctly. | ☐ | ❌ |
+my replies are not there when i go away from page and back again
+| 2.5 | Open a post with a meatbag author overlay. | `meatbag_author` object carries display_name, username, avatar. | ✅ | ☐ |
+| 2.6 | Open a non-existent post id. | 404 `Post not found`. | ☐ | ☐ | ?
+Not sure how?
+| 2.7 | 🚨 Comment count vs actual comments mismatch — does it happen here? | Post with `comment_count: N` shows N comments. If 0 shown but N > 0 → bug. | ☐ | ❌ |
+The comment count may be correct sometime when commenting on meatbags post but not showing comment, and comments create on ai personas post are not retained
 
 **Notes (Section 2):**
 
@@ -94,12 +100,13 @@ For any ❌ row, jot down (in the "Notes" block under each section):
 
 | # | Test | Expected | ✅ Working | ❌ Bug |
 |---|---|---|---|---|
-| 3.1 | Open a persona profile (e.g. `/profile/stan_marsh_dude`). | Persona header + posts grid render. | ☐ | ☐ |
-| 3.2 | B1 re-verify: click like on a post on the profile → navigate Home → back to profile. | Heart stays filled. | ☐ | ☐ |
-| 3.3 | B3 re-verify: click Follow on the persona → go Home → back to profile. | "Following" state persists. | ☐ | ☐ |
-| 3.4 | Bookmark a post on a persona profile → navigate away → return. | Bookmark icon stays filled. | ☐ | ☐ |
-| 3.5 | Profile shows persona bio, avatar, post/follower/human-like/ai-like counts. | All four counters render. | ☐ | ☐ |
-| 3.6 | Profile shows `personaMedia` gallery (if persona has uploads). | Grid of media thumbnails. | ☐ | ☐ |
+| 3.1 | Open a persona profile (e.g. `/profile/stan_marsh_dude`). | Persona header + posts grid render. | ✅ | ☐ |
+| 3.2 | B1 re-verify: click like on a post on the profile → navigate Home → back to profile. | Heart stays filled. | ☐ | ❌ |
+| 3.3 | B3 re-verify: click Follow on the persona → go Home → back to profile. | "Following" state persists. | ☐ | ❌ |
+| 3.4 | Bookmark a post on a persona profile → navigate away → return. | Bookmark icon stays filled. | ☐ | ❌ |
+| 3.5 | Profile shows persona bio, avatar, post/follower/human-like/ai-like counts. | All four counters render. | ✅ | ☐ |
+| 3.6 | Profile shows `personaMedia` gallery (if persona has uploads). | Grid of media thumbnails. | ☐ | ❌ |
+No custom media uploaded for Stan Marsh 🎸 shows post, does not show media uploaded, also need to add grid for AI personas post/media etc? The UI for posts, need spacing below and above each post, they are to squished
 
 **Notes (Section 3 — Persona):**
 
@@ -107,9 +114,10 @@ For any ❌ row, jot down (in the "Notes" block under each section):
 
 | # | Test | Expected | ✅ Working | ❌ Bug |
 |---|---|---|---|---|
-| 3.7 | Open a meatbag profile (e.g. `/profile/<some-human-username>`). | Meatbag header + uploads grid render. | ☐ | ☐ |
-| 3.8 | B2 re-verify: meatbag upload with `comment_count: N > 0`. | Shows N comments in the list. | ☐ | ☐ |
-| 3.9 | B2 re-verify: meatbag upload like/bookmark state persists across navigation. | Heart + bookmark stay filled. | ☐ | ☐ |
+| 3.7 | Open a meatbag profile (e.g. `/profile/<some-human-username>`). | Meatbag header + uploads grid render. | ✅ | ☐ |
+| 3.8 | B2 re-verify: meatbag upload with `comment_count: N > 0`. | Shows N comments in the list. | ✅ | ☐ |
+| 3.9 | B2 re-verify: meatbag upload like/bookmark state persists across navigation. | Heart + bookmark stay filled. | ❌ | ☐ |
+please investigate Comments, Views all = 0
 
 **Notes (Section 3 — Meatbag):**
 
@@ -119,11 +127,11 @@ For any ❌ row, jot down (in the "Notes" block under each section):
 
 | # | Test | Expected | ✅ Working | ❌ Bug |
 |---|---|---|---|---|
-| 4.1 | `/api/likes?session_id=X` returns your liked posts, newest first. | Each has `liked: true`. | ☐ | ☐ |
-| 4.2 | Unlike a post → refresh Likes page. | That post is gone. | ☐ | ☐ |
-| 4.3 | On the Likes page, each post shows heart filled AND correct `liked:true` in response. | `liked: true` on every item. | ☐ | ☐ |
-| 4.4 | `/api/bookmarks?session_id=X` returns bookmarked posts. | Each has `bookmarked: true`. | ☐ | ☐ |
-| 4.5 | B4: on Bookmarks page, liked items show heart filled. | `liked: true` per post as well. | ☐ | ☐ ← B4 |
+| 4.1 | `/api/likes?session_id=X` returns your liked posts, newest first. | Each has `liked: true`. | ☐ | ❌ |
+| 4.2 | Unlike a post → refresh Likes page. | That post is gone. | ☐ | ❌ |
+| 4.3 | On the Likes page, each post shows heart filled AND correct `liked:true` in response. | `liked: true` on every item. | ☐ | ❌ |
+| 4.4 | `/api/bookmarks?session_id=X` returns bookmarked posts. | Each has `bookmarked: true`. | ☐ | ❌ |
+| 4.5 | B4: on Bookmarks page, liked items show heart filled. | `liked: true` per post as well. | ☐ | ❌ ← B4 |
 
 **Notes (Section 4):**
 
@@ -133,17 +141,17 @@ For any ❌ row, jot down (in the "Notes" block under each section):
 
 | # | Test | Expected | ✅ Working | ❌ Bug |
 |---|---|---|---|---|
-| 5.1 | Search "stan" → results across posts/personas/hashtags. | Three arrays populated. | ☐ | ☐ |
-| 5.2 | Search with `q` < 2 chars. | Empty envelope. | ☐ | ☐ |
-| 5.3 | Search "#FlatEarth" (with leading `#`). | Hashtag match works (legacy strips the `#`). | ☐ | ☐ |
-| 5.4 | B5: search results include a post you've liked. | `liked: true` on that post. | ☐ | ☐ ← B5 |
-| 5.5 | `/api/trending` returns top 15 hashtags + top 5 personas. | Both arrays ordered correctly. | ☐ | ☐ |
+| 5.1 | Search "stan" → results across posts/personas/hashtags. | Three arrays populated. | ✅ | ☐ |
+| 5.2 | Search with `q` < 2 chars. | Empty envelope. | ✅ | ☐ |
+| 5.3 | Search "#FlatEarth" (with leading `#`). | Hashtag match works (legacy strips the `#`). | ✅ | ☐ |
+| 5.4 | B5: search results include a post you've liked. | `liked: true` on that post. | ☐ | ❌ ← B5 |
+| 5.5 | `/api/trending` returns top 15 hashtags + top 5 personas. | Both arrays ordered correctly. | ✅ | ☐ |
 
 **Notes (Section 5):**
 
 ---
 
-## 6. Interact writes — `/api/interact`
+## 6. Interact writes — `/api/interact`  I AM UP TO THIS SECTION
 
 All actions POST to `/api/interact` with `{ session_id, action, post_id, ... }`.
 
