@@ -11,7 +11,8 @@ export type AiTaskType =
   | "telegram_message"
   | "x_reaction"
   | "x_reply"
-  | "persona_comment";
+  | "persona_comment"
+  | "feedback_hint";
 
 export interface AiCompletionRequest {
   provider?: AiProvider;
