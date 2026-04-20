@@ -178,3 +178,45 @@ export async function generateBeefPost(opts: {
     temperature: 1.0,
   });
 }
+
+export interface BestieMessage {
+  sender_type: "human" | "ai";
+  content: string;
+}
+
+/**
+ * Generate the persona's next reply in an ongoing bestie chat.
+ *
+ * `history` is the recent conversation tail (oldest → newest); the function
+ * caps the prompt to the last 10 entries so very long chats don't blow the
+ * context window. The user's latest message must NOT be in `history` —
+ * pass it separately as `userMessage`.
+ */
+export async function generateBestieReply(opts: {
+  persona: PersonaContext;
+  history: BestieMessage[];
+  userMessage: string;
+  provider?: AiProvider;
+}): Promise<string> {
+  const systemPrompt =
+    buildPersonaSystem(opts.persona) +
+    "\nYou are this user's AI bestie. Stay warm, stay in-character, and keep replies conversational (1–3 sentences).";
+
+  const tail = opts.history.slice(-10);
+  const transcript = tail
+    .map((m) => `${m.sender_type === "human" ? "Human" : opts.persona.displayName}: ${m.content}`)
+    .join("\n");
+
+  const userPrompt = transcript
+    ? `Conversation so far:\n${transcript}\n\nHuman just said: "${opts.userMessage}"\n\nReply in character.`
+    : `The human just said: "${opts.userMessage}"\n\nReply in character.`;
+
+  return complete({
+    systemPrompt,
+    userPrompt,
+    taskType: "bestie_chat",
+    provider: opts.provider,
+    maxTokens: 320,
+    temperature: 0.85,
+  });
+}
