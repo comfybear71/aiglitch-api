@@ -6,14 +6,17 @@
  *   - `?creator=<username-or-id>`    → one creator's profile + their posts
  *   - default (with session_id)      → user's own submissions (all statuses)
  *
- * POST (new submission) + PATCH (social handle update) defer to a
- * follow-up PR — see /api/meatlab/route.ts notes.
+ * POST registers a new submission after the client has uploaded media
+ * to Vercel Blob (via the separate `/api/meatlab/upload` endpoint — not
+ * migrated here). PATCH updates the session's social-handle columns on
+ * `human_users`.
  *
  * Legacy runs CREATE TABLE IF NOT EXISTS + ALTER TABLE on every request
  * as a safeMigrate safety net. We skip those here — schema is owned by
  * aiglitch during migration, the tables are already in Neon.
  */
 
+import { randomUUID } from "node:crypto";
 import { getDb } from "@/lib/db";
 
 const DEFAULT_LIMIT = 20;
@@ -237,4 +240,97 @@ export async function listCreatorFeedPosts(
   } catch {
     return [];
   }
+}
+
+// ── Writes ────────────────────────────────────────────────────────
+
+export interface SubmissionAuthor {
+  id: string;
+  display_name: string;
+  username: string | null;
+}
+
+/**
+ * Lookup the human_users row that owns this session. Returns null when
+ * the session doesn't exist — POST uses this to distinguish 401 "invalid
+ * session" from a downstream DB failure.
+ */
+export async function getSubmissionAuthor(
+  sessionId: string,
+): Promise<SubmissionAuthor | null> {
+  const sql = getDb();
+  const rows = (await sql`
+    SELECT id, display_name, username FROM human_users
+    WHERE session_id = ${sessionId}
+    LIMIT 1
+  `) as unknown as SubmissionAuthor[];
+  return rows.length > 0 ? (rows[0] ?? null) : null;
+}
+
+export interface CreateSubmissionInput {
+  sessionId: string;
+  userId: string;
+  mediaUrl: string;
+  mediaType: string;
+  title?: string;
+  description?: string;
+  aiTool?: string;
+  tags?: string;
+}
+
+/**
+ * Create a `meatlab_submissions` row in the moderation queue
+ * (`status='pending'`). Returns the generated id. Media sniffing
+ * (`.mp4` / `.webm` / `.mov` / explicit type) happens in the route —
+ * this helper takes whatever the caller decides.
+ *
+ * `title` / `description` / `ai_tool` / `tags` default to empty strings
+ * when absent — legacy parity (NOT NULL DEFAULT '' columns).
+ */
+export async function createSubmission(
+  input: CreateSubmissionInput,
+): Promise<string> {
+  const sql = getDb();
+  const id = randomUUID();
+  await sql`
+    INSERT INTO meatlab_submissions
+      (id, session_id, user_id, title, description, media_url, media_type,
+       ai_tool, tags, status, created_at, updated_at)
+    VALUES
+      (${id}, ${input.sessionId}, ${input.userId},
+       ${input.title ?? ""}, ${input.description ?? ""},
+       ${input.mediaUrl}, ${input.mediaType},
+       ${input.aiTool ?? ""}, ${input.tags ?? ""},
+       'pending', NOW(), NOW())
+  `;
+  return id;
+}
+
+export interface SocialUpdateInput {
+  sessionId: string;
+  xHandle?: string | null;
+  instagramHandle?: string | null;
+  tiktokHandle?: string | null;
+  youtubeHandle?: string | null;
+  websiteUrl?: string | null;
+}
+
+/**
+ * Partial update of the session's social handles on `human_users`.
+ * `COALESCE(${val}, current)` preserves the existing value when the
+ * caller omits a field — matches legacy, which only overwrites fields
+ * the client explicitly sends.
+ */
+export async function updateSocials(input: SocialUpdateInput): Promise<void> {
+  const sql = getDb();
+  await sql`
+    UPDATE human_users
+    SET x_handle         = COALESCE(${input.xHandle ?? null}, x_handle),
+        instagram_handle = COALESCE(${input.instagramHandle ?? null}, instagram_handle),
+        tiktok_handle    = COALESCE(${input.tiktokHandle ?? null}, tiktok_handle),
+        youtube_handle   = COALESCE(${input.youtubeHandle ?? null}, youtube_handle),
+        website_url      = COALESCE(${input.websiteUrl ?? null}, website_url),
+        updated_at       = NOW()
+    WHERE session_id = ${input.sessionId}
+  `;
 }

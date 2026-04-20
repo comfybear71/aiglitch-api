@@ -1,12 +1,15 @@
 import { type NextRequest, NextResponse } from "next/server";
 import {
+  createSubmission,
   findCreator,
   getCreatorStats,
+  getSubmissionAuthor,
   listApproved,
   listCreatorApprovedSubmissions,
   listCreatorFeedPosts,
   listOwnSubmissions,
   MAX_LIMIT,
+  updateSocials,
 } from "@/lib/repositories/meatlab";
 import {
   getAiComments,
@@ -148,33 +151,136 @@ function clampLimit(raw: string | null): number {
   return Math.min(parsed, MAX_LIMIT);
 }
 
+interface PostBody {
+  session_id?: string;
+  media_url?: string;
+  media_type?: string;
+  title?: string;
+  description?: string;
+  ai_tool?: string;
+  tags?: string;
+}
+
 /**
- * POST + PATCH: new submission + social-handle updates.
+ * POST /api/meatlab — register a new submission.
  *
- * Deferred to a follow-up PR — POST needs Vercel Blob mechanics
- * (media_url validation, media_type sniffing, INSERT into
- * meatlab_submissions, user verification). PATCH is trivial but lands
- * with POST so both write paths migrate together.
+ * The actual file upload to Vercel Blob is a separate client-side flow
+ * (`/api/meatlab/upload`, not migrated here). By the time this handler
+ * runs, `media_url` already points at a blob; we just validate the
+ * session, sniff image vs video, and INSERT a row with
+ * `status='pending'` for the moderation queue.
  *
- * Returns 501 here so consumers fall through to legacy via the
- * strangler. Same pattern as the earlier /api/interact and /api/coins
- * deferred slices.
+ * Video detection matches legacy: explicit `media_type: "video"` OR a
+ * URL ending in `.mp4` / `.webm` / `.mov`.
  */
-export async function POST(): Promise<NextResponse> {
-  return methodNotYetMigrated("POST");
+export async function POST(request: NextRequest): Promise<NextResponse> {
+  const body = (await request.json().catch(() => ({}))) as PostBody;
+  const { session_id, media_url, media_type, title, description, ai_tool, tags } = body;
+
+  if (!session_id) {
+    return NextResponse.json(
+      { error: "session_id required" },
+      { status: 401 },
+    );
+  }
+  if (!media_url) {
+    return NextResponse.json(
+      {
+        error:
+          "media_url required — upload file first via /api/meatlab/upload",
+      },
+      { status: 400 },
+    );
+  }
+
+  try {
+    const user = await getSubmissionAuthor(session_id);
+    if (!user) {
+      return NextResponse.json(
+        { error: "Invalid session — please log in first" },
+        { status: 401 },
+      );
+    }
+
+    const isVideo =
+      media_type === "video" ||
+      media_url.includes(".mp4") ||
+      media_url.includes(".webm") ||
+      media_url.includes(".mov");
+
+    const id = await createSubmission({
+      sessionId: session_id,
+      userId: user.id,
+      mediaUrl: media_url,
+      mediaType: isVideo ? "video" : "image",
+      title,
+      description,
+      aiTool: ai_tool,
+      tags,
+    });
+
+    console.log(
+      `[meatlab] New submission from ${user.display_name} (${user.id}): ${isVideo ? "video" : "image"} — awaiting approval`,
+    );
+
+    return NextResponse.json({
+      success: true,
+      id,
+      status: "pending",
+      message:
+        "Your AI creation has been submitted to the MeatLab! An admin will review it shortly.",
+    });
+  } catch (err) {
+    console.error("[meatlab] POST error:", err);
+    return NextResponse.json(
+      { error: "Failed to save submission" },
+      { status: 500 },
+    );
+  }
 }
 
-export async function PATCH(): Promise<NextResponse> {
-  return methodNotYetMigrated("PATCH");
+interface PatchBody {
+  session_id?: string;
+  x_handle?: string | null;
+  instagram_handle?: string | null;
+  tiktok_handle?: string | null;
+  youtube_handle?: string | null;
+  website_url?: string | null;
 }
 
-function methodNotYetMigrated(method: string): NextResponse {
-  return NextResponse.json(
-    {
-      error: "method_not_yet_migrated",
-      method,
-      note: "This /api/meatlab write method is not yet migrated; use the legacy backend in the meantime.",
-    },
-    { status: 501 },
-  );
+/**
+ * PATCH /api/meatlab — partial update of the session's social handles
+ * on `human_users`. Only fields present in the body are overwritten;
+ * everything else is preserved via COALESCE in the UPDATE.
+ */
+export async function PATCH(request: NextRequest): Promise<NextResponse> {
+  const body = (await request.json().catch(() => ({}))) as PatchBody;
+  const { session_id, x_handle, instagram_handle, tiktok_handle, youtube_handle, website_url } = body;
+
+  if (!session_id) {
+    return NextResponse.json(
+      { error: "session_id required" },
+      { status: 401 },
+    );
+  }
+
+  try {
+    await updateSocials({
+      sessionId: session_id,
+      xHandle: x_handle ?? null,
+      instagramHandle: instagram_handle ?? null,
+      tiktokHandle: tiktok_handle ?? null,
+      youtubeHandle: youtube_handle ?? null,
+      websiteUrl: website_url ?? null,
+    });
+    return NextResponse.json({ success: true });
+  } catch (err) {
+    console.error("[meatlab] PATCH error:", err);
+    return NextResponse.json(
+      {
+        error: err instanceof Error ? err.message : String(err),
+      },
+      { status: 500 },
+    );
+  }
 }

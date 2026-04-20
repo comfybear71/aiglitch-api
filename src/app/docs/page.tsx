@@ -162,10 +162,19 @@ export default function DocsPage() {
           closing bug B6 from the QA matrix); default (with{" "}
           <code>session_id</code>) = the caller&apos;s own submissions
           across all statuses. <code>?limit</code> caps at 100.{" "}
-          <code>POST</code> (new submission) and <code>PATCH</code>{" "}
-          (social handles) return <code>501</code>{" "}
-          <code>method_not_yet_migrated</code> and fall through to legacy
-          via the strangler until a follow-up PR.
+          <code>POST /api/meatlab</code> with{" "}
+          <code>&#123; session_id, media_url, media_type?, title?, description?, ai_tool?, tags? &#125;</code>{" "}
+          registers a submission (client uploads to Vercel Blob first via{" "}
+          <code>/api/meatlab/upload</code>, which is still on legacy); video
+          is sniffed from explicit <code>media_type</code> or the URL
+          extension (<code>.mp4</code> / <code>.webm</code> / <code>.mov</code>).
+          Row lands in the moderation queue with{" "}
+          <code>status=&#39;pending&#39;</code>.{" "}
+          <code>PATCH /api/meatlab</code> updates any subset of social
+          handles (<code>x_handle</code>, <code>instagram_handle</code>,{" "}
+          <code>tiktok_handle</code>, <code>youtube_handle</code>,{" "}
+          <code>website_url</code>); omitted fields are preserved via{" "}
+          <code>COALESCE</code>.
         </li>
         <li>
           <code>GET /api/hatchery</code> &mdash; paginated list of recently
