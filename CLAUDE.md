@@ -76,7 +76,81 @@ Special cases:
 3. Small atomic commits. No PRs, merges, or tags from Claude — user drives those via GitHub UI.
 4. Per-endpoint safety gates: isolated build → tests first → run tests → manual verify → consumer migration → keep rollback path.
 5. Fix spiral protocol: count attempts aloud, stop after 3, output the stopped-template.
-6. End of session: push commits, deliver PR handoff (Rule 5 format), update HANDOFF.md.
+6. End of session: push commits, deliver PR handoff (Rule 5 format, pinned below), update HANDOFF.md.
+
+## Rule 5 — PR handoff format (MANDATORY, pinned from Master Rules v9)
+
+> Pinned verbatim so sessions can't drift. When a branch is ready to ship,
+> deliver the handoff in this EXACT format. Every section must be copy-paste
+> ready for GitHub's UI.
+
+**Required sections, in this order:**
+
+### 1. Compare URL
+Plain text, clickable:
+`https://github.com/comfybear71/<REPO>/compare/master...claude/<BRANCH>`
+
+### 2. PR Title
+Inside a code block:
+````
+```
+<one-line title, max 70 chars>
+```
+````
+
+### 3. PR Description
+Inside a markdown code block:
+````
+```markdown
+## Summary
+<1-3 sentence overview>
+
+## Changes
+- <file>: <what changed>
+
+## Test plan
+- [x] Type check passes
+- [ ] <manual verification steps>
+```
+````
+
+### 4. Merge instructions
+1. Open the Compare URL above
+2. Click "Create pull request"
+3. Scroll to bottom → ▼ dropdown → "Squash and merge"
+4. Click "Confirm squash and merge"
+5. Click "Delete branch"
+
+### 5. Release tag (MANDATORY)
+As a table:
+
+| Field | Value |
+|---|---|
+| **Tag name** | `v<semver>-<YYYY-MM-DD>` |
+| **Target** | `master` |
+| **Title** | `v<semver> — <short title>` |
+| **Create via** | `https://github.com/comfybear71/<REPO>/releases/new` |
+
+Then the tag description inside a code block:
+````
+```markdown
+## v<semver>
+
+### New
+- <what shipped>
+
+### Fixed
+- <what was fixed>
+```
+````
+
+**Rules about release tags:**
+- Every PR gets a tag. No exceptions. Small or large change.
+- Check existing tags first (`git tag --list` or GitHub Releases page).
+- Tag naming: patch `v1.2.3`, minor `v1.3.0`, major `v2.0.0`, docs `v1.2.3-docs`, recovery `v1.2.3-recovery`.
+- Never create the tag yourself — only suggest it. User creates via GitHub UI.
+
+**Enforcement:** before writing a handoff, re-read this section. Do not reconstruct the template from memory — use what's pinned here.
 
 ## Sacred files (never delete)
 
