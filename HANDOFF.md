@@ -33,12 +33,39 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/search` | tested | session 21 | `?q=<2+ chars>` → `{posts, personas, hashtags}`. Strips leading `#`. Public, CDN-cacheable. |
 | `/api/notifications` | tested | session 22 | GET list (+ `?count=1` for unread count only) + POST (`mark_read` / `mark_all_read`). Session-personalised → `private, no-store`. |
 | `/api/profile` | tested | session 23 | `?username=X` dispatches persona-first, meatbag-fallback, 404. `isFollowing` scoped by `?session_id`. Uses cache helper for persona/getStats/getMedia. |
+| `/api/events` | tested | session 24 | GET active/processing/completed events (+ `user_voted` when session passed). POST toggles vote. 404/400 error shapes. Legacy-parity: 200 with `{success:false}` on unexpected errors. |
 | `/api/interact` AI auto-reply trigger | deferred | — | Biggest remaining internal port. Not a blocker for consumer work — see session 17 notes. |
 | *(all other 177 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-20 (session 24) — /api/events
+
+**Branch:** `claude/migrate-events`
+
+**Done:**
+- New `src/lib/repositories/events.ts`: `listEvents(sessionId?)` and `toggleEventVote(eventId, sessionId)`. `listEvents` parses `target_persona_ids` from its JSON-string column form into an array (with a malformed-JSON fallback). `toggleEventVote` returns a discriminated union (`"voted" | "unvoted" | "event_not_found" | "event_inactive"`) so the route handler picks the right HTTP status.
+- New `src/app/api/events/route.ts`: GET returns `{success: true, events}` (Cache-Control `public, s-maxage=30, SWR=300`). POST validates body, toggles vote. 400/404 for anticipated failures. **Legacy-parity quirk: unexpected errors return 200 with `{success: false, error}` rather than 500** — legacy does this and I preserve it so mid-migration consumers don't break on a new status code they weren't prepared for.
+- Skipped the legacy's inline `CREATE TABLE IF NOT EXISTS community_events / community_event_votes` safeMigrate calls. Schema is owned by aiglitch during migration; tables already exist.
+- 15 new integration tests covering both paths. Suite now 216/216, up from 201.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (216/216)
+- `npm run build` — passing
+- Post-deploy: `curl "https://api.aiglitch.app/api/events"` → `{success: true, events: [...]}`
+- Post-deploy: POST `{"event_id":"<real>","session_id":"<yours>"}` → `{success: true, action: "voted", event_id}`; POST again → `"unvoted"`
+
+**Common public/session endpoints now complete.**
+Major categories still pending in the 179-route catalog: admin (~85), cron (21), OAuth (12), trading/wallet (~15), specialised subsystems (bestie chat, NFT marketplace, merch, marketing, Telegram, email). Each needs its own phase plan — next session should be a planning one rather than another solo port.
+
+**Safety notes:**
+- Non-transactional INSERT+UPDATE on vote toggle (legacy parity). Under extreme concurrency the vote_count can drift from the actual row count.
+- `community_event_votes` has `UNIQUE(event_id, session_id)` so a double-click can't double-vote even if both paths run before either INSERT lands.
+
+---
 
 ### 2026-04-20 (session 23) — /api/profile
 
