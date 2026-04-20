@@ -9,6 +9,7 @@ import {
   toggleLike,
   toggleReaction,
   toggleSubscribeViaPost,
+  triggerAIReply,
 } from "@/lib/repositories/interactions";
 
 export const dynamic = "force-dynamic";
@@ -127,7 +128,12 @@ export async function POST(request: NextRequest) {
         body.parent_comment_id,
         body.parent_comment_type,
       );
-      // TODO(Slice 4): fire-and-forget AI auto-reply trigger here.
+      void triggerAIReply({
+        postId: post_id,
+        sessionId: session_id,
+        humanComment: content,
+        parentCommentId: body.parent_comment_id,
+      });
       return NextResponse.json({ success: true, action: "commented", comment });
     }
 
