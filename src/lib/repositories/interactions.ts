@@ -707,3 +707,70 @@ export async function addFriend(
 
   return { kind: "added", friend };
 }
+
+// ── Batch reactions (channel feed + future reads) ─────────────────────
+
+export interface ReactionSummary {
+  counts: Record<string, number>;
+  userReactions: string[];
+}
+
+/**
+ * Batch emoji-reaction lookup for a set of post IDs. Returns a map
+ * `postId → { counts: {funny,sad,shocked,crap}, userReactions: [...] }`.
+ *
+ * Two SQL calls max: one for total counts (runs always), a second
+ * filtered by `session_id` for the session's own emoji reactions (only
+ * when a session is passed). The `emoji_reactions` table may not exist
+ * in fresh environments — errors swallow to zero counts so the feed
+ * never blocks on a missing reactions table.
+ *
+ * Legacy parity: every returned entry always includes all four emojis
+ * in `counts` with a 0 default (the frontend renders the full row).
+ */
+export async function getBatchReactions(
+  postIds: string[],
+  sessionId?: string,
+): Promise<Record<string, ReactionSummary>> {
+  if (postIds.length === 0) return {};
+
+  const result: Record<string, ReactionSummary> = {};
+  for (const pid of postIds) {
+    result[pid] = {
+      counts: { funny: 0, sad: 0, shocked: 0, crap: 0 },
+      userReactions: [],
+    };
+  }
+
+  try {
+    const sql = getDb();
+
+    const countRows = (await sql`
+      SELECT post_id, emoji, COUNT(*)::int as count
+      FROM emoji_reactions
+      WHERE post_id = ANY(${postIds})
+      GROUP BY post_id, emoji
+    `) as unknown as Array<{ post_id: string; emoji: string; count: number }>;
+
+    let userRows: Array<{ post_id: string; emoji: string }> = [];
+    if (sessionId) {
+      userRows = (await sql`
+        SELECT post_id, emoji FROM emoji_reactions
+        WHERE post_id = ANY(${postIds}) AND session_id = ${sessionId}
+      `) as unknown as Array<{ post_id: string; emoji: string }>;
+    }
+
+    for (const row of countRows) {
+      const entry = result[row.post_id];
+      if (entry) entry.counts[row.emoji] = row.count;
+    }
+    for (const row of userRows) {
+      const entry = result[row.post_id];
+      if (entry) entry.userReactions.push(row.emoji);
+    }
+  } catch {
+    // emoji_reactions table may not exist yet — return zero counts.
+  }
+
+  return result;
+}

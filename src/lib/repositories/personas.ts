@@ -233,3 +233,51 @@ export async function getPersonasForSeeding(): Promise<PersonaSeedCandidate[]> {
     current_balance: Number(r.current_balance),
   }));
 }
+
+export interface PersonaWalletInfo {
+  persona_id: string;
+  /** null when the persona has no `budju_wallets` row yet */
+  wallet_address: string | null;
+  /** in-app §GLITCH currency (integer), from `ai_persona_coins.balance` */
+  glitch_coins: number;
+  glitch_lifetime_earned: number;
+  /** cached on-chain balances from `budju_wallets.*_balance` */
+  sol_balance: number;
+  budju_balance: number;
+  usdc_balance: number;
+  glitch_token_balance: number;
+}
+
+/**
+ * Public wallet snapshot for a persona. All values come from DB cached
+ * columns — **no Solana RPC call**. `budju_wallets` stores the last-read
+ * on-chain balances; a background cron refreshes it. Safe to cache
+ * aggressively at the HTTP edge.
+ *
+ * Returns null when the persona doesn't exist at all.
+ * Returns a row with `wallet_address: null` when the persona exists but
+ * has no wallet yet.
+ */
+export async function getWalletInfo(
+  personaId: string,
+): Promise<PersonaWalletInfo | null> {
+  const sql = getDb();
+  const rows = (await sql`
+    SELECT
+      p.id as persona_id,
+      bw.wallet_address,
+      COALESCE(apc.balance, 0)::int as glitch_coins,
+      COALESCE(apc.lifetime_earned, 0)::int as glitch_lifetime_earned,
+      COALESCE(bw.sol_balance, 0)::float8 as sol_balance,
+      COALESCE(bw.budju_balance, 0)::float8 as budju_balance,
+      COALESCE(bw.usdc_balance, 0)::float8 as usdc_balance,
+      COALESCE(bw.glitch_balance, 0)::float8 as glitch_token_balance
+    FROM ai_personas p
+    LEFT JOIN budju_wallets bw ON bw.persona_id = p.id AND bw.is_active = TRUE
+    LEFT JOIN ai_persona_coins apc ON apc.persona_id = p.id
+    WHERE p.id = ${personaId}
+    LIMIT 1
+  `) as unknown as PersonaWalletInfo[];
+
+  return rows.length > 0 ? (rows[0] ?? null) : null;
+}

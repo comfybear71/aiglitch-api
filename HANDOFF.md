@@ -40,6 +40,8 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/friends` | tested | session 34 | GET default = `{friends}`; `?type=following` / `?type=ai_followers`. POST `add_friend` creates bidirectional row pair + awards +25 GLITCH both sides. 404/400/409 legacy error shapes. |
 | `/api/friend-shares` | tested | session 36 | GET inbox joins sender+post+persona; returns `{shares, unread}`. POST `share` (verifies friendship, INSERTs row) + `mark_read` (bulk update). 400/403/404 legacy error shapes. Private, no-store. |
 | `/api/suggest-feature` | tested | session 37 | Public POST form. GitHub Issues API (`GITHUB_TOKEN`) primary path; `feature_suggestions` table fallback. Always returns 200 on non-title path — best-effort. |
+| `/api/channels/feed` | tested | session 40 | Channel-specific TV-style feed (video only). Modes: default, `?cursor=`, `?shuffle=1&seed=&offset=`. Posts carry comments + bookmarked + liked + emoji reactions + `socialLinks`. Studios channel skips director-scene exclusion. |
+| `/api/personas/[id]/wallet-balance` | tested | session 40 | Public wallet snapshot. DB cached columns only (zero Solana RPC). Returns in-app + on-chain balances; `wallet_address: null` when no `budju_wallets` row. `public, s-maxage=30, SWR=300`. |
 | `/api/nft/image/[productId]` | tested | session 39 | SVG trading card render. Grokified image from `nft_product_images` when present, emoji fallback otherwise. Unknown productId renders fallback card. |
 | `/api/nft/metadata/[mint]` | tested | session 39 | Metaplex JSON for minted NFTs. `persona:` prefix branches to AI Bestie shape; marketplace branch pulls from `MARKETPLACE_PRODUCTS` + `minted_nfts`. |
 | `/api/token/metadata` | tested | session 38 | Metaplex SPL token metadata JSON for §GLITCH. Public CDN (1h fresh, 1d SWR). CORS open. |
@@ -61,6 +63,26 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 ---
 
 ## Session log
+
+### 2026-04-20 (session 40) — /api/channels/feed + /api/personas/[id]/wallet-balance
+
+**Branch:** `claude/migrate-channels-feed-and-wallet-balance`
+
+**Done:**
+- **`/api/personas/[id]/wallet-balance`**: tiny wrapper over a single joined SELECT. New `getWalletInfo(personaId)` + `PersonaWalletInfo` type on `repositories/personas.ts`. Zero Solana RPC — all values read from DB cached columns (`budju_wallets.*_balance`, `ai_persona_coins.balance` + `lifetime_earned`). 404 when persona missing; `wallet_address: null` when persona has no wallet yet. Public CDN (`s-maxage=30, SWR=300`). **Not the first Solana read I thought** — that still lands with Phase 8 trading when real on-chain queries are needed.
+- **`/api/channels/feed`**: channel-specific TV-style video-only feed. Three modes (default chronological, `?cursor=`, `?shuffle=1&seed=&offset=`) × two flavours (studios lets director-scene through, others exclude). Enrichment parallel-fetches AI + human comments, `getBookmarkedSet`, `getLikedSet` (**B-series fix pattern applied here too** — legacy never returned `liked` per post), `getBatchReactions` (new helper — emoji counts + session's own reactions), and `socialLinks` (from `marketing_posts`, swallows missing-table errors via `.catch(() => [])`). Also batched: channel subscription state + persona roster.
+- New `interactions.getBatchReactions(postIds, sessionId?)` helper ported from legacy. Two-SQL pattern (counts + user's own) with a try/catch swallow for the `emoji_reactions` table — may not exist in fresh environments.
+- 19 new tests (13 channels/feed + 6 wallet-balance). Suite now **440/440**, up from 421.
+- `/docs` entries added for both.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (440/440)
+- `npm run build` — passing; both routes registered as dynamic
+
+**Phase 3 progress:** 20 of ~20 small routes done. Remaining: `/api/activity`, `/api/activity-throttle`, `/api/meatlab/upload`. Phase 3 effectively wraps here — the three stragglers are all deferred-with-a-reason (cron fleet / Blob SDK).
+
+---
 
 ### 2026-04-20 (session 39) — /api/nft/image + /api/nft/metadata
 
