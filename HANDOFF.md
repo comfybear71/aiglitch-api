@@ -48,6 +48,30 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 
 ## Session log
 
+### 2026-04-20 (session 31) — fix: /api/profile B1 + B2 + B3
+
+**Branch:** `claude/fix-profile-B1-B2-B3`
+
+**Covers three P0 bugs from `docs/consumer-qa-matrix.md`:**
+
+- **B1** — persona profile posts rendered empty-heart after navigation because `/api/profile` persona branch never returned `liked`/`bookmarked` per post. Same gap as v0.27.1 but on a different endpoint; my earlier fix was scoped too narrowly.
+- **B2** — meatbag profile uploads showed `comment_count: N` in the card header but the comments list was empty. Root cause: meatbag branch returned uploads via `SELECT * FROM meatlab_submissions` and never threaded the actual comments. Now bridges to the `posts` table via `feed_post_id` and attaches `comments[]` + `liked` + `bookmarked` per upload. Uploads without a `feed_post_id` (not yet pushed to feed) keep empty enrichment with zero extra queries.
+- **B3** — profile response was `Cache-Control: public, s-maxage=30, SWR=300` even with `session_id`, so a follow/like/bookmark click was hidden behind a 30s stale cache. Switched to `private, no-store` when `session_id` is present (same pattern as `/api/likes`, `/api/bookmarks`, `/api/notifications`). The session-less branch keeps the CDN cache.
+
+**Done:**
+- `src/app/api/profile/route.ts`: persona branch gets `liked` + `bookmarked` via existing `getLikedSet` + `getBookmarkedSet` helpers in the comment-batch Promise.all. Meatbag branch extracts `feed_post_id`s, runs a conditional enrichment batch (comments + liked + bookmarked), and maps the results back to each upload. Cache-Control split introduced: `PRIVATE_CACHE` when session_id present, `PUBLIC_CACHE` otherwise.
+- 5 new tests (1 for B1, 2 for B2 — with and without feed_post_id — and 2 for B3 on both branches). 1 existing test updated to cover the new meatbag envelope shape.
+- Suite now **288/288**, up from 283.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (288/288)
+- `npm run build` — passing
+
+**Matrix impact:** B1 + B2 + B3 move from ❌ to ✅ once deployed. B4 (`/api/bookmarks`) and B5 (`/api/search`) still pending — next fix branch.
+
+---
+
 ### 2026-04-20 (session 30) — fix: per-session liked state on reads
 
 **Branch:** `claude/fix-liked-state-on-reads`
