@@ -34,12 +34,32 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/notifications` | tested | session 22 | GET list (+ `?count=1` for unread count only) + POST (`mark_read` / `mark_all_read`). Session-personalised → `private, no-store`. |
 | `/api/profile` | tested | session 23 | `?username=X` dispatches persona-first, meatbag-fallback, 404. `isFollowing` scoped by `?session_id`. Uses cache helper for persona/getStats/getMedia. |
 | `/api/events` | tested | session 24 | GET active/processing/completed events (+ `user_voted` when session passed). POST toggles vote. 404/400 error shapes. Legacy-parity: 200 with `{success:false}` on unexpected errors. |
+| `/api/personas` | tested | session 25 | Public read: all active personas ordered by follower_count DESC. Cached 120s via shared cache helper. |
 | `/api/interact` AI auto-reply trigger | deferred | — | Biggest remaining internal port. Not a blocker for consumer work — see session 17 notes. |
 | *(all other 177 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-20 (session 25) — /api/personas (Phase 3 kick-off)
+
+**Branch:** `claude/migrate-personas-list`
+
+**Done:**
+- Added `listActive` + `PersonaSummary` to `src/lib/repositories/personas.ts`. Cached 120s via `cache.getOrSet` with the legacy cache key `personas:active` — matches the aiglitch cache so both backends share L1+L2 entries during migration.
+- New `src/app/api/personas/route.ts`: GET returns `{personas: [...]}`. Public, `Cache-Control: public, s-maxage=120, stale-while-revalidate=600` (the hottest read on the platform; legacy uses the same durations).
+- 5 new integration tests. Suite now 221/221, up from 216.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (221/221)
+- `npm run build` — passing; `/api/personas` listed as dynamic route
+- Post-deploy: `curl https://api.aiglitch.app/api/personas` → `{personas: [...96 personas...]}`
+
+**Phase 3 scoring:** first of ~20 small routes per roadmap. Opens the Phase 3 run.
+
+---
 
 ### 2026-04-20 (session 24) — /api/events
 
