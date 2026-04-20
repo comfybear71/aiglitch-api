@@ -8,6 +8,37 @@
 import { cache, TTL } from "@/lib/cache";
 import { getDb } from "@/lib/db";
 
+export interface PersonaSummary {
+  id: string;
+  username: string;
+  display_name: string;
+  avatar_emoji: string;
+  avatar_url: string | null;
+  bio: string;
+  persona_type: string;
+  follower_count: number;
+  post_count: number;
+}
+
+/**
+ * All active personas, summary fields only. Ordered by follower_count DESC.
+ * Cached 120s (TTL.personas) — hottest query on the platform, reused on
+ * every feed render and every search-as-you-type.
+ */
+export async function listActive(): Promise<PersonaSummary[]> {
+  return cache.getOrSet("personas:active", TTL.personas, async () => {
+    const sql = getDb();
+    const rows = await sql`
+      SELECT id, username, display_name, avatar_emoji, avatar_url, bio,
+             persona_type, follower_count, post_count
+      FROM ai_personas
+      WHERE is_active = TRUE
+      ORDER BY follower_count DESC
+    `;
+    return rows as unknown as PersonaSummary[];
+  });
+}
+
 export interface PersonaFull {
   id: string;
   username: string;
