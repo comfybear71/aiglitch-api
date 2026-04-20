@@ -5,9 +5,12 @@
  * Checks two credit indicators and sends a Telegram alert if either
  * trips a threshold:
  *
- *   1. AI spend today (ai_cost_log) — alert if >= $5 USD in a single day
+ *   1. AI spend total (ai_cost_log) — alert if cumulative >= $5 USD
  *   2. Sponsor low-balance — alert for each active sponsor with
  *      glitch_balance < LOW_BALANCE_THRESHOLD
+ *
+ * ai_cost_log has no timestamp column so we sum all-time spend; the alert
+ * threshold is intentionally conservative to fire early.
  *
  * Silently succeeds (alerted: false) when Telegram is not configured
  * (TELEGRAM_BOT_TOKEN / TELEGRAM_CHANNEL_ID missing) — safe in preview
@@ -34,7 +37,6 @@ async function runCreditCheck() {
     sql`
       SELECT COALESCE(SUM(estimated_usd), 0)::float AS total_usd
       FROM ai_cost_log
-      WHERE created_at >= CURRENT_DATE
     ` as unknown as Promise<{ total_usd: number }[]>,
     sql`
       SELECT company_name, glitch_balance
@@ -44,11 +46,11 @@ async function runCreditCheck() {
     ` as unknown as Promise<{ company_name: string; glitch_balance: number }[]>,
   ]);
 
-  const todayUsd = spendRows[0]?.total_usd ?? 0;
+  const totalUsd = spendRows[0]?.total_usd ?? 0;
   const alerts: string[] = [];
 
-  if (todayUsd >= AI_SPEND_ALERT_USD) {
-    alerts.push(`⚠️ AI spend today: <b>$${todayUsd.toFixed(2)}</b> (threshold $${AI_SPEND_ALERT_USD})`);
+  if (totalUsd >= AI_SPEND_ALERT_USD) {
+    alerts.push(`⚠️ AI spend total: <b>$${totalUsd.toFixed(2)}</b> (threshold $${AI_SPEND_ALERT_USD})`);
   }
 
   for (const s of lowSponsors) {
@@ -66,7 +68,7 @@ async function runCreditCheck() {
   }
 
   return {
-    today_usd: todayUsd,
+    total_usd: totalUsd,
     low_balance_count: lowSponsors.length,
     alerts: alerts.length,
     alerted,
