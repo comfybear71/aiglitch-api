@@ -37,6 +37,8 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/personas` | tested | session 25 | Public read: all active personas ordered by follower_count DESC. Cached 120s via shared cache helper. |
 | `/api/movies` | tested | session 26 | Merges `director_movies` (blockbusters) with premiere video posts (trailers). `?genre=` / `?director=` filters. Response carries `genreCounts`, `directors[]` with per-director `movieCount`, and `genreLabels`. Slim DIRECTORS + GENRE_LABELS ported (Phase 5 AI engine still owns the full profile). |
 | `/api/hatchery` | tested | session 26 | Paginated public list of hatched personas; `?limit` (≤50) + `?offset`. Returns `{hatchlings, total, hasMore}`. |
+| `/api/friends` | tested | session 34 | GET default = `{friends}`; `?type=following` / `?type=ai_followers`. POST `add_friend` creates bidirectional row pair + awards +25 GLITCH both sides. 404/400/409 legacy error shapes. |
+| `/api/meatlab` GET | tested | session 34 | Three modes: public gallery, creator profile (+ B6-style comments/liked/bookmarked on feedPosts), user's own submissions. `?limit` caps at 100. **POST + PATCH deferred** — return 501 `method_not_yet_migrated` until next PR. |
 | `/api/coins` (Slice 1 — GET) | tested | session 27 | Balance + lifetime_earned + recent transactions (newest 20). Missing session_id returns zeros (legacy parity). `private, no-store`. Closes the loop on coin writes already live inside `/api/interact`. |
 | `/api/coins` (Slice 2 — claim_signup) | tested | session 28 | POST `{session_id, action:"claim_signup"}` awards +100 GLITCH once per session (idempotent on `coin_transactions.reason = 'Welcome bonus'`). Duplicate claims return 200 with `already_claimed:true` (legacy parity — NOT 4xx). |
 | `/api/coins` (Slice 3 — send_to_persona + send_to_human) | tested | session 29 | Transfer pair. §10,000 cap, 402 insufficient, 404 recipient not found, 400 self-transfer. Non-transactional (legacy parity). New repo helpers: `deductCoins`, `getUserByUsername`, `getIdAndDisplayName`. |
@@ -48,6 +50,27 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 ---
 
 ## Session log
+
+### 2026-04-20 (session 34) — /api/friends + /api/meatlab GET (Phase 3 remnants)
+
+**Branch:** `claude/migrate-meatlab-and-friends`
+
+**Done:**
+- `/api/friends` fully ported (GET + POST). Four new helpers in `src/lib/repositories/interactions.ts`: `getFriends`, `getFollowing`, `getAiFollowers`, `addFriend`. `addFriend` returns a discriminated union (`added | user_not_found | self | already_friends`) so the route picks the right status code (200/404/400/409). Bidirectional `human_friends` INSERT pair with `ON CONFLICT DO NOTHING` on the reverse — matches legacy non-transactional shape. +25 GLITCH "New friend bonus" to both parties (wrapped in try/catch, legacy parity). `COIN_REWARDS.friendBonus = 25` added to the local constants map.
+- `/api/meatlab` GET ported in full. New `src/lib/repositories/meatlab.ts` module covering the three legacy modes: `listApproved` (public gallery), `listOwnSubmissions` (user's own), `findCreator` + `getCreatorStats` + `listCreatorApprovedSubmissions` + `listCreatorFeedPosts` (creator profile).
+- **B6 closed.** The creator mode's `feedPosts` array now carries threaded comments + per-session `liked` + `bookmarked`. Consumer MeatLab page can render the real comment thread instead of just the counter. Same bug pattern as B1/B2 — different endpoint.
+- **Legacy schema migrations skipped.** Legacy runs `CREATE TABLE IF NOT EXISTS` + `CREATE INDEX` + `ALTER TABLE` on every request as a safeMigrate safety net. This repo owns no schema yet, so those are dropped; tables live in Neon already.
+- POST + PATCH on `/api/meatlab` return `501 method_not_yet_migrated` and fall through to legacy via the strangler. POST has Vercel Blob mechanics worth its own branch; PATCH ships with POST. Same pattern as the earlier `/api/interact` deferred slices.
+- 30 new tests total (15 friends + 15 meatlab). Suite now **333/333**, up from 303.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (333/333)
+- `npm run build` — passing; `/api/friends` + `/api/meatlab` both registered as dynamic
+
+**Phase 3 progress:** 6 of ~20 small routes done. Remaining include `/api/meatlab` POST + PATCH, `/api/token/*`, `/api/nft/*`, `/api/sponsor/inquiry`, `/api/suggest-feature`, `/api/activity`, `/api/activity-throttle`, `/api/friend-shares`, `/api/channels/feed`, `/api/personas/:id/wallet-balance`.
+
+---
 
 ### 2026-04-20 (session 33) — /api/coins Slices 4 + 5 (ad-free + persona admin)
 
