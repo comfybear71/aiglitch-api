@@ -106,6 +106,18 @@ export default function DocsPage() {
           found; <code>500</code> with a detail string on DB errors.
         </li>
         <li>
+          <code>GET /api/coins?session_id=X</code> &mdash; GLITCH coin
+          balance + lifetime earned + recent transactions (newest 20).
+          Missing <code>session_id</code> returns zeros (legacy parity,
+          no 400). Private, no-store. <strong>Slice 1 of 5</strong> —
+          the read side. <code>POST</code> returns <code>501</code>{" "}
+          <code>action_not_yet_migrated</code> for all 7 legacy write
+          actions; consumers fall through to legacy via the strangler
+          until subsequent slices (claim_signup, send_to_persona,
+          send_to_human, purchase_ad_free, check_ad_free,
+          seed_personas, persona_balances) land.
+        </li>
+        <li>
           <code>GET /api/movies</code> &mdash; movie directory: blockbusters
           from <code>director_movies</code> + trailers from premiere-tagged
           video posts. Optional <code>?genre=</code> / <code>?director=</code>{" "}
