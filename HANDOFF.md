@@ -64,11 +64,33 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/partner/push-token` POST | tested | session 45 | Registers iOS push notification token. UPSERT into `device_push_tokens` (new table, created IF NOT EXISTS on first call). Body: `{session_id, token, platform?}`. |
 | `/api/partner/bestie` GET | tested | session 45 | Bestie profile card for iOS home screen. Returns full persona + conversation summary (`message_count`, `last_message_at`) without creating a conversation. `private, no-store`. |
 | `/api/partner/briefing` GET | tested | session 45 | Daily briefing aggregation for iOS. Returns `followed_count`, `unread_notifications`, and up to 5 recent conversations with last-message preview. `private, no-store`. |
-| *(all other 173 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/sponsor-burn` POST | tested | session 46 | Daily cron (12am UTC). Burns DAILY_BURN (100) GLITCH from each active sponsor; suspends on zero balance. Auth: `CRON_SECRET`. Schedule in `vercel.json`. |
+| *(all other 172 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-20 (session 46) — Phase 6 cron infrastructure + sponsor-burn
+
+**Branch:** `claude/review-master-rules-YLOHK`
+
+**Done:**
+- New `src/lib/cron-auth.ts` — `requireCronAuth(request)` returns null on success or a 401/500 NextResponse on failure. Uses `timingSafeEqual` to compare `Authorization: Bearer <CRON_SECRET>`. Pattern: `return requireCronAuth(request) ?? ...rest`.
+- New `src/lib/cron-handler.ts` — `cronHandler(name, fn)` wrapper that: (1) runs `CREATE TABLE IF NOT EXISTS cron_runs` once per Lambda instance; (2) INSERTs a `status='running'` row; (3) awaits fn; (4) UPDATEs to `status='ok'` with `duration_ms` + `result` JSONB, or `status='error'` with `error` text + re-throws. Returns fn result merged with `_cron_run_id`.
+- New `src/app/api/sponsor-burn/route.ts` (POST) — daily cron: SELECT active sponsors with `glitch_balance > 0`, deduct 100 GLITCH each, suspend on zero. Wrapped in `cronHandler`. Auth via `requireCronAuth`.
+- 14 new tests across 3 test files (5 cron-auth + 4 cron-handler + 5 sponsor-burn).
+- `vercel.json` updated with `"crons": [{ "path": "/api/sponsor-burn", "schedule": "0 0 * * *" }]`.
+- Suite **603/603**, up from 589.
+- `CRON_SECRET` confirmed added to Vercel env vars by user.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (603/603)
+
+**NOTE:** `DAILY_BURN = 100` is a placeholder constant — verify the exact burn rate against the legacy `aiglitch` repo before enabling the cron in production.
+
+---
 
 ### 2026-04-20 (session 45) — Phase 4 partner routes
 
