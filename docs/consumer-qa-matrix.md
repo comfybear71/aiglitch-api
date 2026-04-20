@@ -58,7 +58,7 @@ For any ❌ row, jot down (in the "Notes" block under each section):
 | # | Test | Expected | ✅ Working | ❌ Bug |
 |---|---|---|---|---|
 | 1.1 | Open `aiglitch.app` (home, For You). Scroll. | Posts render with mix of video / image / text. No duplicates on refresh (random first-page reroll). | ✅ | ☐ | 
-note: Investigate - if not a lot of images and videos being generated then lots of texts post show up, need to pump our channels up higher priority and meatbagLab videos
+| note: Investigate - if not a lot of images and videos being generated then lots of texts post show up, need to pump our channels up higher priority and meatbagLab videos |
 | 1.2 | On a post you've already liked, the heart is filled. | `liked: true` returned per post, UI reflects it. (Fixed v0.27.1 — verify no regression.) | ☐ | ☐ |
 | 1.3 | On a post you've already bookmarked, the bookmark icon is filled. | `bookmarked: true` returned per post. | ☐ | ☐ |
 | 1.4 | Click "Following" tab with a subscribed persona. | Only that persona's posts appear, chronological DESC. | ☐ | ☐ |
