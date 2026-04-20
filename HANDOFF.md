@@ -35,12 +35,36 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/profile` | tested | session 23 | `?username=X` dispatches persona-first, meatbag-fallback, 404. `isFollowing` scoped by `?session_id`. Uses cache helper for persona/getStats/getMedia. |
 | `/api/events` | tested | session 24 | GET active/processing/completed events (+ `user_voted` when session passed). POST toggles vote. 404/400 error shapes. Legacy-parity: 200 with `{success:false}` on unexpected errors. |
 | `/api/personas` | tested | session 25 | Public read: all active personas ordered by follower_count DESC. Cached 120s via shared cache helper. |
+| `/api/movies` | tested | session 26 | Merges `director_movies` (blockbusters) with premiere video posts (trailers). `?genre=` / `?director=` filters. Response carries `genreCounts`, `directors[]` with per-director `movieCount`, and `genreLabels`. Slim DIRECTORS + GENRE_LABELS ported (Phase 5 AI engine still owns the full profile). |
+| `/api/hatchery` | tested | session 26 | Paginated public list of hatched personas; `?limit` (≤50) + `?offset`. Returns `{hatchlings, total, hasMore}`. |
 | `/api/interact` AI auto-reply trigger | deferred | — | Biggest remaining internal port. Not a blocker for consumer work — see session 17 notes. |
 | *(all other 177 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-20 (session 26) — /api/movies + /api/hatchery combo
+
+**Branch:** `claude/migrate-movies-and-hatchery`
+
+**Done:**
+- New `src/lib/repositories/movies.ts`: `listDirectorMovies({genre?, director?})` and `listPremierePosts({genre?})`. Both swallow missing-table errors (legacy parity — `director_movies` and `multi_clip_jobs` land with Phase 5's AI engine port).
+- New `src/lib/repositories/hatchery.ts`: `listHatchlings({limit, offset})`. `limit` clamped to 50. Returns `{hatchlings, total}` — the route derives `hasMore`.
+- New `src/lib/content/directors.ts`: slim copy of the legacy `DIRECTORS` constant — just `username`, `displayName`, `genres` for the 10 directors. The legacy file (~1600 LOC) bundles Grok prompt profiles (visualOverride, colorPalette, cameraWork) tied to the AI engine; that migrates with Phase 5. For `/api/movies` only the filter metadata is needed today.
+- New `src/lib/genres.ts`: `GENRE_LABELS` only. Full `genre-utils` (blob folders, hashtag helpers) migrates with the AI engine.
+- New `src/app/api/movies/route.ts`: merges both sources, de-dupes trailers against blockbuster `post_id` / `premiere_post_id`, computes `genreCounts` + `directorCounts`, returns the full shape legacy does (including `genreLabels` so consumers don't need a second round-trip). Parallel fetch via `Promise.all`. Cache-Control `public, s-maxage=60, stale-while-revalidate=300`.
+- New `src/app/api/hatchery/route.ts`: thin handler over `listHatchlings`. Cache-Control `public, s-maxage=60, stale-while-revalidate=300`.
+- 20 new tests (12 movies + 8 hatchery). Suite now 241/241, up from 221.
+- `/docs` page updated with both endpoints.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (241/241)
+
+**Phase 3 progress:** 3 of ~20 small routes shipped in Phase 3 (`/api/personas`, `/api/movies`, `/api/hatchery`).
+
+---
 
 ### 2026-04-20 (session 25) — /api/personas (Phase 3 kick-off)
 
