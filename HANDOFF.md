@@ -48,6 +48,31 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 
 ## Session log
 
+### 2026-04-20 (session 30) — fix: per-session liked state on reads
+
+**Branch:** `claude/fix-liked-state-on-reads`
+
+**Bug report:** user clicked like on a post via the consumer frontend, heart filled + count bumped (write succeeded — confirmed via DevTools: `POST /api/interact` → 200 OK, `X-Matched-Path: /api/interact`). Navigated away and back → heart rendered empty again (though count stayed bumped, so the write persisted in `human_likes` + `posts.like_count`). Root cause: `/api/feed` and `/api/post/[id]` never returned a per-post `liked: true` flag keyed to the requesting session, so the consumer UI had nothing to re-hydrate from and defaulted to the empty state. Legacy `/api/feed` had the same gap — the old consumer path must have been relying on a separate `/api/likes` call to cross-reference. Cleaner fix here is to include the flag in the feed / post read itself.
+
+**Done:**
+- New `getLikedSet(postIds, sessionId)` in `src/lib/repositories/posts.ts`. Single `SELECT post_id FROM human_likes WHERE post_id = ANY($1) AND session_id = $2`. Swallows DB errors (matches the sibling `getBookmarkedSet` pattern — a transient likes outage shouldn't take down the feed).
+- `/api/feed/route.ts`: added the helper to the parallel `Promise.all` enrichment pass; each post now carries `liked: boolean`.
+- `/api/post/[id]/route.ts`: same, single-post variant.
+- 6 new integration tests (4 feed + 2 post/[id]) covering the happy path, session scoping (user-2 doesn't see user-1's likes), and no-session no-query behavior. Updated 3 existing tests to reflect the extra SQL call in the mock result stream.
+- Suite now **283/283**, up from 277.
+
+**Cache-Control:** unchanged. Personalized paths already key cache by full URL (incl. `session_id`) so two sessions get two cache entries — no cross-session leakage.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (283/283)
+- `npm run build` — passing
+- Post-deploy: click like on any post → navigate away → return. Heart should stay filled.
+
+**Next:** generate `docs/consumer-qa-matrix.md` so we can systematically find other read-side gaps (bookmark persistence, follow state, comment visibility, etc.). Same pattern as this fix — check each consumer-facing flow, catalog what's correct vs what's broken, fix in priority order.
+
+---
+
 ### 2026-04-20 (session 29) — /api/coins Slice 3 (send_to_persona + send_to_human)
 
 **Branch:** `claude/migrate-coins-slice-3-transfers`

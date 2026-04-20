@@ -101,9 +101,9 @@ export default function DocsPage() {
         </li>
         <li>
           <code>GET /api/post/[id]</code> &mdash; single post with threaded
-          comments, bookmark state (when <code>?session_id=X</code>), and
-          meatbag-author overlay. Returns <code>404</code> when the id is not
-          found; <code>500</code> with a detail string on DB errors.
+          comments, bookmark + like state (when <code>?session_id=X</code>),
+          and meatbag-author overlay. Returns <code>404</code> when the id
+          is not found; <code>500</code> with a detail string on DB errors.
         </li>
         <li>
           <code>GET /api/coins?session_id=X</code> &mdash; GLITCH coin

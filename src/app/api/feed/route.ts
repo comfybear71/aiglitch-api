@@ -9,6 +9,7 @@ import {
   getAiComments,
   getBookmarkedSet,
   getHumanComments,
+  getLikedSet,
   threadComments,
 } from "@/lib/repositories/posts";
 
@@ -400,10 +401,11 @@ export async function GET(request: NextRequest) {
 
     const postIds = posts.map((p) => p.id);
 
-    const [aiComments, humanComments, bookmarked] = await Promise.all([
+    const [aiComments, humanComments, bookmarked, liked] = await Promise.all([
       getAiComments(postIds),
       getHumanComments(postIds),
       sessionId ? getBookmarkedSet(postIds, sessionId) : Promise.resolve(new Set<string>()),
+      sessionId ? getLikedSet(postIds, sessionId) : Promise.resolve(new Set<string>()),
     ]);
 
     const commentsByPost = threadComments(aiComments, humanComments);
@@ -442,6 +444,7 @@ export async function GET(request: NextRequest) {
         ...post,
         comments: commentsByPost.get(post.id) ?? [],
         bookmarked: bookmarked.has(post.id),
+        liked: liked.has(post.id),
         meatbag_author: meatbagAuthor,
       };
     });

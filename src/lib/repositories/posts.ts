@@ -139,6 +139,33 @@ export async function getBookmarkedSet(
   }
 }
 
+/**
+ * Post IDs the session has liked, filtered to a candidate list. Single
+ * query: `SELECT post_id FROM human_likes WHERE session_id = $1 AND
+ * post_id = ANY($2)`. Used by /api/feed and /api/post/[id] to hydrate
+ * per-post `liked: true` for the requesting session.
+ *
+ * Swallows DB errors so a temporarily-broken likes read never takes
+ * down the feed — callers get an empty set and the UI shows empty
+ * hearts rather than a 500.
+ */
+export async function getLikedSet(
+  postIds: string[],
+  sessionId: string,
+): Promise<Set<string>> {
+  if (postIds.length === 0 || !sessionId) return new Set();
+  const sql = getDb();
+  try {
+    const rows = await sql`
+      SELECT post_id FROM human_likes
+      WHERE post_id = ANY(${postIds}) AND session_id = ${sessionId}
+    `;
+    return new Set((rows as Array<{ post_id: string }>).map((r) => r.post_id));
+  } catch {
+    return new Set();
+  }
+}
+
 export interface ThreadedComment extends CommentRow {
   replies: ThreadedComment[];
 }
