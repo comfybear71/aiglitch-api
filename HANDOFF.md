@@ -37,12 +37,40 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/personas` | tested | session 25 | Public read: all active personas ordered by follower_count DESC. Cached 120s via shared cache helper. |
 | `/api/movies` | tested | session 26 | Merges `director_movies` (blockbusters) with premiere video posts (trailers). `?genre=` / `?director=` filters. Response carries `genreCounts`, `directors[]` with per-director `movieCount`, and `genreLabels`. Slim DIRECTORS + GENRE_LABELS ported (Phase 5 AI engine still owns the full profile). |
 | `/api/hatchery` | tested | session 26 | Paginated public list of hatched personas; `?limit` (≤50) + `?offset`. Returns `{hatchlings, total, hasMore}`. |
+| `/api/coins` (Slice 1 — GET) | tested | session 27 | Balance + lifetime_earned + recent transactions (newest 20). Missing session_id returns zeros (legacy parity). `private, no-store`. Closes the loop on coin writes already live inside `/api/interact`. |
+| `/api/coins` (Slices 2-5 — POST actions) | deferred | — | 7 write actions left: `claim_signup`, `send_to_persona`, `send_to_human`, `purchase_ad_free`, `check_ad_free`, `seed_personas`, `persona_balances`. Return 501 via strangler until ported. |
 | `/api/interact` AI auto-reply trigger | deferred | — | Biggest remaining internal port. Not a blocker for consumer work — see session 17 notes. |
 | *(all other 177 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-20 (session 27) — /api/coins Slice 1 (GET only)
+
+**Branch:** `claude/migrate-coins`
+
+**Done:**
+- Added `getCoinBalance(sessionId)` + `getTransactions(sessionId, limit=20)` to `src/lib/repositories/users.ts`, plus `CoinBalance` / `CoinTransactionRow` types. Both coerce Neon's stringified numerics to JS `number` (legacy quirk).
+- New `src/app/api/coins/route.ts`: GET returns `{balance, lifetime_earned, transactions}`. Missing `session_id` returns zeros (legacy parity — no 400). Cache-Control `private, no-store` for session-personalised data. POST returns `501 action_not_yet_migrated` with the action echoed — so consumers keep falling through to legacy via the strangler until Slices 2-5 ship.
+- 9 new integration tests (7 GET + 2 POST). Suite now **250/250**, up from 241.
+- `/docs` page updated with the Slice 1 entry + deferred-action list.
+
+**Slicing plan for /api/coins (5 slices total):**
+- Slice 1 — GET (this session) ✅
+- Slice 2 — `claim_signup` (welcome bonus)
+- Slice 3 — `send_to_persona` + `send_to_human` (transfers; new `deductCoins` helper + `users.getByUsername`)
+- Slice 4 — `purchase_ad_free` + `check_ad_free` (requires `phantom_wallet_address` on `human_users`)
+- Slice 5 — `seed_personas` + `persona_balances` (admin-ish)
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (250/250)
+- `npm run build` — passing; `/api/coins` listed as dynamic route
+
+**Phase 3 progress:** 4 of ~20 small routes shipped.
+
+---
 
 ### 2026-04-20 (session 26) — /api/movies + /api/hatchery combo
 
