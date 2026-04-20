@@ -27,14 +27,48 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/interact` (Slice 3 — comment, comment_like) | tested | session 15 | `comment` inserts human_comments (content/name truncation) + increments post counter. `comment_like` dispatches on `comment_type`. |
 | `/api/interact` subscribe (was Slice 6, re-ordered early) | tested | session 16 | `subscribe` looks up persona_id from post, delegates to `toggleFollow`, tracks interest on fresh subscribe. 404 on missing post. **All 9 actions now migrated.** |
 | `/api/interact` coin-award retrofit | tested | session 17 | First-like (+2), first-comment (+15), persona-like received (+1) now award. |
-| `/api/likes` | tested | session 18 | Read-only list of session's liked posts with flat comments + `liked: true`. |
-| `/api/bookmarks` | tested | session 18 | Read-only list of session's bookmarked posts with flat comments + `bookmarked: true`. |
+| `/api/likes` | tested + deployed | session 18 + 19 (CDN fix) | Read-only list. Cache-Control now `private, no-store`. |
+| `/api/bookmarks` | tested + deployed | session 18 + 19 (CDN fix) | Read-only list. Cache-Control now `private, no-store`. |
+| `/api/trending` | tested | session 20 | Top 15 hashtags (last 7d) + top 5 personas (last 24h). Public, CDN-cacheable for 60s. |
 | `/api/interact` AI auto-reply trigger | deferred | — | Biggest remaining internal port. Not a blocker for consumer work — see session 17 notes. |
 | *(all other 177 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-20 (session 20) — /api/trending
+
+**Branch:** `claude/migrate-trending`
+
+**Done:**
+- New `src/lib/repositories/search.ts` with just `getTrending()` — two parallel aggregate queries:
+  - Top 15 hashtags in `post_hashtags` over the last 7 days
+  - Top 5 active personas by post count over the last 24 hours
+- New `src/app/api/trending/route.ts` — GET handler, returns `{trending, hotPersonas}` shape matching legacy byte-for-byte. Cache-Control: `public, s-maxage=60, stale-while-revalidate=300` (safe — response is NOT session-personalised so CDN caching is correct here, unlike likes/bookmarks).
+- Inlined `TRENDING_HASHTAGS_LIMIT = 15` and `TRENDING_PERSONAS_LIMIT = 5` from legacy `PAGINATION` constants.
+- 7 new integration tests covering shape, empty aggregates, parallel-query shape, SQL constants (limits + time windows), Cache-Control, and 500 wrapping. Suite now 165/165, up from 158.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (165/165)
+- `npm run build` — passing; `/api/trending` listed as dynamic route
+- Post-deploy: `curl https://api.aiglitch.app/api/trending` → `{trending: [...], hotPersonas: [...]}`
+
+**Safety notes:**
+- This IS CDN-cacheable because the aggregate is identical for all callers; no session or user state. Distinct from likes/bookmarks where personalisation required `private, no-store`.
+
+---
+
+### 2026-04-19 (session 19) — /api/likes + /api/bookmarks CDN fix
+
+**Branch:** `claude/fix-likes-bookmarks-cache-control`
+
+**Bug:** Session-personalised `/api/likes` and `/api/bookmarks` had `Cache-Control: public, s-maxage=15, stale-while-revalidate=120`. Vercel's edge cached the first response per URL. If the first hit was before the user had any data (empty response), SWR's background refresh window kept serving stale empties across fresh writes. A user bookmarking 3 posts still saw `{posts: []}` via the API. Direct SQL confirmed 3 rows; cache-bust query string returned them. Caching was the culprit.
+
+**Fix:** Both endpoints now `Cache-Control: private, no-store`. No CDN caching for session-personalised reads. Deployed as `v0.17.1`.
+
+---
 
 ### 2026-04-19 (session 18) — /api/likes + /api/bookmarks (read-only companions)
 
