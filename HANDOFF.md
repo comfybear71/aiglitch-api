@@ -38,7 +38,7 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/movies` | tested | session 26 | Merges `director_movies` (blockbusters) with premiere video posts (trailers). `?genre=` / `?director=` filters. Response carries `genreCounts`, `directors[]` with per-director `movieCount`, and `genreLabels`. Slim DIRECTORS + GENRE_LABELS ported (Phase 5 AI engine still owns the full profile). |
 | `/api/hatchery` | tested | session 26 | Paginated public list of hatched personas; `?limit` (≤50) + `?offset`. Returns `{hatchlings, total, hasMore}`. |
 | `/api/friends` | tested | session 34 | GET default = `{friends}`; `?type=following` / `?type=ai_followers`. POST `add_friend` creates bidirectional row pair + awards +25 GLITCH both sides. 404/400/409 legacy error shapes. |
-| `/api/meatlab` GET | tested | session 34 | Three modes: public gallery, creator profile (+ B6-style comments/liked/bookmarked on feedPosts), user's own submissions. `?limit` caps at 100. **POST + PATCH deferred** — return 501 `method_not_yet_migrated` until next PR. |
+| `/api/meatlab` GET + POST + PATCH | tested | session 34–35 | GET session 34 (public gallery / creator / own). POST session 35 = new submission to moderation queue (status=pending); sniffs image/video from URL or explicit media_type. PATCH session 35 = partial social-handle updates with COALESCE. `/api/meatlab/upload` (Vercel Blob client flow) still on legacy. |
 | `/api/coins` (Slice 1 — GET) | tested | session 27 | Balance + lifetime_earned + recent transactions (newest 20). Missing session_id returns zeros (legacy parity). `private, no-store`. Closes the loop on coin writes already live inside `/api/interact`. |
 | `/api/coins` (Slice 2 — claim_signup) | tested | session 28 | POST `{session_id, action:"claim_signup"}` awards +100 GLITCH once per session (idempotent on `coin_transactions.reason = 'Welcome bonus'`). Duplicate claims return 200 with `already_claimed:true` (legacy parity — NOT 4xx). |
 | `/api/coins` (Slice 3 — send_to_persona + send_to_human) | tested | session 29 | Transfer pair. §10,000 cap, 402 insufficient, 404 recipient not found, 400 self-transfer. Non-transactional (legacy parity). New repo helpers: `deductCoins`, `getUserByUsername`, `getIdAndDisplayName`. |
@@ -50,6 +50,26 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 ---
 
 ## Session log
+
+### 2026-04-20 (session 35) — /api/meatlab POST + PATCH (finish the endpoint)
+
+**Branch:** `claude/migrate-meatlab-post-patch`
+
+**Done:**
+- POST: receives a pre-uploaded `media_url` (client uploaded to Vercel Blob via `/api/meatlab/upload` — a separate endpoint still on legacy), validates the session, sniffs image/video from explicit `media_type` or the URL extension (`.mp4` / `.webm` / `.mov`), INSERTs a row with `status='pending'` into `meatlab_submissions`. Returns `{ success, id, status, message }`. Error shapes preserved: 401 no session_id, 400 no media_url, 401 invalid session, 500 INSERT failure.
+- PATCH: partial update of `x_handle` / `instagram_handle` / `tiktok_handle` / `youtube_handle` / `website_url` on `human_users`. Omitted fields land as `null` in the param list; the SQL's `COALESCE(${null}, column)` preserves the existing value — matches legacy. Returns `{ success: true }`. 401 no session_id.
+- Two new repo helpers in `src/lib/repositories/meatlab.ts`: `getSubmissionAuthor(sessionId)` and `createSubmission(input)`, plus `updateSocials(input)`. Used a typed input object for `createSubmission` rather than positional args — 7 optional fields otherwise.
+- 11 new tests (8 POST + 3 PATCH). Suite now **344/344**, up from 333.
+- `/docs` entry consolidated — no more "deferred" qualifier on POST/PATCH.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (344/344)
+- `npm run build` — passing
+
+**Still legacy:** `/api/meatlab/upload` (client blob upload pre-signer). Migrating that needs the Vercel Blob SDK wired into this repo — separate concern. Low consumer impact since the client flow stays unchanged until then.
+
+---
 
 ### 2026-04-20 (session 34) — /api/friends + /api/meatlab GET (Phase 3 remnants)
 

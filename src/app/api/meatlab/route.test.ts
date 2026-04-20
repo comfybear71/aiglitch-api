@@ -280,23 +280,211 @@ describe("GET /api/meatlab", () => {
   });
 });
 
-describe("POST + PATCH /api/meatlab (deferred)", () => {
-  it("POST returns 501 method_not_yet_migrated", async () => {
-    vi.resetModules();
-    const { POST } = await import("./route");
-    const res = await POST();
-    expect(res.status).toBe(501);
-    const body = (await res.json()) as { error: string; method: string };
-    expect(body.error).toBe("method_not_yet_migrated");
-    expect(body.method).toBe("POST");
+async function callPost(body: unknown) {
+  vi.resetModules();
+  const { POST } = await import("./route");
+  const { NextRequest } = await import("next/server");
+  const req = new NextRequest("http://localhost/api/meatlab", {
+    method: "POST",
+    body: JSON.stringify(body),
+    headers: { "Content-Type": "application/json" },
+  });
+  return POST(req);
+}
+
+async function callPatch(body: unknown) {
+  vi.resetModules();
+  const { PATCH } = await import("./route");
+  const { NextRequest } = await import("next/server");
+  const req = new NextRequest("http://localhost/api/meatlab", {
+    method: "PATCH",
+    body: JSON.stringify(body),
+    headers: { "Content-Type": "application/json" },
+  });
+  return PATCH(req);
+}
+
+describe("POST /api/meatlab", () => {
+  it("401 when session_id missing", async () => {
+    const res = await callPost({ media_url: "https://cdn/x.png" });
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("session_id required");
   });
 
-  it("PATCH returns 501 method_not_yet_migrated", async () => {
-    vi.resetModules();
-    const { PATCH } = await import("./route");
-    const res = await PATCH();
-    expect(res.status).toBe(501);
-    const body = (await res.json()) as { method: string };
-    expect(body.method).toBe("PATCH");
+  it("400 when media_url missing (with helpful hint)", async () => {
+    const res = await callPost({ session_id: "user-1" });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain("media_url required");
+    expect(body.error).toContain("/api/meatlab/upload");
+  });
+
+  it("401 when session has no human_users row", async () => {
+    fake.results = [[]]; // getSubmissionAuthor returns empty
+    const res = await callPost({
+      session_id: "ghost",
+      media_url: "https://cdn/x.png",
+    });
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain("Invalid session");
+  });
+
+  it("happy path (image): INSERTs status=pending, returns { success, id, status }", async () => {
+    fake.results = [
+      [{ id: "user-42", display_name: "Stu", username: "stu" }], // author lookup
+      [], // INSERT meatlab_submissions
+    ];
+    const res = await callPost({
+      session_id: "user-1",
+      media_url: "https://cdn/art.png",
+      title: "My AI Art",
+      description: "cool thing",
+      ai_tool: "midjourney",
+      tags: "abstract,art",
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      success: boolean;
+      id: string;
+      status: string;
+      message: string;
+    };
+    expect(body.success).toBe(true);
+    expect(body.status).toBe("pending");
+    expect(body.id).toBeTruthy();
+    expect(body.message).toContain("submitted");
+
+    const insertSql = sqlOf(fake.calls[1]!);
+    expect(insertSql).toContain("INSERT INTO meatlab_submissions");
+    expect(insertSql).toContain("'pending'"); // status literal baked into SQL string
+    expect(fake.calls[1]!.values).toContain("image");
+    expect(fake.calls[1]!.values).toContain("https://cdn/art.png");
+    expect(fake.calls[1]!.values).toContain("My AI Art");
+    expect(fake.calls[1]!.values).toContain("midjourney");
+  });
+
+  it("sniffs media_type=video from .mp4 URL", async () => {
+    fake.results = [
+      [{ id: "user-42", display_name: "Stu", username: "stu" }],
+      [],
+    ];
+    await callPost({
+      session_id: "user-1",
+      media_url: "https://cdn/clip.mp4",
+    });
+    expect(fake.calls[1]!.values).toContain("video");
+  });
+
+  it("sniffs media_type=video from .webm and .mov URLs", async () => {
+    for (const url of ["https://cdn/c.webm", "https://cdn/c.mov"]) {
+      fake.calls = [];
+      fake.results = [
+        [{ id: "user-42", display_name: "Stu", username: "stu" }],
+        [],
+      ];
+      await callPost({ session_id: "user-1", media_url: url });
+      expect(fake.calls[1]!.values).toContain("video");
+    }
+  });
+
+  it("explicit media_type:'video' overrides URL extension", async () => {
+    fake.results = [
+      [{ id: "user-42", display_name: "Stu", username: "stu" }],
+      [],
+    ];
+    await callPost({
+      session_id: "user-1",
+      media_url: "https://cdn/ambiguous.blob",
+      media_type: "video",
+    });
+    expect(fake.calls[1]!.values).toContain("video");
+  });
+
+  it("defaults title / description / ai_tool / tags to empty string (NOT NULL columns)", async () => {
+    fake.results = [
+      [{ id: "user-42", display_name: "Stu", username: "stu" }],
+      [],
+    ];
+    await callPost({
+      session_id: "user-1",
+      media_url: "https://cdn/x.png",
+    });
+    // Title + description + ai_tool + tags all land as "" rather than null.
+    // Check the INSERT values include 4 empty strings.
+    const emptyStringCount = fake.calls[1]!.values.filter(
+      (v) => v === "",
+    ).length;
+    expect(emptyStringCount).toBe(4);
+  });
+
+  it("500 when INSERT fails", async () => {
+    fake.results = [
+      [{ id: "user-42", display_name: "Stu", username: "stu" }], // author lookup succeeds
+    ];
+    fake.throwOnNextCall = new Error("pg down"); // next call (INSERT) throws
+    const res = await callPost({
+      session_id: "user-1",
+      media_url: "https://cdn/x.png",
+    });
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("Failed to save submission");
+  });
+});
+
+describe("PATCH /api/meatlab", () => {
+  it("401 when session_id missing", async () => {
+    const res = await callPatch({ x_handle: "@stu" });
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("session_id required");
+  });
+
+  it("happy path: 200 + UPDATE human_users with COALESCE on every social column", async () => {
+    fake.results = [[]]; // UPDATE
+    const res = await callPatch({
+      session_id: "user-1",
+      x_handle: "@stu",
+      instagram_handle: "stuie",
+      website_url: "https://stu.dev",
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { success: boolean };
+    expect(body.success).toBe(true);
+
+    const sql = sqlOf(fake.calls[0]!);
+    expect(sql).toContain("UPDATE human_users");
+    expect(sql).toContain("x_handle");
+    expect(sql).toContain("COALESCE");
+    expect(sql).toContain("instagram_handle");
+    expect(sql).toContain("tiktok_handle");
+    expect(sql).toContain("youtube_handle");
+    expect(sql).toContain("website_url");
+    // Provided values land in the parameter list.
+    expect(fake.calls[0]!.values).toContain("@stu");
+    expect(fake.calls[0]!.values).toContain("stuie");
+    expect(fake.calls[0]!.values).toContain("https://stu.dev");
+  });
+
+  it("omitted fields become null in params (COALESCE in SQL preserves existing)", async () => {
+    fake.results = [[]];
+    await callPatch({
+      session_id: "user-1",
+      x_handle: "@stu",
+      // other fields omitted
+    });
+    // tiktok / youtube / website should arrive as null.
+    const nullCount = fake.calls[0]!.values.filter((v) => v === null).length;
+    expect(nullCount).toBe(4); // instagram, tiktok, youtube, website
+  });
+
+  it("500 when UPDATE throws", async () => {
+    fake.throwOnNextCall = new Error("pg exploded");
+    const res = await callPatch({ session_id: "user-1", x_handle: "@stu" });
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("pg exploded");
   });
 });
