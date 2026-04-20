@@ -1,15 +1,23 @@
 /**
  * User-side writes used by /api/interact's coin-award side-effects, plus
- * the read helpers /api/coins Slice 1 (GET) needs.
+ * the helpers /api/coins needs.
  *
- * Deduct / transfer functions land with Slice 2+. They're called inside
- * try/catch wrappers in interactions.ts because legacy treats them as
+ * Deduct / transfer functions land with Slice 3+. `awardCoins` runs inside
+ * try/catch wrappers in interactions.ts because legacy treats it as
  * non-critical: a failed coin credit should never block the user action
  * that triggered it.
  */
 
 import { randomUUID } from "node:crypto";
 import { getDb } from "@/lib/db";
+
+/**
+ * Subset of legacy `COIN_REWARDS` values this repo emits directly.
+ * `firstLike` / `firstComment` / `personaLikeReceived` live inlined in
+ * interactions.ts for the /api/interact retrofit; `signup` lands here
+ * for /api/coins Slice 2.
+ */
+export const SIGNUP_BONUS = 100;
 
 export interface CoinBalance {
   balance: number;
@@ -55,6 +63,34 @@ export async function getTransactions(
     ORDER BY created_at DESC
     LIMIT ${limit}
   `) as unknown as CoinTransactionRow[];
+}
+
+export type ClaimSignupResult =
+  | { kind: "already_claimed" }
+  | { kind: "awarded"; amount: number };
+
+/**
+ * Welcome bonus: +100 GLITCH, one-time per session. Idempotency is keyed
+ * on the `coin_transactions.reason = 'Welcome bonus'` row — re-calling
+ * returns `already_claimed` instead of paying out twice.
+ *
+ * Non-transactional (legacy parity). The two-call race window where two
+ * concurrent requests could both see "not claimed yet" and both award is
+ * accepted — this is a one-off signup bonus at session creation, not a
+ * hot path.
+ */
+export async function claimSignupBonus(
+  sessionId: string,
+): Promise<ClaimSignupResult> {
+  const sql = getDb();
+  const existing = (await sql`
+    SELECT id FROM coin_transactions
+    WHERE session_id = ${sessionId} AND reason = 'Welcome bonus'
+  `) as unknown as Array<{ id: string }>;
+  if (existing.length > 0) return { kind: "already_claimed" };
+
+  await awardCoins(sessionId, SIGNUP_BONUS, "Welcome bonus");
+  return { kind: "awarded", amount: SIGNUP_BONUS };
 }
 
 /** Award GLITCH coins to a human (session). Upserts balance + lifetime_earned and logs the transaction. */

@@ -1,14 +1,35 @@
 import { type NextRequest, NextResponse } from "next/server";
-import { getCoinBalance, getTransactions } from "@/lib/repositories/users";
+import {
+  claimSignupBonus,
+  getCoinBalance,
+  getTransactions,
+} from "@/lib/repositories/users";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 /**
- * GET /api/coins?session_id=X — GLITCH coin balance + recent transactions.
+ * Actions migrated so far:
+ *   Slice 1: GET (balance + lifetime + transactions)  ✅
+ *   Slice 2: claim_signup                             ✅ this session
+ *   Slice 3: send_to_persona, send_to_human           ⏳
+ *   Slice 4: purchase_ad_free, check_ad_free          ⏳
+ *   Slice 5: seed_personas, persona_balances          ⏳
  *
- * Slice 1 of 5: the read side. Closes the loop on coin awards already
- * firing inside /api/interact (first-like, first-comment, persona-like).
+ * Unmigrated actions return 501 `action_not_yet_migrated`; consumers fall
+ * through to the legacy backend via the strangler.
+ */
+const UNSUPPORTED_ACTIONS = new Set([
+  "send_to_persona",
+  "send_to_human",
+  "purchase_ad_free",
+  "check_ad_free",
+  "seed_personas",
+  "persona_balances",
+]);
+
+/**
+ * GET /api/coins?session_id=X — GLITCH coin balance + recent transactions.
  *
  * Missing session_id returns empty zeros (legacy parity — no 400).
  * Session-personalised → `Cache-Control: private, no-store`.
@@ -37,7 +58,7 @@ export async function GET(request: NextRequest) {
     res.headers.set("Cache-Control", "private, no-store");
     return res;
   } catch (err) {
-    console.error("[coins] error:", err);
+    console.error("[coins] GET error:", err);
     return NextResponse.json(
       {
         error: "Failed to load coins",
@@ -48,22 +69,69 @@ export async function GET(request: NextRequest) {
   }
 }
 
+interface PostBody {
+  session_id?: string;
+  action?: string;
+}
+
 /**
- * POST /api/coins — 8 actions total in legacy. Slice 1 ships GET only;
- * POST returns 501 with `action_not_yet_migrated` so consumers can keep
- * falling through to the legacy backend via the strangler until the
- * remaining slices (claim_signup / send_to_persona / send_to_human /
- * purchase_ad_free / check_ad_free / seed_personas / persona_balances)
- * land.
+ * POST /api/coins — action-dispatched writes.
+ *
+ * `claim_signup` awards +100 GLITCH (the "Welcome bonus") once per session.
+ * Legacy parity: on a duplicate claim, returns **200** (not 400/409) with
+ * `{error: "Already claimed", already_claimed: true}`. Mid-migration
+ * consumers expect that shape.
  */
 export async function POST(request: NextRequest) {
-  const body = (await request.json().catch(() => ({}))) as { action?: string };
+  const body = (await request.json().catch(() => ({}))) as PostBody;
+  const { session_id, action } = body;
+
+  if (!session_id || !action) {
+    return NextResponse.json(
+      { error: "Missing fields" },
+      { status: 400 },
+    );
+  }
+
+  if (action === "claim_signup") {
+    try {
+      const result = await claimSignupBonus(session_id);
+      if (result.kind === "already_claimed") {
+        return NextResponse.json({
+          error: "Already claimed",
+          already_claimed: true,
+        });
+      }
+      return NextResponse.json({
+        success: true,
+        amount: result.amount,
+        reason: "Welcome bonus",
+      });
+    } catch (err) {
+      console.error("[coins] claim_signup error:", err);
+      return NextResponse.json(
+        {
+          error: "Failed to claim signup bonus",
+          detail: err instanceof Error ? err.message : String(err),
+        },
+        { status: 500 },
+      );
+    }
+  }
+
+  if (UNSUPPORTED_ACTIONS.has(action)) {
+    return NextResponse.json(
+      {
+        error: "action_not_yet_migrated",
+        action,
+        note: "This /api/coins action lands in a later slice; use the legacy backend in the meantime.",
+      },
+      { status: 501 },
+    );
+  }
+
   return NextResponse.json(
-    {
-      error: "action_not_yet_migrated",
-      action: body.action ?? null,
-      note: "POST /api/coins actions land in /api/coins Slices 2-5; use the legacy backend in the meantime.",
-    },
-    { status: 501 },
+    { error: "Invalid action", action },
+    { status: 400 },
   );
 }
