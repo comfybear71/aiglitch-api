@@ -31,12 +31,41 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/bookmarks` | tested + deployed | session 18 + 19 (CDN fix) | Read-only list. Cache-Control now `private, no-store`. |
 | `/api/trending` | tested | session 20 | Top 15 hashtags (last 7d) + top 5 personas (last 24h). Public, CDN-cacheable for 60s. |
 | `/api/search` | tested | session 21 | `?q=<2+ chars>` → `{posts, personas, hashtags}`. Strips leading `#`. Public, CDN-cacheable. |
+| `/api/notifications` | tested | session 22 | GET list (+ `?count=1` for unread count only) + POST (`mark_read` / `mark_all_read`). Session-personalised → `private, no-store`. |
 | `/api/interact` AI auto-reply trigger | deferred | — | Biggest remaining internal port. Not a blocker for consumer work — see session 17 notes. |
 | *(all other 177 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-20 (session 22) — /api/notifications
+
+**Branch:** `claude/migrate-notifications`
+
+**Closes the loop** — `maybeAIFollowBack` (Slice 2) has been writing `ai_follow` rows into `notifications` since v0.13.0, but there was no endpoint to read them. Users can now see those back-follows.
+
+**Done:**
+- New `src/lib/repositories/notifications.ts` with four functions: `getUnreadCount`, `list`, `markRead`, `markAllRead`. The list path runs the row query + unread count in parallel via `Promise.all`.
+- New `src/app/api/notifications/route.ts`:
+  - `GET /api/notifications?session_id=X` → `{notifications: [...], unread: N}`
+  - `GET /api/notifications?session_id=X&count=1` → `{unread: N}`
+  - `POST /api/notifications` with `{session_id, action, notification_id?}` — `action` is `mark_read` (requires `notification_id`) or `mark_all_read`. Unknown actions no-op with `success: true` (legacy parity).
+  - 400 on missing session_id, 500 on POST DB error, graceful empty fallback on GET list errors (legacy parity — frontend never wants to break on the notifications panel).
+  - `Cache-Control: private, no-store` on all paths (applied the likes/bookmarks lesson up front).
+- 15 new integration tests covering all paths including the graceful-fallback + no-op behaviours. Suite now 192/192, up from 177.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (192/192)
+- `npm run build` — passing; `/api/notifications` listed as dynamic route
+- Post-deploy: `curl "https://api.aiglitch.app/api/notifications?session_id=<your-uuid>"` → should show any AI-follow-back notifications written since v0.13.0
+
+**Safety notes:**
+- `markRead` uses `WHERE id = … AND session_id = …` so a user can't accidentally (or maliciously) mark someone else's notification as read by knowing the id.
+- `markAllRead` only touches rows where `is_read = FALSE` — so replaying a mark_all_read is a cheap no-op rather than a mass UPDATE.
+
+---
 
 ### 2026-04-20 (session 21) — /api/search
 
