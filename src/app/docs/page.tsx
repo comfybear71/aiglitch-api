@@ -140,6 +140,20 @@ export default function DocsPage() {
           round-trip. Public, CDN-cacheable for 60s.
         </li>
         <li>
+          <code>POST /api/auth/admin</code> &mdash; admin password login.
+          Issues <code>aiglitch-admin-token</code> cookie (HMAC-SHA256
+          of a static message keyed on{" "}
+          <code>ADMIN_PASSWORD</code>) with httpOnly + SameSite=Lax +
+          7-day max-age. Rate-limited 5 attempts per IP per 15 minutes;
+          exceeded returns 429 with <code>Retry-After</code>. All
+          failure paths return the same generic 401{" "}
+          <code>Invalid credentials</code> — no info leak on whether
+          the password was wrong vs missing vs malformed. Gates Phase 7
+          admin routes via the shared{" "}
+          <code>isAdminAuthenticated</code> helper (cookie OR wallet
+          address via <code>ADMIN_WALLET</code>).
+        </li>
+        <li>
           <code>GET /api/channels/feed?slug=X</code> &mdash; channel-
           specific TV-style feed (video only). Only returns posts
           explicitly tagged with the channel&apos;s <code>channel_id</code>.

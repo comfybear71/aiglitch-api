@@ -41,6 +41,7 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/friend-shares` | tested | session 36 | GET inbox joins sender+post+persona; returns `{shares, unread}`. POST `share` (verifies friendship, INSERTs row) + `mark_read` (bulk update). 400/403/404 legacy error shapes. Private, no-store. |
 | `/api/suggest-feature` | tested | session 37 | Public POST form. GitHub Issues API (`GITHUB_TOKEN`) primary path; `feature_suggestions` table fallback. Always returns 200 on non-title path — best-effort. |
 | `/api/channels/feed` | tested | session 40 | Channel-specific TV-style feed (video only). Modes: default, `?cursor=`, `?shuffle=1&seed=&offset=`. Posts carry comments + bookmarked + liked + emoji reactions + `socialLinks`. Studios channel skips director-scene exclusion. |
+| `/api/auth/admin` | tested | session 41 | Admin password login. HMAC-SHA256 cookie, 7-day expiry. 5-per-IP-per-15-min rate limit (429 with Retry-After). Generic 401 on every failure path. Unblocks Phase 7 admin routes via `isAdminAuthenticated` (cookie OR wallet). |
 | `/api/personas/[id]/wallet-balance` | tested | session 40 | Public wallet snapshot. DB cached columns only (zero Solana RPC). Returns in-app + on-chain balances; `wallet_address: null` when no `budju_wallets` row. `public, s-maxage=30, SWR=300`. |
 | `/api/nft/image/[productId]` | tested | session 39 | SVG trading card render. Grokified image from `nft_product_images` when present, emoji fallback otherwise. Unknown productId renders fallback card. |
 | `/api/nft/metadata/[mint]` | tested | session 39 | Metaplex JSON for minted NFTs. `persona:` prefix branches to AI Bestie shape; marketplace branch pulls from `MARKETPLACE_PRODUCTS` + `minted_nfts`. |
@@ -63,6 +64,32 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 ---
 
 ## Session log
+
+### 2026-04-20 (session 41) — /api/auth/admin (unblocks Phase 7)
+
+**Branch:** `claude/migrate-auth-admin`
+
+**Done:**
+- `/api/auth/admin`: POST with `{password}`. Constant-time `safeEqual` against `process.env.ADMIN_PASSWORD`. On success, issues an httpOnly + SameSite=Lax + secure-in-prod cookie `aiglitch-admin-token` (7-day max-age) carrying an HMAC-SHA256 digest. 5-per-IP-per-15-min rate limit with `Retry-After` header on 429. All failure paths return the same generic 401 `Invalid credentials` — no info leak on whether the password was wrong, missing, malformed, or the env var was unset.
+- New `src/lib/rate-limit.ts` — zero-dependency sliding-window limiter. Three preset limiters exported: `adminLoginLimiter` (5/15min, used here), `cronEndpointLimiter` (30/5min, stays dormant until Phase 6), `publicApiLimiter` (120/1min, available for future use). 5-minute cleanup sweep on the Map to prevent unbounded growth.
+- New `src/lib/admin-auth.ts` — three helpers: `safeEqual` (constant-time string compare via `crypto.timingSafeEqual`), `generateToken` (HMAC-SHA256 of static message keyed on password; deterministic across Lambda instances; rotating password invalidates every existing cookie), and **`isAdminAuthenticated`** — the canonical gate every Phase 7 admin route will import. Supports two auth methods: cookie (web dashboard) OR wallet address match (mobile app, via query param / `X-Wallet-Address` / `Authorization: Wallet <addr>`).
+- 35 new tests (10 rate-limit + 13 admin-auth + 12 route).
+- Suite now **475/475**, up from 440.
+
+**Env vars required on Vercel:**
+- `ADMIN_PASSWORD` — **required**. Without it `/api/auth/admin` returns 401 for every attempt. Copy from legacy's Vercel project.
+- `ADMIN_WALLET` — optional. Enables wallet-based admin auth for the mobile app. Same value as `NEXT_PUBLIC_ADMIN_WALLET` if you already set that for `/api/token/verification`; having both is fine.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (475/475)
+- `npm run build` — passing; `/api/auth/admin` registered as dynamic
+
+**Unlocks:** Phase 7 admin routes (~85) can now import `isAdminAuthenticated` to gate every action. No admin route ships without it.
+
+**Migration progress:** 36/179 routes (~20%). Consumer surface fully migrated. Admin auth layer landed. Next milestone: Phase 5 AI engine (the big deferred unlock — Phase 4 bestie + Phase 6 cron + AI auto-reply all unblock from there).
+
+---
 
 ### 2026-04-20 (session 40) — /api/channels/feed + /api/personas/[id]/wallet-balance
 
