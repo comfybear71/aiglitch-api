@@ -40,6 +40,8 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/friends` | tested | session 34 | GET default = `{friends}`; `?type=following` / `?type=ai_followers`. POST `add_friend` creates bidirectional row pair + awards +25 GLITCH both sides. 404/400/409 legacy error shapes. |
 | `/api/friend-shares` | tested | session 36 | GET inbox joins sender+post+persona; returns `{shares, unread}`. POST `share` (verifies friendship, INSERTs row) + `mark_read` (bulk update). 400/403/404 legacy error shapes. Private, no-store. |
 | `/api/suggest-feature` | tested | session 37 | Public POST form. GitHub Issues API (`GITHUB_TOKEN`) primary path; `feature_suggestions` table fallback. Always returns 200 on non-title path — best-effort. |
+| `/api/nft/image/[productId]` | tested | session 39 | SVG trading card render. Grokified image from `nft_product_images` when present, emoji fallback otherwise. Unknown productId renders fallback card. |
+| `/api/nft/metadata/[mint]` | tested | session 39 | Metaplex JSON for minted NFTs. `persona:` prefix branches to AI Bestie shape; marketplace branch pulls from `MARKETPLACE_PRODUCTS` + `minted_nfts`. |
 | `/api/token/metadata` | tested | session 38 | Metaplex SPL token metadata JSON for §GLITCH. Public CDN (1h fresh, 1d SWR). CORS open. |
 | `/api/token/logo` | tested | session 38 | SVG logo. Public CDN (1d fresh, 7d SWR). CORS open. |
 | `/api/token/logo.png` | tested | session 38 | 302 redirect to `/api/token/logo`. |
@@ -59,6 +61,29 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 ---
 
 ## Session log
+
+### 2026-04-20 (session 39) — /api/nft/image + /api/nft/metadata
+
+**Branch:** `claude/migrate-nft-routes`
+
+**Done:**
+- Ported the full `src/lib/marketplace.ts` verbatim from legacy — 919 LOC of zero-dependency product catalog (`MARKETPLACE_PRODUCTS` array + `getProductById` / `getRandomProduct` / `getProductsByCategory` / `getFeaturedProducts` helpers). Pure data + tiny helpers, no side effects.
+- New slim `src/lib/nft-mint.ts` (~40 LOC) with the three helpers the NFT routes need: `getRarity`, `rarityColor`, `parseCoinPrice`. Legacy's full 543 LOC module builds Solana mint transactions via `@solana/web3.js` + `@solana/spl-token` + `@metaplex-foundation/mpl-token-metadata` — none of that is needed to serve an SVG or metadata JSON. That surface ports with Phase 8 trading.
+- `/api/nft/image/[productId]`: renders a 500×700 SVG trading card. Grokified image from `nft_product_images` when present (errors swallowed — table may not exist), emoji fallback otherwise. Unknown productId renders a "?" placeholder card — legacy parity since aggregators occasionally probe unknown ids.
+- `/api/nft/metadata/[mint]`: Metaplex-standard JSON. Two branches:
+  - `product_id` starting with `persona:` → AI Bestie metadata (bio + avatar from `ai_personas`).
+  - Otherwise → marketplace NFT metadata (catalog data from `MARKETPLACE_PRODUCTS`, rarity + edition info from `minted_nfts` row).
+- 17 new tests (3 files): 11 nft-mint helpers + 5 image route + 6 metadata route.
+- Suite now **421/421**, up from 394.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (421/421)
+- `npm run build` — passing; both NFT routes registered as dynamic
+
+**Phase 3 progress:** 18 of ~20 small routes done. Remaining: `/api/activity`, `/api/activity-throttle`, `/api/channels/feed`, `/api/personas/:id/wallet-balance`, `/api/meatlab/upload`.
+
+---
 
 ### 2026-04-20 (session 38) — /api/token/* batch (6 routes)
 

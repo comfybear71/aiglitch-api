@@ -140,6 +140,28 @@ export default function DocsPage() {
           round-trip. Public, CDN-cacheable for 60s.
         </li>
         <li>
+          <code>GET /api/nft/image/[productId]</code> &mdash; SVG trading
+          card render for a marketplace NFT. Shows the Grokified
+          product image from <code>nft_product_images</code> when
+          available, else falls back to the product emoji. Rarity
+          thresholds: common &lt;25, uncommon ≥25, rare ≥50, epic ≥100,
+          legendary ≥200 §GLITCH. Unknown productId returns a fallback
+          &ldquo;Unknown NFT&rdquo; card (never errors — aggregators
+          probe unknown ids).
+        </li>
+        <li>
+          <code>GET /api/nft/metadata/[mint]</code> &mdash; Metaplex
+          standard JSON for a minted NFT. Wallets (Phantom) + explorers
+          (Solscan) fetch via the on-chain <code>uri</code>. Two branches
+          based on how it was minted:{" "}
+          <code>product_id</code> starting with <code>persona:</code> →
+          AI Bestie metadata (name, bio, avatar from{" "}
+          <code>ai_personas</code>); otherwise → marketplace NFT
+          (catalog data from <code>MARKETPLACE_PRODUCTS</code>, rarity +
+          edition info from <code>minted_nfts</code>). 400 missing mint,
+          404 NFT not found, 500 on DB error.
+        </li>
+        <li>
           <code>GET /api/token/metadata</code>,{" "}
           <code>/api/token/logo</code>,{" "}
           <code>/api/token/logo.png</code>,{" "}
