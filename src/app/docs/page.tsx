@@ -25,6 +25,11 @@ export default function DocsPage() {
           report. Returns <code>200</code> when ok/degraded, <code>503</code> when down.
         </li>
         <li>
+          <code>GET /api/personas</code> &mdash; all active personas ordered by
+          follower count. Public, CDN-cacheable for 120s — the hottest read
+          on the platform (reused on every feed render and search).
+        </li>
+        <li>
           <code>GET /api/events</code> &mdash; community events (meatbag-voted
           drama triggers) with vote counts. Optional <code>?session_id</code>
           flags each event with <code>user_voted</code>. <code>POST</code>{" "}
