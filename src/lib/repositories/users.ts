@@ -14,10 +14,18 @@ import { getDb } from "@/lib/db";
 /**
  * Subset of legacy `COIN_REWARDS` values this repo emits directly.
  * `firstLike` / `firstComment` / `personaLikeReceived` live inlined in
- * interactions.ts for the /api/interact retrofit; `signup` lands here
- * for /api/coins Slice 2.
+ * interactions.ts for the /api/interact retrofit; `signup` and
+ * `maxTransfer` land here for /api/coins Slices 2-3.
  */
 export const SIGNUP_BONUS = 100;
+export const MAX_TRANSFER = 10_000;
+
+export interface HumanUser {
+  id: string;
+  session_id: string;
+  display_name: string;
+  username: string | null;
+}
 
 export interface CoinBalance {
   balance: number;
@@ -48,9 +56,25 @@ export async function getCoinBalance(sessionId: string): Promise<CoinBalance> {
 }
 
 /**
+ * Human user lookup by username (case-insensitive). Legacy lowercases
+ * the input before querying — `human_users.username` is stored
+ * lowercase, so matching any case requires the same coercion here.
+ * Used by /api/coins send_to_human (Slice 3) to resolve the recipient.
+ */
+export async function getUserByUsername(
+  username: string,
+): Promise<HumanUser | null> {
+  const sql = getDb();
+  const rows = (await sql`
+    SELECT id, session_id, display_name, username
+    FROM human_users WHERE username = ${username.toLowerCase()}
+  `) as unknown as HumanUser[];
+  return rows.length > 0 ? (rows[0] ?? null) : null;
+}
+
+/**
  * Recent coin transactions for a session (newest first). Default 20,
- * matching legacy. Awards log positive amounts, deducts (Slice 2+)
- * will log negative.
+ * matching legacy. Awards log positive amounts, deducts log negative.
  */
 export async function getTransactions(
   sessionId: string,
@@ -114,6 +138,44 @@ export async function awardCoins(
     VALUES (${randomUUID()}, ${sessionId}, ${amount}, ${reason}, ${referenceId ?? null}, NOW())
   `;
   return amount;
+}
+
+/**
+ * Deduct GLITCH coins from a human. Returns `{success: false, newBalance}`
+ * when the session has less than `amount` — lets the caller distinguish a
+ * genuine shortfall from a DB error. Non-transactional (legacy parity):
+ * balance lookup + UPDATE + transaction log are three separate SQL
+ * calls; a concurrent writer could race between the check and the
+ * UPDATE. Accepted — matches legacy behavior, and coin transfers aren't
+ * a hot path.
+ */
+export async function deductCoins(
+  sessionId: string,
+  amount: number,
+  reason: string,
+  referenceId?: string,
+): Promise<{ success: boolean; newBalance: number }> {
+  const sql = getDb();
+  const balanceRows = (await sql`
+    SELECT balance FROM glitch_coins WHERE session_id = ${sessionId}
+  `) as unknown as Array<{ balance: number }>;
+  const balance = balanceRows.length > 0 ? Number(balanceRows[0]!.balance) : 0;
+
+  if (balance < amount) return { success: false, newBalance: balance };
+
+  await sql`
+    UPDATE glitch_coins SET balance = balance - ${amount}, updated_at = NOW()
+    WHERE session_id = ${sessionId}
+  `;
+  await sql`
+    INSERT INTO coin_transactions (id, session_id, amount, reason, reference_id, created_at)
+    VALUES (${randomUUID()}, ${sessionId}, ${-amount}, ${reason}, ${referenceId ?? null}, NOW())
+  `;
+
+  const [updated] = (await sql`
+    SELECT balance FROM glitch_coins WHERE session_id = ${sessionId}
+  `) as unknown as Array<{ balance: number }>;
+  return { success: true, newBalance: Number(updated!.balance) };
 }
 
 /** Award GLITCH coins to an AI persona. Separate table, no transaction log (legacy parity). */

@@ -39,13 +39,44 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/hatchery` | tested | session 26 | Paginated public list of hatched personas; `?limit` (≤50) + `?offset`. Returns `{hatchlings, total, hasMore}`. |
 | `/api/coins` (Slice 1 — GET) | tested | session 27 | Balance + lifetime_earned + recent transactions (newest 20). Missing session_id returns zeros (legacy parity). `private, no-store`. Closes the loop on coin writes already live inside `/api/interact`. |
 | `/api/coins` (Slice 2 — claim_signup) | tested | session 28 | POST `{session_id, action:"claim_signup"}` awards +100 GLITCH once per session (idempotent on `coin_transactions.reason = 'Welcome bonus'`). Duplicate claims return 200 with `already_claimed:true` (legacy parity — NOT 4xx). |
-| `/api/coins` (Slices 3-5 — POST actions) | deferred | — | 6 write actions left: `send_to_persona`, `send_to_human`, `purchase_ad_free`, `check_ad_free`, `seed_personas`, `persona_balances`. Return 501 via strangler until ported. |
+| `/api/coins` (Slice 3 — send_to_persona + send_to_human) | tested | session 29 | Transfer pair. §10,000 cap, 402 insufficient, 404 recipient not found, 400 self-transfer. Non-transactional (legacy parity). New repo helpers: `deductCoins`, `getUserByUsername`, `getIdAndDisplayName`. |
+| `/api/coins` (Slices 4-5 — POST actions) | deferred | — | 4 write actions left: `purchase_ad_free`, `check_ad_free`, `seed_personas`, `persona_balances`. Return 501 via strangler until ported. |
 | `/api/interact` AI auto-reply trigger | deferred | — | Biggest remaining internal port. Not a blocker for consumer work — see session 17 notes. |
 | *(all other 177 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-20 (session 29) — /api/coins Slice 3 (send_to_persona + send_to_human)
+
+**Branch:** `claude/migrate-coins-slice-3-transfers`
+
+**Done:**
+- New repo helpers in `src/lib/repositories/users.ts`:
+  - `deductCoins(sessionId, amount, reason, referenceId?)` → `{success, newBalance}`. Non-transactional (legacy parity) — race window between balance check and UPDATE is accepted.
+  - `getUserByUsername(username)` → `HumanUser | null`. Lowercases input to match legacy (human_users.username is stored lowercase).
+  - `HumanUser` type (minimal: id, session_id, display_name, username).
+  - `MAX_TRANSFER = 10_000` constant.
+- New `getIdAndDisplayName(personaId)` in `src/lib/repositories/personas.ts` — just what the transfer flow needs.
+- `POST /api/coins` dispatches `send_to_persona` (debits sender, credits `ai_persona_coins`) and `send_to_human` (debits sender, credits recipient's `glitch_coins` + logs "Received from a friend").
+- **Legacy-parity error contract preserved:**
+  - 400 Invalid amount (missing/non-number/<1/over cap)
+  - 400 `Max transfer is §10,000` when over cap
+  - 402 Insufficient balance with `balance` + `shortfall` in body
+  - 404 Persona not found / User not found
+  - 400 Cannot send coins to yourself (send_to_human only)
+- 14 new POST tests (7 send_to_persona + 7 send_to_human). Suite now **277/277**, up from 263.
+- `/docs` page updated with Slice 3.
+
+**Verification gates:**
+- `npm run typecheck` — passing
+- `npm test` — passing (277/277)
+- `npm run build` — passing; `/api/coins` listed as dynamic route
+
+**Phase 3 progress:** 4 of ~20 small routes + 3 of 5 coin slices.
+
+---
 
 ### 2026-04-20 (session 28) — /api/coins Slice 2 (claim_signup)
 

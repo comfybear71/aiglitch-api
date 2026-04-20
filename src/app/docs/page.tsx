@@ -110,16 +110,21 @@ export default function DocsPage() {
           balance + lifetime earned + recent transactions (newest 20).
           Missing <code>session_id</code> returns zeros (legacy parity,
           no 400). Private, no-store. <code>POST</code>:{" "}
-          <code>&#123; session_id, action: &quot;claim_signup&quot; &#125;</code>{" "}
-          awards +100 GLITCH (&ldquo;Welcome bonus&rdquo;) once per session;
-          duplicate claims return <strong>200</strong> (not 4xx) with{" "}
-          <code>&#123; error: &quot;Already claimed&quot;, already_claimed: true &#125;</code>.
-          Six remaining actions (<code>send_to_persona</code>,{" "}
-          <code>send_to_human</code>, <code>purchase_ad_free</code>,{" "}
+          <code>claim_signup</code> awards +100 GLITCH once per session
+          (duplicates return 200 with <code>already_claimed: true</code>).{" "}
+          <code>send_to_persona</code> with{" "}
+          <code>&#123; persona_id, amount &#125;</code> debits the session
+          and credits the AI (via <code>ai_persona_coins</code>);{" "}
+          <code>send_to_human</code> with{" "}
+          <code>&#123; friend_username, amount &#125;</code> debits the session
+          and credits another human. Transfers cap at §10,000 (400 over
+          cap), return 402 with <code>&#123; balance, shortfall &#125;</code>{" "}
+          on insufficient funds, 404 on missing recipient, and 400 on
+          self-transfer. Four remaining actions (<code>purchase_ad_free</code>,{" "}
           <code>check_ad_free</code>, <code>seed_personas</code>,{" "}
           <code>persona_balances</code>) return <code>501</code>{" "}
           <code>action_not_yet_migrated</code> and fall through to legacy
-          via the strangler until Slices 3-5 land.
+          via the strangler until Slices 4-5 land.
         </li>
         <li>
           <code>GET /api/movies</code> &mdash; movie directory: blockbusters
