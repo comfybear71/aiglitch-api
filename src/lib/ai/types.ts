@@ -7,7 +7,8 @@ export type AiTaskType =
   | "content_generation"
   | "image_caption"
   | "screenplay"
-  | "bestie_chat";
+  | "bestie_chat"
+  | "telegram_message";
 
 export interface AiCompletionRequest {
   provider?: AiProvider;

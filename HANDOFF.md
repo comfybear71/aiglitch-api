@@ -64,12 +64,39 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/partner/push-token` POST | tested | session 45 | Registers iOS push notification token. UPSERT into `device_push_tokens` (new table, created IF NOT EXISTS on first call). Body: `{session_id, token, platform?}`. |
 | `/api/partner/bestie` GET | tested | session 45 | Bestie profile card for iOS home screen. Returns full persona + conversation summary (`message_count`, `last_message_at`) without creating a conversation. `private, no-store`. |
 | `/api/partner/briefing` GET | tested | session 45 | Daily briefing aggregation for iOS. Returns `followed_count`, `unread_notifications`, and up to 5 recent conversations with last-message preview. `private, no-store`. |
-| `/api/sponsor-burn` POST | tested | session 46 | Daily cron (12am UTC). Burns DAILY_BURN (100) GLITCH from each active sponsor; suspends on zero balance. Auth: `CRON_SECRET`. Schedule in `vercel.json`. |
-| *(all other 172 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/sponsor-burn` GET + POST | tested | session 46–47 | Daily cron (12am UTC). Per-campaign GLITCH burn: daily rate = totalInvestment / duration_days, catch-up days, in-house excluded. GET=cron, POST=admin. |
+| `/api/telegram/credit-check` GET + POST | tested | session 47 | Every 30 min. Checks AI spend today + low sponsor balances; sends Telegram alert if either trips threshold. Silent no-op when Telegram not configured. |
+| `/api/telegram/status` GET + POST | tested | session 47 | Every 6 hours. Sends system health summary (active personas, posts today, recent cron_runs, errors) to admin Telegram channel. |
+| `/api/telegram/persona-message` GET + POST | tested | session 47 | Every 3 hours. Each active persona bot generates + sends an in-character message to its Telegram chat. Per-bot error isolation. |
+| *(all other 169 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-20 (session 47) — Phase 6 Telegram crons
+
+**Branch:** `claude/phase6-telegram-crons`
+
+**Done:**
+- New `src/lib/telegram.ts` — `sendMessage(botToken, chatId, text)` (native fetch, no SDK) + `getAdminChannel()` (reads `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHANNEL_ID`). Silent null return when env vars absent — safe in preview deployments.
+- New `generateTelegramMessage` in `src/lib/ai/generate.ts` — standalone in-character persona post, `telegram_message` task type (added to `AiTaskType` union).
+- New `src/app/api/telegram/credit-check` (GET/POST) — every 30 min. Checks AI daily spend (`ai_cost_log`) and low sponsor balances; sends alert if either trips threshold. No alert when Telegram not configured.
+- New `src/app/api/telegram/status` (GET/POST) — every 6 hours. Sends active-persona count, posts-today count, last-5 cron_runs summary, and 24h error count to admin channel.
+- New `src/app/api/telegram/persona-message` (GET/POST) — every 3 hours. Queries `persona_telegram_bots JOIN ai_personas`, generates + sends message per active bot. Per-bot error isolation (one failure doesn't abort the run).
+- `vercel.json` — 3 new cron schedules added.
+- 23 new tests (6 telegram lib + 6 credit-check + 6 status + 5 persona-message).
+- Suite **626/626**, up from 608.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (626/626)
+
+**Env vars needed in Vercel (optional — routes degrade gracefully without them):**
+- `TELEGRAM_BOT_TOKEN` — admin bot token
+- `TELEGRAM_CHANNEL_ID` — admin alert channel ID
+
+---
 
 ### 2026-04-20 (session 46) — Phase 6 cron infrastructure + sponsor-burn
 

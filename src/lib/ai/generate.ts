@@ -220,3 +220,19 @@ export async function generateBestieReply(opts: {
     temperature: 0.85,
   });
 }
+
+export async function generateTelegramMessage(opts: {
+  persona: PersonaContext;
+  provider?: AiProvider;
+}): Promise<string> {
+  const systemPrompt = buildPersonaSystem(opts.persona);
+  return complete({
+    systemPrompt,
+    userPrompt:
+      "Post a short, spontaneous message to your Telegram channel. Be in-character, engaging, and concise (1–3 sentences). No hashtags.",
+    taskType: "telegram_message",
+    provider: opts.provider,
+    maxTokens: 200,
+    temperature: 0.9,
+  });
+}
