@@ -84,11 +84,52 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/admin/telegram/re-register-bots` GET + POST | tested | session 72 | Points every active persona bot at the new API domain's webhook + refreshes the slash-command menu. GET lists active bots (persona_id, bot_username, display_name, avatar_emoji — NEVER `bot_token`). POST `{persona_id}` re-registers that single bot (404 when missing); POST with empty body loops all active bots with 200ms spacing. Each call: Telegram `setWebhook` → `{NEXT_PUBLIC_APP_URL}/api/telegram/persona-chat/{id}` with `allowed_updates=["message","message_reaction"]` → `registerTelegramCommands(bot_token)` to refresh the `/help`/`/nft`/`/email`/… menu. Introduces `src/lib/telegram/commands.ts` — minimal port of legacy `content/telegram-commands` (just the two scoped command lists + registration function; personality-mode + content-surfacing handlers deferred until Telegram bot engine ports). |
 | `/api/activity` GET | tested | session 73 | Admin dashboard aggregator. Pure read-only GET the admin UI polls to render the Activity tab. Runs 12 parallel queries (recent posts, video jobs, product-shill ads, hourly hour counts, breaking news, daily topics, persona activity). Follow-up blocks fetch director-movie stats + recent movies + clip-level diagnostics for failed/generating movies, activity throttle setting, cron history (last 50), last-run-per-cron, 7-day cron trend, 24h/7d cost + run-count breakdown per cron. Every optional block wrapped in try/catch so missing tables (`director_movies`, `multi_clip_scenes`, `persona_video_jobs`) degrade gracefully — UI still renders with zeros. `cron_runs.status` re-pointed to new repo's `'ok' \| 'error'` convention (legacy wrote `'completed' \| 'throttled'`); `throttled*` fields return 0 until cron throttling is re-introduced. **Unauth'd per legacy parity** — admin UI page itself is behind admin cookie; locking the JSON would orphan the dashboard. |
 | `/api/generate-videos` GET + POST | tested | session 74 | Premiere trailer cron — two-phase async video pipeline using the shared `submitVideoJob` + `pollVideoJob` helpers. POST picks N (1..5, default 1) random prompts from 10-entry `VIDEO_PROMPTS` dict and submits each (10s, 9:16, 720p). Returns `{jobs:[{requestId, title, genre, tagline, prompt, error?}]}`. Synchronous completions come back as `sync:{url}` request IDs. GET `?id=&title=&genre=&tagline=` polls one job; on `done`, downloads + persists to `premiere/{genre}/{uuid}.mp4`, INSERTs `posts` (`post_type='premiere'`, `media_source='grok-video'`, hashtags `AIGlitchPremieres,AIGlitch{GenreCap}`), bumps the random-picked persona's `post_count`. Both paths gated by `requireCronAuth` (legacy's `checkCronAuth` equivalent). Deferred: `spreadPostToSocial` (marketing lib), `ensureDbReady` (schema assumed live). **First cron on the new repo to exercise image-free text-to-video through the shared helper** — validates the submit/poll separation at cron cadence. |
-| *(all other 159 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/admin/media/upload` POST | tested | session 75 | Vercel Blob client-upload token handler. `@vercel/blob/client#upload()` in the browser POSTs here to get a short-lived client token, then uploads the file directly to Blob — bypasses the 4.5 MB serverless body limit for big videos (up to 500 MB). Supports both JSON and `multipart/form-data` bodies (Safari/iOS WebKit bug workaround — the client wraps JSON in FormData under `__json`). Allowlists 10 image + 5 video + `application/octet-stream` content types. Registration in `media_library` still goes through `/api/admin/media/save` on legacy (marketing-lib-dependent). |
+| `/api/admin/media/import` POST | tested | session 75 | Bulk URL importer. POST `{urls[], media_type?, tags?, description?, persona_id?}` — fetches each URL with a browser UA, detects media kind from response `content-type` + URL extension (video / meme / image), uploads to `media-library/{uuid}.{ext}`, INSERTs `media_library`, and (when `persona_id` set) auto-creates a profile post + bumps `post_count`. Per-URL failures isolated — `{results[]}` carries each URL's outcome; `success` only true when every URL succeeded. No marketing auto-spread on this path. |
+| `/api/admin/media/resync` POST | tested | session 75 | Orphan-blob recovery. Scans 8 prefix buckets (`media-library/`, `videos/`, `video/`, `premiere/`, `logos/`, `memes/`, `images/`, and root) with Vercel Blob `list`, diffs against `SELECT url FROM media_library`, re-INSERTs any missing rows. Media type inferred from extension (6 video / 7 image / 1 meme); unknown extensions skipped. `"logo"` in pathname adds a `logo,` tag prefix (no separate media_type — DB constraint allows image/video/meme only). Per-prefix scan errors isolated so a single failing bucket doesn't abort recovery; per-INSERT errors bump counter, keep going. Response: `{synced, skipped, errors, already_in_db, counts, sample}`. Requires `BLOB_READ_WRITE_TOKEN`. |
+| *(all other 156 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 75) — Phase 7 admin media sub-routes (upload/import/resync)
+
+**Branch:** `claude/phase-7-admin-batch-26`
+
+**Done:** Three self-contained admin/media sub-routes in one batch. All have zero marketing-lib dependency — the architect-auto-spread branches live on the main `admin/media` GET/POST and on `admin/media/save`, which stay on legacy until `marketing/*` ports.
+- `src/app/api/admin/media/upload/route.ts` — Vercel Blob client-upload token handler. 500 MB cap, 10 image + 5 video + `application/octet-stream` allowlist. Supports JSON body + multipart/form-data (Safari/iOS wraps the JSON under a `__json` form key to dodge a WebKit "string did not match the expected pattern" TypeError on JSON fetch bodies).
+- `src/app/api/admin/media/import/route.ts` — Bulk URL importer. Fetches each URL with a browser UA, detects media kind from response `content-type` + URL extension (video / meme / image), persists to `media-library/{uuid}.{ext}`, and when `persona_id` is provided also INSERTs a profile post + bumps `post_count`. Per-URL failures isolated; zero-byte responses + HTTP errors surface as `{error}` entries without aborting the batch.
+- `src/app/api/admin/media/resync/route.ts` — Orphan-blob recovery. Scans 8 prefix buckets (`media-library/`, `videos/`, `video/`, `premiere/`, `logos/`, `memes/`, `images/`, root) with cursor-paginated Vercel Blob `list`, diffs against `SELECT url FROM media_library`, re-INSERTs any missing rows with type inferred from extension. The `logo` heuristic (pathname contains "logo") prepends a `logo,` tag prefix — media_type stays `image` / `video` because the DB constraint doesn't allow `logo`. Per-prefix scan errors AND per-INSERT errors isolated so partial-success scans still make progress.
+- 24 new tests (5 upload + 10 import + 9 resync):
+  - **upload**: 401 auth, JSON pass-through to `handleUpload`, multipart `__json` parsing, `handleUpload` exception → 400, `onBeforeGenerateToken` returns expected allowed-types + 500 MB + addRandomSuffix via the token-opts capture hook.
+  - **import**: 401 auth, 400 empty-urls, PNG/video/gif detection with blob path extension, persona_id → posts + post_count branch, no-persona → no posts branch, HTTP 404 per-URL isolation, zero-byte → error, fetch exception captured, whitespace-only URLs skipped silently.
+  - **resync**: 401 auth, 500 missing BLOB_READ_WRITE_TOKEN, empty-case covers all 8 prefixes once, new/skipped/counts by type, logo tag prefix, prefix-level failure isolation, INSERT failure bumps errors + keeps going, deduplication across overlapping prefixes (`media-library/` and root prefix).
+- Suite **1389/1389**, up from 1365.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (1389/1389)
+
+**Design choices:**
+- `@vercel/blob/client` mocked for the upload test — captured `onBeforeGenerateToken()` return value on a shared `upload.tokenOpts` field so we can assert the token-generation contract without real blob storage.
+- `put()` mocked in the import test to return a deterministic `blob.test/{pathname}` URL — the real pathname shape (extension, `media-library/` prefix) is what we assert on.
+- `list()` mocked in resync with a per-prefix page queue so cursor-paginated code path executes end-to-end across 8 prefixes even though each test provides zero or one page.
+
+**Deferrals vs. legacy:**
+- `@/lib/marketing/*` branches (`spreadArchitectContent` in admin/media + admin/media/save) — stays on legacy until the marketing lib ports.
+- `/api/admin/media/save` — not ported here because its Architect auto-spread depends on the marketing lib.
+- `ensureDbReady` / `safeMigrate` — schema assumed live.
+- `SEED_PERSONAS` upsert in admin/media/save — defer with the save route.
+
+**Next batch options (pick one):**
+1. `director-movies` content lib — 1626-line lift. Unlocks screenplay, generate-news, generate-channel-video, extend-video, channels. Multi-session.
+2. `marketing/*` libs — un-defers `spreadPostToSocial` on 6 routes + unlocks `spread`, `media` (main), `media/save`, `mktg`, `promote-glitchcoin`, `marketing-post`, `hatch`. Multi-session.
+3. `elon-campaign` (~711) or `channels` admin (~666) — chunky single-ship.
+4. Telegram bot engine — un-defers personality modes + content handlers. Multi-session.
+5. `bestie-life` cron (282) — deps mostly ported; needs adaptation of old image-gen / generateVideoFromImage calls to new helpers.
+
+---
 
 ### 2026-04-21 (session 74) — Phase 6 cron port (`/api/generate-videos`)
 
