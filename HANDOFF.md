@@ -81,11 +81,53 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/admin/animate-persona` GET + POST | tested | session 69 | Image-to-video persona avatar animator. POST loads persona → `generateText` animation prompt (with local fallback if AI down) → `submitVideoJob` with `sourceImageUrl=avatar_url`. Returns `requestId` for client polling. GET thin-wraps `pollVideoJob`; on completion downloads + persists to `feed/{uuid}.mp4`, INSERT `posts` (`media_source='grok-animate'`), bumps `ai_personas.post_count`. Preview mode short-circuits before AI for UI preview. Deferred: `spreadPostToSocial`, `injectCampaignPlacement`. **First real exercise of the video helper's `sourceImageUrl` image-to-video branch.** |
 | `/api/admin/generate-persona` POST | tested | session 70 | SSE-streaming manual post generator for one persona. Body `{persona_id, count?}` (count clamped 1..20, default 3). Streams `init` → `picked` → (`generating` → `post_ready` → `reactions`)×N → `done`. Per-post: `generatePost(persona, recentContext, dailyTopics)` → INSERT `posts` + bump `post_count` → pick 5 random active AIs for reactions. Reactions use a weighted-random inline decision (30% like / 15% comment / 55% ignore) instead of the legacy `generateAIInteraction` enum call — the new helper returns content, not a decision. Comments still go through `generateComment`. Per-post failures emit a `progress step=error` event and loop continues. Deferred: `spreadPostToSocial`, `ensureDbReady`/`safeMigrate`. First SSE route in the new repo. |
 | `/api/admin/batch-avatars` GET + POST | tested | session 71 | Batch persona-avatar backfill/refresh. POST `{batch_size?, force?}` (clamped 1..10, default 5) picks candidates in two tiers: (1) `avatar_url IS NULL` (oldest first), (2) top-up from avatars >30 days old (or any when `force:true`). Per pick: random art style from 20-entry `ART_STYLES` list → `generateImageToBlob` (1:1, `avatars/{uuid}.png`) → UPDATE avatar + bump `avatar_updated_at` → `generateText` in-character announcement (with static fallback) → INSERT `posts` (`media_source='grok-aurora'`, hashtags `AIGlitch,NewProfilePic,AvatarUpdate`) → bump `post_count`. Per-persona failures isolated — batch continues. GET returns `{total_active, missing_avatar, recently_updated, needing_update, message}` dashboard. Deferred: legacy OpenAI/fallback image branch (xAI-only repo), structured logging. |
-| *(all other 162 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/admin/telegram/re-register-bots` GET + POST | tested | session 72 | Points every active persona bot at the new API domain's webhook + refreshes the slash-command menu. GET lists active bots (persona_id, bot_username, display_name, avatar_emoji — NEVER `bot_token`). POST `{persona_id}` re-registers that single bot (404 when missing); POST with empty body loops all active bots with 200ms spacing. Each call: Telegram `setWebhook` → `{NEXT_PUBLIC_APP_URL}/api/telegram/persona-chat/{id}` with `allowed_updates=["message","message_reaction"]` → `registerTelegramCommands(bot_token)` to refresh the `/help`/`/nft`/`/email`/… menu. Introduces `src/lib/telegram/commands.ts` — minimal port of legacy `content/telegram-commands` (just the two scoped command lists + registration function; personality-mode + content-surfacing handlers deferred until Telegram bot engine ports). |
+| *(all other 161 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 72) — Phase 7 admin batch 23 (telegram re-register-bots)
+
+**Branch:** `claude/phase-7-admin-batch-23`
+
+**Done:**
+- New `src/app/api/admin/telegram/re-register-bots/route.ts` — Telegram bot re-registration admin tool:
+  - GET lists active persona bots (persona_id, bot_username, display_name, avatar_emoji) — response NEVER includes `bot_token`. Used by the admin UI to build a client-side per-bot progress loop so re-registrations don't lock the screen.
+  - POST `{persona_id}` re-registers that single bot; returns 404 when missing. POST with empty body loops every active bot with 200ms spacing between `setWebhook` calls — kept for backwards compatibility with the old bulk button.
+  - Per-bot flow: Telegram `setWebhook` → `{NEXT_PUBLIC_APP_URL}/api/telegram/persona-chat/{persona_id}` with `allowed_updates=["message","message_reaction"]` → `registerTelegramCommands(bot_token)` to refresh the slash-command menu. Per-bot errors surface in `details[]` + `errors` count without aborting the batch.
+  - Extracted the per-bot logic into `reregisterOne()` so single and bulk modes share the same code path. Legacy had the loop inlined twice.
+- New `src/lib/telegram/commands.ts` — minimal port of legacy `@/lib/content/telegram-commands`:
+  - `TELEGRAM_COMMANDS_PRIVATE` — 14 commands including `/email` (Stuart's private outreach helper).
+  - `TELEGRAM_COMMANDS_GROUP` — same list minus `/email` so group members can't see a Stuart-only command.
+  - `registerTelegramCommands(botToken)` — pushes both scoped menus via Telegram's `setMyCommands`. Private-scope success is the overall return signal; group-scope failures are logged as warnings only.
+  - Deferred from the legacy file: personality-mode overlay system (`PERSONALITY_MODES`, `getPersonaMode`, `setPersonaMode`, `getModeOverlay`) + content-surfacing command handlers (`/nft`, `/channel`, `/avatar`). These come along with the Telegram bot engine port.
+- 19 new tests (4 commands-lib + 15 route): auth, env guard, single-bot 404, single-bot happy-path (`setWebhook` ok + commands registered, verified URL + body payload), single-bot setWebhook 4xx, single-bot fetch exception, bulk mode with mixed pass/fail (verified `updated` / `errors` / details array), bulk empty-list zero-count, empty-body routes-to-bulk, non-JSON body survives gracefully, commands-lib group-failure-is-warning, command-list length invariants.
+- Suite **1330/1330**, up from 1311.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (1330/1330)
+
+**Design choices:**
+- Minimal `@/lib/telegram/commands` — just what this route needs. Personality-mode + content handlers stay in legacy until the Telegram bot engine port so we don't drag in `@/lib/marketplace` + `@/lib/telegram` send helpers.
+- `NEXT_PUBLIC_APP_URL` read via `process.env` directly, not `@/lib/bible/env`. Matches the `solana-config.ts` access pattern already used in this repo.
+- Webhook URL still `{appUrl}/api/telegram/persona-chat/{persona_id}` — the per-persona chat webhook is still on the legacy monolith. When it ports, `appUrl` just flips to the new domain.
+
+**Deferrals vs. legacy:**
+- Personality-mode overlay system — defer until Telegram bot engine port.
+- Content-surfacing command handlers (`/nft`, `/channel`, `/avatar`) — same, plus they need marketplace + send helpers.
+- Structured logging — cross-cutting pass deferred.
+
+**Next batch options (pick one):**
+1. `director-movies` content lib — 1626-line lift. Unlocks `screenplay`, `generate-news`, `generate-channel-video`, `extend-video`, `channels` (partial). Multi-session.
+2. `marketing/*` libs — un-defers `spreadPostToSocial` on five already-ported routes + unlocks `spread`, `media`, `mktg`, `promote-glitchcoin`. Multi-session.
+3. Phase 6 cron triage — pick 2–3 pure-DB cron jobs from the 21-job legacy fleet.
+4. More small admin routes — `elon-campaign` (~711 lines), `channels` (~666), `hatchery` (marketing deps — skip until lib).
+5. Telegram bot engine port — the big one that un-defers `/api/telegram/persona-chat/*` + the personality modes we just deferred. Multi-session.
+
+---
 
 ### 2026-04-21 (session 71) — Phase 7 admin batch 22 (batch-avatars)
 
