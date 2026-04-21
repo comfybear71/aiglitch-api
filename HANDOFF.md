@@ -102,11 +102,47 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/content/generate` POST | tested | session 83 | Content Studio async generator. `{type:"image"\|"video", prompt}`. INSERT `content_jobs` as `processing`, invoke `generateImageToBlob` or `generateVideoToBlob` (video capped at 24 attempts × 10s so it fits in the 5-min lambda), UPDATE to `completed` + `result_url` or `failed` + `error`. Client polls `/api/content/status`. Drops legacy's "prefix the prompt with `[VIDEO]`" hack which never actually produced videos — routes go through real xAI video submit + poll now. |
 | `/api/admin/blob-upload/upload` POST | tested | session 84 | Client-upload token handler specialized for large premiere/news videos. Unlike `/api/admin/media/upload` (10+ content types + random suffix), this one is locked to 4 video types + `addRandomSuffix:false` so the clean folder path survives for `detectGenreFromPath` to infer genre from `/premiere/<genre>/`. 500 MB cap. JSON + Safari `__json` multipart fallback. |
 | `/api/admin/personas/set-bot-token` POST | tested | session 84 | Single-persona Telegram bot assignment. Mode A (no `bot_token` or empty string): flips `persona_telegram_bots.is_active` to FALSE. Mode B: validates token via Telegram `getMe` (bails BEFORE any DB write on invalid), registers webhook pointed at `{NEXT_PUBLIC_APP_URL}/api/telegram/persona-chat/{id}` with `message + message_reaction` updates (non-fatal if fails), DELETE + INSERT `persona_telegram_bots` row, then `registerTelegramCommands` for the slash-command menu. `bot_token` never in responses. Auto-creates the `persona_telegram_bots` table on first call. Companion to `/api/admin/telegram/re-register-bots` (bulk refresh). |
-| *(all other 141 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/admin/sponsors/[id]/ads` GET + POST + PUT | tested | session 85 | Per-sponsor ads CRUD + AI prompt generation. GET default lists `sponsored_ads`; `?action=placements` joins `ad_campaigns` (brand-name matched) → `ad_impressions` → `posts` + `channels` for the "where is my brand placed" view (top 100). POST creates a draft row using `SPONSOR_PACKAGES` defaults (duration / glitch_cost / cash_equivalent / follow_ups / platforms / frequency / campaign_days) + caller overrides. PUT handles three modes: `action:"delete"`, `action:"generate"` (calls `buildSponsoredAdPrompt` + `generateText` + defensive JSON-from-text parse → `{video_prompt, caption, x_caption}`, flips status to `pending_review`), or default COALESCE update of status/video_url/post_ids/performance. Publishing (`status="published"`) deducts `glitch_cost` from `sponsors.glitch_balance` + bumps `total_spent`. Replaces legacy's `claude.generateJSON` with a `generateText` + `match(/\{...\}/)` inline parser. |
+| *(all other 140 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 85) — `/api/admin/sponsors/[id]/ads`
+
+**Branch:** `claude/phase-7-admin-batch-36`
+
+**Done:**
+- New `src/app/api/admin/sponsors/[id]/ads/route.ts` — per-sponsor sponsored-ads CRUD + AI prompt generation. Three handlers:
+  - GET default → `SELECT * FROM sponsored_ads WHERE sponsor_id` newest-first. `?action=placements` → joins `ad_campaigns` (matched by lowered brand name) to `ad_impressions`, then `posts` + `channels`, returning the "where is my brand showing up" view capped at 100 rows. 404 when the sponsor doesn't exist.
+  - POST → create draft row. Pulls package defaults from the ported `SPONSOR_PACKAGES` dict; body overrides (`frequency`, `campaign_days`, `cash_paid`, etc.) win. Returns `{ok, id}` via `RETURNING id`.
+  - PUT → three actions. `delete` removes the row. `generate` builds the prompt via `buildSponsoredAdPrompt`, calls the replacement `generateAdJson` helper (AI + defensive `{…}` regex parse), and flips status to `pending_review` on success. Default path COALESCE-updates status/video_url/post_ids/performance and — if `status="published"` — deducts `glitch_cost` from the sponsor's balance.
+- Legacy used `claude.generateJSON` which the new repo doesn't expose. Replaced with a local `generateAdJson(prompt)` helper that calls `generateText` and extracts the first JSON object from the response via regex, returning `null` on any failure so the route produces a clean 500.
+- 19 new route tests: GET auth / default list / placements 404 / placements empty-campaigns / placements full join / DB-error 500; POST auth / required-fields 400 / happy path / override defaults; PUT auth / missing id / delete / generate clean JSON / generate with fenced JSON / generate parse fail / generate AI exception / COALESCE patch / published deduction.
+- Suite **1568/1568**, up from 1549.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (1568/1568)
+
+**Design choices:**
+- `generateAdJson` accepts arbitrary surrounding text (AI sometimes wraps JSON in code fences or adds preamble). The `match(/\{[\s\S]*\}/)` regex picks the outermost JSON object — good enough for Claude/Grok output. Parse failures fall to `null`, which the caller turns into a clean error.
+- Package defaults + body overrides both pass through the same SQL INSERT to preserve legacy's "any body field wins" shape. Kept `SPONSOR_PACKAGES.glitch` as the final fallback, matching legacy.
+- Published-status balance deduction stays in the default UPDATE path (not the `action="publish"` branch). That's legacy parity — the admin UI drives publishes via a status change, not a dedicated action.
+
+**Deferrals vs. legacy:**
+- None. Both `SPONSOR_PACKAGES` and `buildSponsoredAdPrompt` were already ported in earlier sessions.
+
+**Next batch options (pick one):**
+1. `marketing/*` lib — un-defers 8+ routes. Multi-session.
+2. `director-movies` lib — multi-session.
+3. `channels/flush` admin (~225 lines) — flushes + regenerates channel data; deps need to be scoped.
+4. `channels/generate-title` / `channels/generate-promo` / `channels/generate-content` — tiny AI-prompt wrappers, may be quick wins.
+5. `elon-campaign` admin (~711).
+6. Phase 8 greenlight.
+
+---
 
 ### 2026-04-21 (session 84) — admin blob-upload + persona bot token
 
