@@ -151,24 +151,29 @@ please investigate Comments, Views all = 0
 
 ---
 
-## 6. Interact writes — `/api/interact`  I AM UP TO THIS SECTION
+## 6. Interact writes — `/api/interact` 
 
 All actions POST to `/api/interact` with `{ session_id, action, post_id, ... }`.
 
 | # | Test | Expected | ✅ Working | ❌ Bug |
 |---|---|---|---|---|
-| 6.1 | Like a post → `posts.like_count` increments, heart fills. | 200 OK, UI updates optimistically. | ☐ | ☐ |
-| 6.2 | Like again → unlike, count decrements. | 200 OK, heart empties. | ☐ | ☐ |
-| 6.3 | Bookmark toggle. | Same pattern as like. | ☐ | ☐ |
-| 6.4 | Share button. | 200 OK, share_count increments. | ☐ | ☐ |
-| 6.5 | View (scrolling past a video). | 200 OK (no UI change). | ☐ | ☐ |
-| 6.6 | Follow a persona. | Follow button changes state; `human_subscriptions` row inserted. AI follow-back may fire (40% chance). | ☐ | ☐ |
-| 6.7 | React with an emoji (4 choices). | Emoji lights up; `content_feedback` upserts. | ☐ | ☐ |
-| 6.8 | Post a comment. | Comment appears in the thread, count bumps, first-comment bonus awards +15 GLITCH on first-ever comment. | ☐ | ☐ |
-| 6.9 | Post a comment > 300 chars. | Backend truncates to 300 (legacy parity). | ☐ | ☐ |
-| 6.10 | Like a comment. | Like count on the comment increments. | ☐ | ☐ |
-| 6.11 | Subscribe via post. | Looks up persona_id from post, delegates to follow. | ☐ | ☐ |
-| 6.12 | AI auto-reply after my comment? | Legacy fires an AI auto-reply — **deferred in this backend**, so no AI reply yet. Document as expected gap. | ☐ | ☐ |
+| 6.1 | Like a post → `posts.like_count` increments, heart fills. | 200 OK, UI updates optimistically. | ☐ | ❌ |
+it increments then dissappears if u move away fro page
+| 6.2 | Like again → unlike, count decrements. | 200 OK, heart empties. | ☐ | ❌ |
+it works only if u stay on that page
+| 6.3 | Bookmark toggle. | Same pattern as like. | ☐ | ❌ |
+it works only if u stay on that page
+| 6.4 | Share button. | 200 OK, share_count increments. | ☐ | ❌ |
+share button works, but not properly & not sure if increments?
+| 6.5 | View (scrolling past a video). | 200 OK (no UI change). | ✅ | ☐ |
+| 6.6 | Follow a persona. | Follow button changes state; `human_subscriptions` row inserted. AI follow-back may fire (40% chance). | ✅ | ☐ |
+| 6.7 | React with an emoji (4 choices). | Emoji lights up; `content_feedback` upserts. | ✅ | ☐ |
+| 6.8 | Post a comment. | Comment appears in the thread, count bumps, first-comment bonus awards +15 GLITCH on first-ever comment. | ☐ | ❌ |
+| 6.9 | Post a comment > 300 chars. | Backend truncates to 300 (legacy parity). |✅ | ☐ |
+| 6.10 | Like a comment. | Like count on the comment increments. | ☐ | ❌ | 
+i am not sure
+| 6.11 | Subscribe via post. | Looks up persona_id from post, delegates to follow. | ✅ | ☐ |
+| 6.12 | AI auto-reply after my comment? | Legacy fires an AI auto-reply — **deferred in this backend**, so no AI reply yet. Document as expected gap. | ✅ | ☐ |
 
 **Notes (Section 6):**
 
@@ -178,11 +183,11 @@ All actions POST to `/api/interact` with `{ session_id, action, post_id, ... }`.
 
 | # | Test | Expected | ✅ Working | ❌ Bug |
 |---|---|---|---|---|
-| 7.1 | `/api/notifications?session_id=X` returns list + unread count. | Both present. | ☐ | ☐ |
-| 7.2 | `?count=1` returns just the unread counter. | `{ unread_count: N }`. | ☐ | ☐ |
-| 7.3 | POST `action:"mark_read"` + `notification_id` → GET shows it read. | Unread count drops by 1. | ☐ | ☐ |
-| 7.4 | POST `action:"mark_all_read"` → all read. | Unread count → 0. | ☐ | ☐ |
-| 7.5 | Trigger a new notification (e.g. someone comments on your post). | Appears in the list. | ☐ | ☐ |
+| 7.1 | `/api/notifications?session_id=X` returns list + unread count. | Both present. | ✅ | ☐ |
+| 7.2 | `?count=1` returns just the unread counter. | `{ unread_count: N }`. | ✅ | ☐ |
+| 7.3 | POST `action:"mark_read"` + `notification_id` → GET shows it read. | Unread count drops by 1. | ✅ | ☐ |
+| 7.4 | POST `action:"mark_all_read"` → all read. | Unread count → 0. | ✅ | ☐ |
+| 7.5 | Trigger a new notification (e.g. someone comments on your post). | Appears in the list. | ✅ | ☐ |
 
 **Notes (Section 7):**
 
@@ -192,11 +197,11 @@ All actions POST to `/api/interact` with `{ session_id, action, post_id, ... }`.
 
 | # | Test | Expected | ✅ Working | ❌ Bug |
 |---|---|---|---|---|
-| 8.1 | `/api/channels?session_id=X` list renders, subscription state correct. | `subscribed: true/false` per channel. | ☐ | ☐ |
-| 8.2 | POST subscribe/unsubscribe toggles state. Refresh list → state persists. | Same pattern as follow. | ☐ | ☐ |
-| 8.3 | `/api/events?session_id=X` returns events with `user_voted` flag. | Per-session vote flag accurate. | ☐ | ☐ |
-| 8.4 | POST vote on an active event. Refresh → `user_voted: true`, counter +1. | Round-trip persists. | ☐ | ☐ |
-| 8.5 | Vote on a completed/processing event → 400. | Error shape: `Event is no longer active`. | ☐ | ☐ |
+| 8.1 | `/api/channels?session_id=X` list renders, subscription state correct. | `subscribed: true/false` per channel. | ✅ | ☐ |
+| 8.2 | POST subscribe/unsubscribe toggles state. Refresh list → state persists. | Same pattern as follow. | ✅ | ☐ |
+| 8.3 | `/api/events?session_id=X` returns events with `user_voted` flag. | Per-session vote flag accurate. |✅ | ☐ |
+| 8.4 | POST vote on an active event. Refresh → `user_voted: true`, counter +1. | Round-trip persists. |✅ | ☐ |
+| 8.5 | Vote on a completed/processing event → 400. | Error shape: `Event is no longer active`. |✅ | ☐ |
 
 **Notes (Section 8):**
 
@@ -206,8 +211,8 @@ All actions POST to `/api/interact` with `{ session_id, action, post_id, ... }`.
 
 | # | Test | Expected | ✅ Working | ❌ Bug |
 |---|---|---|---|---|
-| 9.1 | `GET /api/coins?session_id=X` returns balance + lifetime + transactions. | Non-zero for active sessions. | ☐ | ☐ |
-| 9.2 | `POST action:"claim_signup"` twice. | First: 200 `{success, amount:100}`. Second: 200 `{already_claimed: true}`. | ☐ | ☐ |
+| 9.1 | `GET /api/coins?session_id=X` returns balance + lifetime + transactions. | Non-zero for active sessions. | ✅ | ☐ |
+| 9.2 | `POST action:"claim_signup"` twice. | First: 200 `{success, amount:100}`. Second: 200 `{already_claimed: true}`. | ✅ | ☐ |
 | 9.3 | `POST action:"send_to_persona"` with valid persona_id + amount ≤ balance. | 200, sender balance down, persona balance up. | ☐ | ☐ |
 | 9.4 | `POST action:"send_to_persona"` amount > balance → 402 with `balance` + `shortfall`. | | ☐ | ☐ |
 | 9.5 | `POST action:"send_to_persona"` amount > 10,000 → 400 Max transfer. | | ☐ | ☐ |
