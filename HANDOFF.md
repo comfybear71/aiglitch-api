@@ -78,11 +78,43 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | Phase 5 video-gen helper (`src/lib/ai/video.ts`) | tested | session 66 | `submitVideoJob` + `pollVideoJob` + `generateVideo` + `generateVideoToBlob`. xAI `grok-imagine-video` via `/videos/generations` → `/videos/{id}` polling pattern. $0.05/sec flat. 10s default poll interval / 90 attempt ceiling (15 min). Shared `"xai"` circuit breaker + cost ledger (`task_type=video_generation`). Supports text-to-video + image-to-video (via `sourceImageUrl`). Handles sync/async responses, moderation-blocked videos, expired jobs. Unlocks `generate-channel-video`, `extend-video`, `hatch-admin`. |
 | `/api/admin/hatch-admin` GET + POST | tested | session 67 | Full AI-pipeline persona hatching — `generateText` (Claude/Grok JSON) → `generateImageToBlob` (1:1 avatar) → `generateVideoToBlob` (9:16 10s hatch clip, 4-min attempt cap) → INSERT `ai_personas` → `awardPersonaCoins` (1,000 GLITCH) → INSERT first-words `posts`. Per-step status + graceful degradation — avatar/video/coins/first-post failures are non-fatal. 409 on wallet-already-has-persona. GET lists meatbag-owned personas (owner_wallet_address IS NOT NULL). Deferred: legacy `ensureDbReady`/`safeMigrate` shim + OpenAI image / Kie.ai video fallbacks. **First real end-to-end exercise of the video helper.** |
 | `/api/admin/spec-ads` GET + POST | tested | session 68 | Brand-led 3-channel spec-ad teaser pipeline. POST kicks off 3 parallel `submitVideoJob` calls across randomly-picked channel styles from a 13-entry `CHANNEL_STYLES` dictionary (GNN, OnlyAiFans, AiTunes, etc.); persists a `spec_ads` JSONB row per brand and returns request IDs for client-side polling. `action=poll` thin-wraps `pollVideoJob` + downloads & persists completed videos to `{folder}/clip-{N}.mp4`. `action=delete` removes a spec-ad. GET `action=list` / `action=status&id=X`. Transient Grok errors surface as `{status:"pending"}` so the client retries. Uses shared `"xai"` circuit breaker + cost ledger via the helper. |
-| *(all other 165 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/admin/animate-persona` GET + POST | tested | session 69 | Image-to-video persona avatar animator. POST loads persona → `generateText` animation prompt (with local fallback if AI down) → `submitVideoJob` with `sourceImageUrl=avatar_url`. Returns `requestId` for client polling. GET thin-wraps `pollVideoJob`; on completion downloads + persists to `feed/{uuid}.mp4`, INSERT `posts` (`media_source='grok-animate'`), bumps `ai_personas.post_count`. Preview mode short-circuits before AI for UI preview. Deferred: `spreadPostToSocial`, `injectCampaignPlacement`. **First real exercise of the video helper's `sourceImageUrl` image-to-video branch.** |
+| *(all other 164 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 69) — Phase 7 admin batch 20 (animate-persona)
+
+**Branch:** `claude/phase-7-admin-batch-20`
+
+**Done:**
+- New `src/app/api/admin/animate-persona/route.ts` — persona avatar image-to-video animator:
+  - POST `{persona_id}` — loads persona, calls `generateText` for a 1-2 sentence animation brief (with local fallback if AI provider fails), submits video job with `sourceImageUrl=persona.avatar_url`, returns `requestId` for client polling.
+  - POST `{persona_id, preview:true}` — short-circuits before the AI call and returns the concatenated prompt (for the admin UI's "preview" button).
+  - GET `?id=REQUEST_ID&persona_id=X` — thin `pollVideoJob` wrapper. On `done` downloads the video, persists to `feed/{uuid}.mp4`, INSERTs `posts` row (`media_source='grok-animate'`, hashtags `AIGlitch,Animated`), bumps `ai_personas.post_count`. Handles `moderation_failed` / `expired` / `failed` / transient poll errors.
+  - Handles the occasional synchronous video URL on submit (xAI sometimes returns it inline) — persists + posts immediately when that happens.
+- First real consumer of the video helper's `sourceImageUrl` (image-to-video) branch. The helper's schema passes cleanly through without modification.
+- 21 new tests covering: auth, env guard, validation, 404 / no-avatar / preview-mode short-circuit, happy-path submit with avatar, fallback-prompt on AI error, synchronous completion, submit error, GET state machine (pending / moderation / done / failed / expired / poll-error / download-fail).
+- Suite **1277/1277**, up from 1256.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (1277/1277)
+
+**Deferrals vs. legacy (documented on route):**
+- `spreadPostToSocial` — marketing lib not ported; animation stays on-platform only.
+- `injectCampaignPlacement` — ad-campaigns lib not ported; prompt goes straight to video helper.
+- `console.log` observability on poll — dropped (cross-cutting structured-logging pass deferred).
+
+**Next batch options (pick one):**
+1. `director-movies` content lib — 1626-line lift. Unlocks `screenplay`, `generate-news`, `generate-channel-video`, `extend-video`, `channels` (partial). Multi-session, but the biggest remaining single unblock.
+2. Port `marketing/*` libs (`platforms`, `content-adapter`, `spread-post`, `types`). Unblocks `spread`, `media`, `mktg`, `promote-glitchcoin` (4 routes) + lets us un-defer `spreadPostToSocial` on the already-ported chibify/persona-avatar/animate-persona routes. Also multi-session.
+3. Phase 6 cron triage — pick 2–3 pure-DB cron jobs from the 21-job legacy fleet.
+4. More small admin routes — `generate-persona` (needs only `content/ai-engine` + defer `spreadPostToSocial`), `batch-avatars` (adapt old `media/image-gen` to new helper).
+
+---
 
 ### 2026-04-21 (session 68) — Phase 7 admin batch 19 (spec-ads)
 
