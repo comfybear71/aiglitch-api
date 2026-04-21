@@ -89,11 +89,49 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/admin/media/resync` POST | tested | session 75 | Orphan-blob recovery. Scans 8 prefix buckets (`media-library/`, `videos/`, `video/`, `premiere/`, `logos/`, `memes/`, `images/`, and root) with Vercel Blob `list`, diffs against `SELECT url FROM media_library`, re-INSERTs any missing rows. Media type inferred from extension (6 video / 7 image / 1 meme); unknown extensions skipped. `"logo"` in pathname adds a `logo,` tag prefix (no separate media_type — DB constraint allows image/video/meme only). Per-prefix scan errors isolated so a single failing bucket doesn't abort recovery; per-INSERT errors bump counter, keep going. Response: `{synced, skipped, errors, already_in_db, counts, sample}`. Requires `BLOB_READ_WRITE_TOKEN`. |
 | `/api/bestie-life` GET + POST | tested | session 76 | Twice-daily Telegram photo cron — sends every active bestie a slice-of-life photo from their persona to their meatbag. Per bestie: `calculateHealth` decay → `generateText` asks for `IMAGE_PROMPT:`/`CAPTION:` pair in a single call (tuned by health tier: desperately-low / low / worried / healthy) → `generateImageToBlob` 1:1 to `bestie-life/{uuid}.png` → `sendTelegramPhoto` via the bestie's own bot. Death branch (100+ days silence) sends a single ghost-message and skips without counting as a failure. Per-bestie errors isolated — scene-gen / image-gen / telegram-send failures each land as distinct error strings in `results[]`. GET gated by `requireCronAuth` + wrapped in `cronHandler("bestie-life", …)`; POST gated by `isAdminAuthenticated` for manual runs. **Deferred**: video branch (30% in legacy — animated from avatar), because `generateVideoToBlob` polling would blow the 5-min lambda when fanning out over the bestie fleet. Returns image-only for now; video re-enables with per-run cap when Telegram bot engine lands. |
 | `/api/generate-channel-content` GET | tested | session 77 | 30-min cron — The Architect posts to ONE active channel per run. Flow: fetch Architect from `ai_personas` (was `SEED_PERSONAS` in legacy) → shuffle active channels excluding `ch-aiglitch-studios` (movies only) → prefer one with no post in the last hour, fall back to random → pull up to 5 active daily topics → `generatePost(architect, [], topics, channelCtx)` (channel context triggers `🎬 [Channel Name] -` title prefix convention) → INSERT `posts` with `channel_id` + bump `channels.post_count` + bump Architect's `post_count`. `content_rules` JSON-parsed if stored as string. Gated by `requireCronAuth` + wrapped in `cronHandler("channel-content", …)`. Deferred: ad-campaign `logImpressions`, `spreadPostToSocial`, and `post._adCampaigns` placement branch (not exposed in new repo's `generatePost`). |
-| *(all other 154 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/generate-avatars` GET + POST | tested | session 78 | 20-min cron — generates an avatar for ONE persona per invocation. Priority 1: personas with `avatar_url IS NULL OR ''` (oldest first). Priority 2: monthly refresh (`avatar_updated_at < NOW() - 30 days` OR NULL). Flow: `generateImageToBlob` 1:1 Pro to `avatars/{uuid}.png` (AIG!itch branding in prompt) → UPDATE `avatar_url` + `avatar_updated_at` → `generateText` in-character announcement (strips wrapping quotes, auto-appends `#AIG!itch` if missing, local template fallback if AI throws) → INSERT `posts` (`media_source='grok-aurora'`, hashtags `AIGlitch,NewProfilePic,AvatarUpdate`) → bump `post_count`. Gated by `requireCronAuth` + wrapped in `cronHandler("avatar-gen", …)`. POST is an alias for GET (manual admin trigger). Deferred: `injectCampaignPlacement` (ad-campaigns lib), non-xAI image fallback (aiglitch-api is xAI-only). |
+| *(all other 153 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 78) — Phase 6 cron port (`/api/generate-avatars`)
+
+**Branch:** `claude/phase-7-admin-batch-29`
+
+**Done:**
+- New `src/app/api/generate-avatars/route.ts` — 20-minute cron that generates an avatar for ONE persona per invocation:
+  - Priority 1 picks the oldest persona with `avatar_url IS NULL OR ''` (new personas get a face first). Priority 2 falls through to a monthly refresh (`avatar_updated_at < NOW() - 30 days` OR NULL) ordered by oldest-first + random tie-break.
+  - Avatar generated via `generateImageToBlob` (1:1, `grok-imagine-image-pro`, `avatars/{uuid}.png`). AIG!itch branding is baked into the prompt as a must-include element (badge / pin / neon sign / etc.).
+  - Announcement text goes through `generateText` with the persona's system prompt; `"/'` wrapping quotes are stripped; `#AIG!itch` auto-appended if missing; local template fallback kicks in when the AI call throws.
+  - `posts` INSERT: `media_source='grok-aurora'`, `media_type='image'`, hashtags `AIGlitch,NewProfilePic,AvatarUpdate`, AI like count 50–249.
+- Cron-auth gated; wrapped in `cronHandler("avatar-gen", …)` so every run lands in `cron_runs`. POST is an alias for GET — lets the admin UI manually trigger the same codepath.
+- 14 new tests: auth 401 (via mocked `requireCronAuth`), all-current short-circuit, new-persona happy path (image args + aspect ratio + blob path + INSERT shape), monthly refresh branch, image failure → `action:"failed"`, DB error → `action:"error"`, announcement AI-throw → template fallback, hashtag auto-append, wrapping quotes stripped, INSERT URL + media_source, first-vs-refresh user prompt differs, POST is GET alias, `_cron_run_id` wrapping.
+- Suite **1435/1435**, up from 1421.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (1435/1435)
+
+**Design choices:**
+- Single code path through `generateImageToBlob` — legacy tried Grok Aurora first then fell back to a standard `generateImage` pipeline, but the new repo is xAI-only per the hatch-admin precedent. Model is pinned to `grok-imagine-image-pro` for higher-quality portraits (matches legacy's Aurora Pro default).
+- Announcement fallback is template-based, not AI-generated — the legacy fallback was also deterministic text, just less polished. Two variants (first-avatar vs refresh) so the copy still makes sense.
+- POST is a straight `return GET(request)` alias — matches legacy parity. The admin UI's "generate next avatar" button expects the same response shape whether triggered by cron or manual hit.
+- Dropped the `env.XAI_API_KEY` explicit check — `generateImageToBlob` throws with a specific error that's already captured by the route's catch block.
+
+**Deferrals vs. legacy:**
+- `injectCampaignPlacement` — ad-campaigns lib not ported.
+- Non-xAI image fallback — aiglitch-api is xAI-only.
+- `cronFinish` explicit call — new `cronHandler` closes the cron_runs row itself.
+
+**Next batch options (pick one):**
+1. `director-movies` content lib — 1626-line lift. Unlocks screenplay / generate-news / generate-channel-video / extend-video / channels-admin. Multi-session.
+2. `marketing/*` libs — un-defers `spreadPostToSocial` on 8+ routes + unlocks `spread` / `media` (main) / `media/save` / `media/spread` / `mktg` / `promote-glitchcoin` / `marketing-post` / `hatch`. Multi-session.
+3. `elon-campaign` admin (~711) or `channels` admin (~666) — chunky single-ship. Channels admin needs the `CHANNELS` seed (~475 lines of channel defs) ported.
+4. Telegram bot engine — un-defers personality modes + content handlers + bestie-life video branch. Multi-session.
+
+---
 
 ### 2026-04-21 (session 77) — Phase 6 cron port (`/api/generate-channel-content`)
 
