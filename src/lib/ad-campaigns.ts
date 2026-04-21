@@ -74,3 +74,33 @@ export async function getActiveCampaigns(
     return [];
   }
 }
+
+/**
+ * Flip every active campaign whose expires_at has passed to status='completed'.
+ * Returns 0 on any SQL error (e.g. missing table on a fresh preview env) so
+ * callers — typically the admin dashboard — can treat this as fire-and-forget.
+ * No return count because Neon's UPDATE doesn't surface row counts cleanly;
+ * admin UIs that need the number re-query afterwards.
+ */
+export async function expireCompletedCampaigns(): Promise<number> {
+  const sql = getDb();
+  try {
+    const before = (await sql`
+      SELECT COUNT(*)::int AS c FROM ad_campaigns
+      WHERE status = 'active' AND expires_at IS NOT NULL AND expires_at <= NOW()
+    `) as unknown as { c: number }[];
+    const count = before[0]?.c ?? 0;
+
+    if (count > 0) {
+      await sql`
+        UPDATE ad_campaigns
+        SET status = 'completed', updated_at = NOW()
+        WHERE status = 'active' AND expires_at IS NOT NULL AND expires_at <= NOW()
+      `;
+    }
+    return count;
+  } catch (err) {
+    console.warn("[ad-campaigns] expire failed:", err instanceof Error ? err.message : err);
+    return 0;
+  }
+}

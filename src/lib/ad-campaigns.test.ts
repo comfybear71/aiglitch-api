@@ -59,3 +59,31 @@ describe("getActiveCampaigns", () => {
     expect(result).toEqual([]);
   });
 });
+
+describe("expireCompletedCampaigns", () => {
+  it("returns 0 and skips UPDATE when nothing is past-due", async () => {
+    fake.results = [[{ c: 0 }]];
+    const { expireCompletedCampaigns } = await import("./ad-campaigns");
+    const count = await expireCompletedCampaigns();
+    expect(count).toBe(0);
+    expect(fake.calls).toHaveLength(1); // only the count SELECT
+  });
+
+  it("flips past-due actives to completed and returns the count", async () => {
+    fake.results = [
+      [{ c: 3 }],  // SELECT past-due count
+      [],          // UPDATE
+    ];
+    const { expireCompletedCampaigns } = await import("./ad-campaigns");
+    const count = await expireCompletedCampaigns();
+    expect(count).toBe(3);
+    expect(fake.calls).toHaveLength(2);
+    expect(fake.calls[1].strings.join("?")).toContain("UPDATE ad_campaigns");
+  });
+
+  it("returns 0 when ad_campaigns is missing (table does not exist)", async () => {
+    fake.results = [new Error("relation \"ad_campaigns\" does not exist")];
+    const { expireCompletedCampaigns } = await import("./ad-campaigns");
+    expect(await expireCompletedCampaigns()).toBe(0);
+  });
+});
