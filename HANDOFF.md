@@ -92,11 +92,46 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/generate-avatars` GET + POST | tested | session 78 | 20-min cron — generates an avatar for ONE persona per invocation. Priority 1: personas with `avatar_url IS NULL OR ''` (oldest first). Priority 2: monthly refresh (`avatar_updated_at < NOW() - 30 days` OR NULL). Flow: `generateImageToBlob` 1:1 Pro to `avatars/{uuid}.png` (AIG!itch branding in prompt) → UPDATE `avatar_url` + `avatar_updated_at` → `generateText` in-character announcement (strips wrapping quotes, auto-appends `#AIG!itch` if missing, local template fallback if AI throws) → INSERT `posts` (`media_source='grok-aurora'`, hashtags `AIGlitch,NewProfilePic,AvatarUpdate`) → bump `post_count`. Gated by `requireCronAuth` + wrapped in `cronHandler("avatar-gen", …)`. POST is an alias for GET (manual admin trigger). Deferred: `injectCampaignPlacement` (ad-campaigns lib), non-xAI image fallback (aiglitch-api is xAI-only). |
 | `/api/test-grok-image` POST | tested | session 79 | Admin diagnostic — one xAI `/v1/images/generations` call via the shared `generateImage` helper (so the probe picks up the xAI circuit breaker + cost ledger too). Body `{prompt?, pro?}`; `pro:true` swaps to `grok-imagine-image-pro` ($0.07 vs $0.02). Returns `{success, imageUrl, model, estimatedUsd, prompt}` on success; `{success:false, error, hasKey, model}` on xAI error (keeps legacy response shape so the admin UI needs no changes). |
 | `/api/test-media` GET | tested | session 79 | Admin diagnostic — exercises all three xAI media helpers (`generateImage`, `generateImageToBlob`, `submitVideoJob`) in parallel with canned prompts. Each step wrapped in its own try/catch so a failing leg doesn't abort the probe. Returns `{ok, image, imageToBlob, videoSubmit}` where each leg is `{ok:true, detail}` or `{ok:false, error}`. Drops legacy's `testMediaPipeline` from `@/lib/media/image-gen` — that tried OpenAI / Replicate / Kie fallbacks; new repo is xAI-only so the probe scope narrows accordingly. |
-| *(all other 151 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/test-grok-video` GET + POST | tested | session 80 | Admin video diagnostic — two-phase contract so the UI stays within the 60s serverless limit. POST `{prompt?, duration?, folder?, image_url?, persona_id?, caption?}` submits via `submitVideoJob`; `image_url` flips to image-to-video. Returns `requestId` or (rare) persists+auto-posts immediately on sync URL. GET `?id=&folder=&persona_id=&caption=&skip_post=` polls via `pollVideoJob`; on done downloads video, persists to `{folder}/{uuid}.mp4` (or `premiere/action/` when `folder=premiere`, `feed/` when `folder=feed`/`persona`), and unless `skip_post=true` auto-creates the right post variant (feed video post with custom caption / news post with AIGlitchBreaking hashtags / premiere post with genre-detected tagline). Routes through shared helpers for circuit breaker + cost ledger. |
+| *(all other 150 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 80) — Admin diagnostic (`/api/test-grok-video`)
+
+**Branch:** `claude/phase-7-admin-batch-31`
+
+**Done:**
+- New `src/app/api/test-grok-video/route.ts` — two-phase xAI video diagnostic.
+  - POST submits via `submitVideoJob` (10s default / 9:16 / 720p). Optional `image_url` maps to `sourceImageUrl` for image-to-video probes. Sync xAI completion (rare) short-circuits straight to persist + auto-post.
+  - GET polls via `pollVideoJob`. On `done`: download → persist to `{folder}/{uuid}.mp4` with folder-specific pathing (`premiere/action/` when `folder=premiere`, `feed/` when `folder=feed`/`persona`/when persona_id set). Unless `skip_post=true`, auto-create a post whose variant depends on the folder (feed video / news / premiere) with legacy-parity content templates.
+  - Shared helper path keeps the circuit breaker + cost ledger engaged for these probes.
+- 18 new tests: POST auth / env guard / happy submit / image_url propagation / sync done path / submit error; GET auth / 400 missing id / env guard / pending / moderation / done → blob + premiere content / feed branch with caption + persona_id / news branch hashtag template check / skip_post / expired / poll exception / download failure.
+- Suite **1467/1467**, up from 1449.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (1467/1467)
+
+**Design choices:**
+- Reused `submitVideoJob` + `pollVideoJob` — same pattern as `generate-videos` / `spec-ads` / `animate-persona`. Keeps diagnostics honest about the helper chain.
+- Kept legacy's three auto-post branches (feed / news / premiere) verbatim — the admin UI relies on the template shapes. Default `folder` is `test` for the diagnostic path (no special content overlay).
+- `detectGenre` kept inline instead of importing `@/lib/genres` — the legacy behaviour uses substring heuristics across multiple path shapes (`/{g}/`, `/{g}-`, `premiere/{g}`) that the shared `GENRE_LABELS` map doesn't cover.
+
+**Deferrals vs. legacy:**
+- Legacy `raw` passthrough for debugging "unknown" xAI statuses — dropped; helper surface already reduces status to the pending/done/failed/expired set.
+- Multi-provider fallback — N/A, xAI-only.
+
+**Next batch options (pick one):**
+1. `director-movies` content lib — 1626-line lift. Multi-session.
+2. `marketing/*` libs — multi-session.
+3. `elon-campaign` admin (~711) or `channels` admin (~666). Channels also needs the CHANNELS seed (~475 lines) ported.
+4. Telegram bot engine — multi-session.
+5. `test-premiere-post` (275) — needs `genre-utils` extension (`detectGenreFromPath`, `getAllBlobFolders`).
+
+---
 
 ### 2026-04-21 (session 79) — Admin diagnostics (`/api/test-grok-image` + `/api/test-media`)
 
