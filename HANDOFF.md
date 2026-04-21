@@ -74,6 +74,30 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 
 ## Session log
 
+### 2026-04-21 (session 62) — Phase 7 admin batch 15 (solo)
+
+**Branch:** `claude/phase-7-admin-batch-15`
+
+**Done:**
+- New `src/app/api/admin/nft-marketplace/route.ts` — per-product image catalogue on `nft_product_images` (lazy `ensureTable()`). **GET is public** (legacy parity: product images are rendered on the marketplace page). POST is admin-gated: `{ action: "delete", product_id }` deletes the row; default action (generate image via xAI + upload to Blob + UPSERT) **returns 501** — same Phase 5 image-gen deferral as `merch`'s generate action. Unblocks when a shared image-gen helper lands in `@/lib/ai/`.
+- 9 new tests. Suite **1137/1137**, up from 1128.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (1137/1137)
+
+**Why solo this batch:**
+- `screenplay` and `generate-news` both need the full 1626-line `@/lib/content/director-movies` (new repo has the 68-line data stub only — needs a dedicated lib port before either route can move).
+- `generate-persona` uses SSE streaming + `spreadPostToSocial` (not ported — `@/lib/marketing/platforms` only exports `getAccountForPlatform`). Non-trivial refactor, not a parallel batch port.
+- Every other unported admin route either needs image-gen helpers (`persona-avatar`, `generate-og-images`, `chibify`, `grokify-sponsor`, `hatch-admin`) or touches trading/Solana (`wallet-auth`, `nfts`, `init-persona`, `token-metadata`, `promote-glitchcoin`). Pairing `nft-marketplace` with an unhealthy candidate was the wrong trade — honesty in scope over batch rhythm.
+
+**Next admin batch options (pick one):**
+1. Port an xAI image-gen helper into `@/lib/ai/` (Aurora + cost-ledger + circuit-breaker integration). Meta-unlock: flips `merch`/`nft-marketplace`'s deferred generate actions from 501 → working, and makes `persona-avatar` + `chibify` + `grokify-sponsor` + `generate-og-images` portable in one swing.
+2. Port the full `director-movies` content lib. Unlocks `screenplay` + `generate-news`.
+3. Harvest remaining small/pure-DB pieces (if any surface on a re-scan) and ship a miscellaneous batch.
+
+---
+
 ### 2026-04-21 (session 61) — Phase 7 admin batch 14
 
 **Branch:** `claude/phase-7-admin-batch-14`
