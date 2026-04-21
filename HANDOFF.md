@@ -88,11 +88,50 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/admin/media/import` POST | tested | session 75 | Bulk URL importer. POST `{urls[], media_type?, tags?, description?, persona_id?}` — fetches each URL with a browser UA, detects media kind from response `content-type` + URL extension (video / meme / image), uploads to `media-library/{uuid}.{ext}`, INSERTs `media_library`, and (when `persona_id` set) auto-creates a profile post + bumps `post_count`. Per-URL failures isolated — `{results[]}` carries each URL's outcome; `success` only true when every URL succeeded. No marketing auto-spread on this path. |
 | `/api/admin/media/resync` POST | tested | session 75 | Orphan-blob recovery. Scans 8 prefix buckets (`media-library/`, `videos/`, `video/`, `premiere/`, `logos/`, `memes/`, `images/`, and root) with Vercel Blob `list`, diffs against `SELECT url FROM media_library`, re-INSERTs any missing rows. Media type inferred from extension (6 video / 7 image / 1 meme); unknown extensions skipped. `"logo"` in pathname adds a `logo,` tag prefix (no separate media_type — DB constraint allows image/video/meme only). Per-prefix scan errors isolated so a single failing bucket doesn't abort recovery; per-INSERT errors bump counter, keep going. Response: `{synced, skipped, errors, already_in_db, counts, sample}`. Requires `BLOB_READ_WRITE_TOKEN`. |
 | `/api/bestie-life` GET + POST | tested | session 76 | Twice-daily Telegram photo cron — sends every active bestie a slice-of-life photo from their persona to their meatbag. Per bestie: `calculateHealth` decay → `generateText` asks for `IMAGE_PROMPT:`/`CAPTION:` pair in a single call (tuned by health tier: desperately-low / low / worried / healthy) → `generateImageToBlob` 1:1 to `bestie-life/{uuid}.png` → `sendTelegramPhoto` via the bestie's own bot. Death branch (100+ days silence) sends a single ghost-message and skips without counting as a failure. Per-bestie errors isolated — scene-gen / image-gen / telegram-send failures each land as distinct error strings in `results[]`. GET gated by `requireCronAuth` + wrapped in `cronHandler("bestie-life", …)`; POST gated by `isAdminAuthenticated` for manual runs. **Deferred**: video branch (30% in legacy — animated from avatar), because `generateVideoToBlob` polling would blow the 5-min lambda when fanning out over the bestie fleet. Returns image-only for now; video re-enables with per-run cap when Telegram bot engine lands. |
-| *(all other 155 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/generate-channel-content` GET | tested | session 77 | 30-min cron — The Architect posts to ONE active channel per run. Flow: fetch Architect from `ai_personas` (was `SEED_PERSONAS` in legacy) → shuffle active channels excluding `ch-aiglitch-studios` (movies only) → prefer one with no post in the last hour, fall back to random → pull up to 5 active daily topics → `generatePost(architect, [], topics, channelCtx)` (channel context triggers `🎬 [Channel Name] -` title prefix convention) → INSERT `posts` with `channel_id` + bump `channels.post_count` + bump Architect's `post_count`. `content_rules` JSON-parsed if stored as string. Gated by `requireCronAuth` + wrapped in `cronHandler("channel-content", …)`. Deferred: ad-campaign `logImpressions`, `spreadPostToSocial`, and `post._adCampaigns` placement branch (not exposed in new repo's `generatePost`). |
+| *(all other 154 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 77) — Phase 6 cron port (`/api/generate-channel-content`)
+
+**Branch:** `claude/phase-7-admin-batch-28`
+
+**Done:**
+- New `src/app/api/generate-channel-content/route.ts` — 30-minute cron: The Architect posts to ONE active channel per run.
+  - Fetches The Architect (`glitch-000`) from `ai_personas` directly — legacy used a `SEED_PERSONAS` lookup that isn't ported.
+  - Shuffles active channels excluding `ch-aiglitch-studios` (reserved for director-movie premieres only). Prefers any channel with no post in the last hour; falls back to a random one if every channel is hot.
+  - `content_rules` is JSON-parsed if stored as text, passed straight through if already a JSON column.
+  - Daily topics fetched non-fatally (empty list on failure) for AI context.
+  - `generatePost(architect, [], topics, channelCtx)` — the ChannelContext block inside the prompt triggers the `🎬 [Channel Name] -` title prefix convention that's part of the AI engine port.
+  - INSERT `posts` carrying `channel_id`; bumps `channels.post_count` + Architect's `post_count`.
+- Gated by `requireCronAuth` + wrapped in `cronHandler("channel-content", …)` so every run writes a `cron_runs` row.
+- 11 new tests: auth 401, missing-Architect reason, no-active-channels reason, happy path (channel selection + INSERT shape + generatePost args), fallback when all channels hot, string content_rules JSON parsing, daily_topics table missing → non-fatal, INSERT hashtag + channel_id values, cronHandler `_cron_run_id` wrap, unexpected error → 500, SQL-level exclusion of `ch-aiglitch-studios` verified.
+- Suite **1421/1421**, up from 1410.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (1421/1421)
+
+**Design choices:**
+- Architect fetched via DB lookup rather than a new `SEED_PERSONAS` port — the constant lives in legacy's bible but the Architect row is already seeded in the shared Neon instance, so the simpler DB lookup avoids porting the whole personas seed blob.
+- `post._adCampaigns` + `logImpressions` branch dropped — the new `generatePost` returns the slim `{content, hashtags, post_type, channel_id?}` shape without the ad-campaigns enrichment. Re-wires when ad-campaigns lib ports.
+- Kept legacy's `channels.post_count + 1, updated_at = NOW()` bump even though the `channels` table in the new repo's reads use `actual_post_count` derived from the `posts` table. Preserving the legacy write keeps parity with any admin UI that reads the stored counter.
+
+**Deferrals vs. legacy:**
+- `logImpressions` (ad-campaigns lib) — skipped, no impressions logged.
+- `spreadPostToSocial` (marketing lib) — skipped, on-platform only.
+- `SEED_PERSONAS` constant — DB lookup instead.
+
+**Next batch options (pick one):**
+1. `director-movies` content lib — 1626-line lift. Unlocks screenplay / generate-news / generate-channel-video / extend-video / channels-admin. Multi-session.
+2. `marketing/*` libs — un-defers `spreadPostToSocial` on 7+ routes + unlocks `spread`, `media` (main), `media/save`, `media/spread`, `mktg`, `promote-glitchcoin`, `marketing-post`, `hatch`, and the `spreadPostToSocial` branch on generate-channel-content/generate-videos/animate-persona/generate-persona/spec-ads/chibify/persona-avatar. Multi-session.
+3. `elon-campaign` admin (~711) or `channels` admin (~666) — chunky single-ship. Channels admin needs the `CHANNELS` seed array (~475 lines of channel definitions) ported.
+4. Telegram bot engine — un-defers personality modes, content handlers, + bestie-life video branch. Multi-session.
+
+---
 
 ### 2026-04-21 (session 76) — Phase 6 cron port (`/api/bestie-life`)
 
