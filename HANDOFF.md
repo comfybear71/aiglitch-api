@@ -73,11 +73,42 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/admin/nft-marketplace` generate action | tested | session 63 | Flipped from 501 → calls `generateImageToBlob` + UPSERT `nft_product_images` on `product_id`. Blob path `marketplace/{product_id}-{slug}.png`. Uses legacy prompt template verbatim. |
 | `/api/admin/persona-avatar` POST | tested | session 64 | Admin override — regenerates persona avatar via Grok Aurora Pro 1:1. UPDATE `ai_personas.avatar_url` + `avatar_updated_at`; optional in-character feed-post via `generateText` with local fallback template. Deferred: `injectCampaignPlacement`, non-xAI fallback pipeline. |
 | `/api/admin/chibify` GET + POST | tested | session 64 | Batch chibify. GET = prompt preview. POST loops over `persona_ids` with per-persona error isolation; each successful chibi → Blob + INSERT `posts` (`media_source='grok-aurora'`) + `post_count` bump. Deferred: `injectCampaignPlacement`, `logImpressions`, `spreadPostToSocial`. |
-| *(all other 169 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/admin/grokify-sponsor` POST | tested | session 65 | Sponsor product placement via xAI `/images/edits`. Builds source-image set from `grokifyMode` (`all` / `logo_only` / `images_only`; outro forces logo). Multi-image → single-image retry on helper failure. Text-to-image fallback when no source images. Persist under `sponsors/grokified/{brand}-{channel}-{scene\|outro}-{id}.png`. First real exercise of the `sourceImageUrls` branch of the image helper. |
+| `/api/admin/generate-og-images` GET + POST | tested | session 65 | 21 branded OG banners for channel pages. GET = iPad-friendly HTML dashboard (per-image + generate-all buttons). POST = batch or `{ file }` single. Pro model 16:9, deterministic path `og/{file}.png` keeps `<meta>` URLs stable. |
+| *(all other 167 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 65) — Phase 7 admin batch 17 (grokify-sponsor + generate-og-images)
+
+**Branch:** `claude/phase-7-admin-batch-17`
+
+**Done:**
+- New `src/app/api/admin/grokify-sponsor/route.ts` — sponsor-placement image editor. POST builds the source-image set from `grokifyMode` (`all`/`logo_only`/`images_only`; `isOutro=true` forces logo into first-position regardless of mode), caps at 5 images, and either hits xAI `/images/edits` (when sources present) or `/images/generations` (when none, with a distinct subliminal-placement fallback prompt built from `visualPrompt`). On multi-image edit failure, retries once with just the first image — matches legacy behaviour (xAI is stricter about total edit payload size). Persistent path: `sponsors/grokified/{brand}-{channel}-{scene\|outro}-{id}.png`. Response preserves legacy shape: `{ grokifiedUrl, brandName, productName, mode, retried? }` or `{ grokifiedUrl: null, error }`.
+- New `src/app/api/admin/generate-og-images/route.ts` — bulk generator for the 21 Open Graph banners used on channel pages. GET returns an iPad-friendly HTML dashboard (buttons per image + "Generate All"; cost quote derived from pro pricing × 21). POST = batch (no body) or single (`{ file }`). Deterministic blob path `og/{file}.png` keeps public `<meta>` URLs stable across regenerations. Pro model + 16:9 to hit the 1200×630 OG spec. Error isolation per image — one failure doesn't stop the batch.
+- 21 new tests (13 grokify-sponsor + 8 generate-og-images).
+- Suite **1195/1195**, up from 1174.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (1195/1195)
+
+**Image-helper coverage milestone:**
+- `grokify-sponsor` is the first real route to drive the `/images/edits` branch (via `sourceImageUrls`). With this batch, **all three paths** of `generateImageToBlob` are now exercised by production routes: text-to-image (merch, nft-marketplace, chibify, persona-avatar, og-images) + image-edit (grokify-sponsor) + aspect-ratio passthrough (persona-avatar 1:1, og-images 16:9, grokify-sponsor 9:16).
+
+**Deferrals (intentional, documented on the route):**
+- Grokify-sponsor drops the legacy console.log observability — we'll add structured logging as a later cross-cutting pass.
+- The legacy "single-image retry on multi-image failure" ships verbatim; legacy also had a second-level "any-fail → return null" that's preserved. No new retry layers added.
+
+**Next admin batch options (pick one):**
+1. Start a video-gen helper in `@/lib/ai/video.ts` — mirrors the image-helper pattern. xAI Grok-2 video API + Blob download. Unlocks `generate-channel-video`, `extend-video`, and the video half of `hatch-admin` (3+ routes). No route ships this batch, but the next one becomes trivial.
+2. Port `director-movies` content lib — 1626-line lift. Unlocks `screenplay` + `generate-news` (2 routes) + unblocks any future screenplay-related work.
+3. Tackle a tight auth/OAuth batch — scan for small admin routes not gated by helpers (wallet-auth / init-persona are trading-locked per §Trading; any non-trading candidates?).
+4. Start Phase 6 cron fleet triage — pick 2–3 simple cron jobs (no image/video gen) and ship them as a cohort.
+
+---
 
 ### 2026-04-21 (session 64) — Phase 7 admin batch 16 (persona-avatar + chibify)
 
