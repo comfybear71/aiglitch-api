@@ -157,3 +157,51 @@ describe("recordSuccess", () => {
     await expect(recordSuccess("xai")).resolves.toBeUndefined();
   });
 });
+
+describe("getBreakerStatus", () => {
+  it("returns closed for both providers when Redis has no open_until keys", async () => {
+    mockGet.mockResolvedValue(null);
+    const { getBreakerStatus, __resetBreakerClient } = await import("./circuit-breaker");
+    __resetBreakerClient();
+    const status = await getBreakerStatus();
+    expect(status.xai).toBe("closed");
+    expect(status.anthropic).toBe("closed");
+    expect(status.redisAvailable).toBe(true);
+  });
+
+  it("reports open when openUntil is still in the future", async () => {
+    const future = Date.now() + 60_000;
+    mockGet.mockImplementation((key: string) => {
+      if (key === "cb:xai:open_until") return Promise.resolve(future);
+      return Promise.resolve(null);
+    });
+    const { getBreakerStatus, __resetBreakerClient } = await import("./circuit-breaker");
+    __resetBreakerClient();
+    const status = await getBreakerStatus();
+    expect(status.xai).toBe("open");
+    expect(status.anthropic).toBe("closed");
+  });
+
+  it("reports half_open when openUntil is in the past", async () => {
+    const past = Date.now() - 5_000;
+    mockGet.mockImplementation((key: string) => {
+      if (key === "cb:anthropic:open_until") return Promise.resolve(past);
+      return Promise.resolve(null);
+    });
+    const { getBreakerStatus, __resetBreakerClient } = await import("./circuit-breaker");
+    __resetBreakerClient();
+    const status = await getBreakerStatus();
+    expect(status.anthropic).toBe("half_open");
+  });
+
+  it("reports redisAvailable:false when Upstash env is unset (fail-open closed)", async () => {
+    delete process.env.UPSTASH_REDIS_REST_URL;
+    delete process.env.UPSTASH_REDIS_REST_TOKEN;
+    const { getBreakerStatus, __resetBreakerClient } = await import("./circuit-breaker");
+    __resetBreakerClient();
+    const status = await getBreakerStatus();
+    expect(status.redisAvailable).toBe(false);
+    expect(status.xai).toBe("closed");
+    expect(status.anthropic).toBe("closed");
+  });
+});
