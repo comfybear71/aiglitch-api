@@ -22,10 +22,37 @@ vi.mock("@/lib/admin-auth", () => ({
   isAdminAuthenticated: () => Promise.resolve(mockIsAdmin),
 }));
 
+// Image-gen helper — mocked; actual xAI + Blob download logic is covered
+// in src/lib/ai/image.test.ts.
+const imageGen = {
+  calls: [] as { prompt: string; blobPath: string; taskType: string }[],
+  result: {
+    blobUrl: "https://blob.test/marketplace/glitch-hat-abcdef12.png",
+    model: "grok-imagine-image" as const,
+    estimatedUsd: 0.02,
+  },
+  shouldThrow: null as Error | null,
+};
+
+vi.mock("@/lib/ai/image", () => ({
+  generateImageToBlob: (opts: { prompt: string; blobPath: string; taskType: string }) => {
+    imageGen.calls.push(opts);
+    if (imageGen.shouldThrow) return Promise.reject(imageGen.shouldThrow);
+    return Promise.resolve(imageGen.result);
+  },
+}));
+
 beforeEach(() => {
   fake.calls = [];
   fake.results = [];
   mockIsAdmin = false;
+  imageGen.calls = [];
+  imageGen.result = {
+    blobUrl: "https://blob.test/marketplace/glitch-hat-abcdef12.png",
+    model: "grok-imagine-image",
+    estimatedUsd: 0.02,
+  };
+  imageGen.shouldThrow = null;
   process.env.DATABASE_URL = "postgres://test";
   vi.resetModules();
 });
@@ -105,7 +132,7 @@ describe("POST /api/admin/nft-marketplace — delete", () => {
   });
 });
 
-describe("POST /api/admin/nft-marketplace — generate (Phase 5 deferral)", () => {
+describe("POST /api/admin/nft-marketplace — generate", () => {
   it("401 when not admin", async () => {
     expect(
       (
@@ -124,30 +151,68 @@ describe("POST /api/admin/nft-marketplace — generate (Phase 5 deferral)", () =
     mockIsAdmin = true;
     seedEnsureTable();
     expect((await call("POST", { product_id: "x" })).status).toBe(400);
+    // Neither branch should have invoked the image helper.
+    expect(imageGen.calls).toHaveLength(0);
   });
 
-  it("returns 501 with an explanatory reason", async () => {
+  it("calls the helper with marketplace/{id}-{slug}.png blobPath and UPSERTs the row", async () => {
     mockIsAdmin = true;
     seedEnsureTable();
+    fake.results.push([]); // UPSERT
     const res = await call("POST", {
       product_id: "glitch-hat",
       product_name: "Glitch Hat",
-      product_description: "the hat",
+      product_description: "holographic cap",
     });
-    expect(res.status).toBe(501);
-    const body = (await res.json()) as { error: string; reason: string };
-    expect(body.reason).toContain("@/lib/ai/");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      success: boolean;
+      image_url: string;
+      product_id: string;
+    };
+    expect(body.success).toBe(true);
+    expect(body.product_id).toBe("glitch-hat");
+    expect(body.image_url).toBe("https://blob.test/marketplace/glitch-hat-abcdef12.png");
+
+    expect(imageGen.calls).toHaveLength(1);
+    const genCall = imageGen.calls[0]!;
+    expect(genCall.taskType).toBe("image_generation");
+    expect(genCall.blobPath).toMatch(/^marketplace\/glitch-hat-[0-9a-f]{8}\.png$/i);
+    expect(genCall.prompt).toContain("Glitch Hat");
+    expect(genCall.prompt).toContain("holographic cap");
+
+    const upsert = fake.calls[fake.calls.length - 1]!;
+    const sqlText = upsert.strings.join("?");
+    expect(sqlText).toContain("INSERT INTO nft_product_images");
+    expect(sqlText).toContain("ON CONFLICT (product_id) DO UPDATE");
+    expect(upsert.values).toContain("glitch-hat");
+    expect(upsert.values).toContain("https://blob.test/marketplace/glitch-hat-abcdef12.png");
   });
 
-  it("does not run any writes when deferred", async () => {
+  it("uses custom_prompt verbatim when provided", async () => {
     mockIsAdmin = true;
     seedEnsureTable();
+    fake.results.push([]);
     await call("POST", {
       product_id: "glitch-hat",
       product_name: "Glitch Hat",
+      custom_prompt: "bare-bones mock of the hat",
     });
-    // Only the ensureTable CREATE should have run.
-    expect(fake.calls).toHaveLength(1);
-    expect(fake.calls[0].strings.join("?")).toContain("CREATE TABLE IF NOT EXISTS");
+    expect(imageGen.calls[0]!.prompt).toBe("bare-bones mock of the hat");
+  });
+
+  it("returns 500 and does not write when the helper throws", async () => {
+    mockIsAdmin = true;
+    seedEnsureTable();
+    imageGen.shouldThrow = new Error("xAI upstream failed");
+    const res = await call("POST", {
+      product_id: "glitch-hat",
+      product_name: "Glitch Hat",
+    });
+    expect(res.status).toBe(500);
+    const hasInsert = fake.calls.some((c) =>
+      c.strings.join("?").includes("INSERT INTO nft_product_images"),
+    );
+    expect(hasInsert).toBe(false);
   });
 });

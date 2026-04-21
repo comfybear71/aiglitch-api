@@ -68,11 +68,55 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/telegram/credit-check` GET + POST | tested | session 47 | Every 30 min. Checks AI spend today + low sponsor balances; sends Telegram alert if either trips threshold. Silent no-op when Telegram not configured. |
 | `/api/telegram/status` GET + POST | tested | session 47 | Every 6 hours. Sends system health summary (active personas, posts today, recent cron_runs, errors) to admin Telegram channel. |
 | `/api/telegram/persona-message` GET + POST | tested | session 47 | Every 3 hours. Each active persona bot generates + sends an in-character message to its Telegram chat. Per-bot error isolation. |
+| Phase 5 image-gen helper (`src/lib/ai/image.ts`) | tested | session 63 | `generateImage` + `generateImageToBlob` — xAI `grok-imagine-image` / `-pro` ($0.02 / $0.07 per image). Shared `"xai"` circuit breaker; fire-and-forget cost ledger (`task_type=image_generation`). Supports `/images/generations` + `/images/edits` (via `sourceImageUrls`). Unlocks 6 deferred admin routes. |
+| `/api/admin/merch` generate action | tested | session 63 | Flipped from 501 → calls `generateImageToBlob` + INSERT `merch_library` with `source='generate'`. Blob path `merch/designs/{uuid}.png`. |
+| `/api/admin/nft-marketplace` generate action | tested | session 63 | Flipped from 501 → calls `generateImageToBlob` + UPSERT `nft_product_images` on `product_id`. Blob path `marketplace/{product_id}-{slug}.png`. Uses legacy prompt template verbatim. |
 | *(all other 169 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 63) — Phase 5 image-gen helper + flip merch + nft-marketplace
+
+**Branch:** `claude/phase-7-ai-image-gen-helper`
+
+**Done:**
+- New `src/lib/ai/image.ts` — shared xAI image-generation helper mirroring the text-completion pattern (`xaiComplete`, `claudeComplete`, `generateText`). Two entry points:
+  - `generateImage({ prompt, taskType, model?, aspectRatio?, sourceImageUrls? })` → `{ imageUrl, model, estimatedUsd }`. Low-level primitive. Returns the ephemeral xAI URL (caller decides how to persist).
+  - `generateImageToBlob({ ..., blobPath, contentType? })` → `{ blobUrl, model, estimatedUsd }`. Generates + downloads + uploads to Vercel Blob in one shot. Blob path is used verbatim (no random suffix), so UPSERT flows work cleanly.
+- Circuit breaker + cost ledger parity with text:
+  - Uses the shared `"xai"` breaker key (one provider, one circuit). Image failures trip the same breaker as text — accepted trade-off for operational simplicity.
+  - Cost tracking is flat per image: `grok-imagine-image` = $0.02, `grok-imagine-image-pro` = $0.07. Fire-and-forget `logAiCost` with `inputTokens=0`, `outputTokens=0`.
+  - New `AiTaskType` variant: `"image_generation"`.
+- Endpoint support:
+  - `/images/generations` — default text-to-image.
+  - `/images/edits` — automatic when `sourceImageUrls` is set (forward-compat for `grokify-sponsor` edit path).
+- **Flipped 501 deferrals:**
+  - `/api/admin/merch` generate action — now calls `generateImageToBlob`, INSERTs `merch_library` with `source='generate'`. New validations: 400 when `prompt` missing. Blob path: `merch/designs/{uuid}.png`.
+  - `/api/admin/nft-marketplace` generate action — now calls `generateImageToBlob`, UPSERTs `nft_product_images` on `product_id`. Prompt template + blob path `marketplace/{product_id}-{slug}.png` copied verbatim from legacy.
+- 16 new tests (11 image helper + 5 new generate-action tests across the two routes; 4 old 501-deferral tests replaced with working-flow equivalents).
+- Suite **1153/1153**, up from 1137.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (1153/1153)
+
+**Test-design notes:**
+- Image helper tests use the real circuit-breaker + cost-ledger modules (fail-open when Redis/Neon unset) + a queued fetch mock + stubbed `@vercel/blob` — integration-style coverage of the happy + error paths (non-OK status, missing URL, failed download).
+- Route tests mock `@/lib/ai/image` directly; the helper's internals are already covered by `image.test.ts`, so route tests stay focused on SQL shape + blob-path construction + error propagation.
+
+**Unlock status:**
+- ✅ `merch` generate (done)
+- ✅ `nft-marketplace` generate (done)
+- 🔓 **Next to flip** (helper is ready, route ports still pending): `persona-avatar`, `chibify`, `grokify-sponsor`, `generate-og-images`, `hatch-admin`, `generate-channel-video` (the last two need a matching video-gen helper — image alone doesn't unblock them).
+
+**Next admin batch options (pick one):**
+1. Port 2–3 of the now-unblocked image-only admin routes: `persona-avatar` + `chibify` (both: prompt → image → Blob → persona column update). Clean batch.
+2. Port `grokify-sponsor` — uses the `/images/edits` path (`sourceImageUrls`) with a text-to-image fallback. Good real-world workout for the helper.
+3. Port the full `director-movies` content lib (unlocks `screenplay` + `generate-news`).
+
+---
 
 ### 2026-04-21 (session 62) — Phase 7 admin batch 15 (solo)
 

@@ -7,22 +7,22 @@
  *            don't 500.
  *   POST   — admin-only:
  *            • `{ action: "delete", product_id }` — deletes the row.
- *            • default (generate) — legacy calls xAI `grok-imagine-image`
- *              to produce a studio-style product shot, downloads the
- *              ephemeral URL, uploads to Blob `marketplace/{id}-{slug}.png`,
- *              then UPSERTs (`ON CONFLICT (product_id)`) the row.
- *              **Phase 5 deferral** — image generation is not yet in
- *              `@/lib/ai/` (text-only today). Returns 501 with the same
- *              shape as `merch`'s deferred generate action. Unblocks
- *              when a shared image-gen helper lands.
+ *            • default (generate) — calls `generateImageToBlob()` (xAI
+ *              `grok-imagine-image`) to produce a studio-style product
+ *              shot; helper downloads the ephemeral URL and uploads to
+ *              `marketplace/{product_id}-{slug}.png`, then we UPSERT
+ *              (`ON CONFLICT (product_id)`) the row. Shared image-gen
+ *              helper handles circuit breaker + cost ledger.
  *
  *   GET stays un-gated deliberately — public marketplace reads. Every
  *   mutating path above goes through `isAdminAuthenticated`.
  */
 
+import { randomUUID } from "node:crypto";
 import { type NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { isAdminAuthenticated } from "@/lib/admin-auth";
+import { generateImageToBlob } from "@/lib/ai/image";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -82,18 +82,35 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Legacy calls xAI `grok-imagine-image`, then downloads + uploads to
-  // Blob + UPSERTs the row. `@/lib/ai/` currently exposes text-only
-  // helpers (xaiComplete / claudeComplete / generateText) — no shared
-  // image-gen client yet. Defer until a helper lands so all image-
-  // generating admin routes can share one circuit breaker + cost-ledger
-  // path (same reasoning as `merch`'s deferred generate action).
-  return NextResponse.json(
-    {
-      error: "Not implemented in aiglitch-api yet",
-      reason:
-        "Image generation requires a shared xAI image-gen helper under @/lib/ai/ (circuit breaker + cost ledger parity). The delete action + public GET are fully ported; the generate action unblocks when the image-gen helper lands.",
-    },
-    { status: 501 },
-  );
+  const prompt =
+    body.custom_prompt ||
+    `A premium product photo of "${body.product_name}" — ${
+      body.product_description || body.product_name
+    }. Studio lighting, professional product photography on a dark gradient background with subtle purple and cyan neon glow. The product should look desirable, premium, and slightly surreal with a cyberpunk AIG!itch aesthetic. Clean, sharp, high detail. No text overlays.`;
+
+  try {
+    const shortId = randomUUID().slice(0, 8);
+    const { blobUrl } = await generateImageToBlob({
+      prompt,
+      taskType: "image_generation",
+      blobPath: `marketplace/${body.product_id}-${shortId}.png`,
+    });
+
+    await sql`
+      INSERT INTO nft_product_images (product_id, image_url, prompt_used)
+      VALUES (${body.product_id}, ${blobUrl}, ${prompt})
+      ON CONFLICT (product_id) DO UPDATE
+        SET image_url = ${blobUrl},
+            prompt_used = ${prompt},
+            created_at = NOW()
+    `;
+
+    return NextResponse.json({
+      success: true,
+      image_url: blobUrl,
+      product_id: body.product_id,
+    });
+  } catch (err) {
+    return NextResponse.json({ error: String(err) }, { status: 500 });
+  }
 }
