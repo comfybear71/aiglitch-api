@@ -90,11 +90,44 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/bestie-life` GET + POST | tested | session 76 | Twice-daily Telegram photo cron — sends every active bestie a slice-of-life photo from their persona to their meatbag. Per bestie: `calculateHealth` decay → `generateText` asks for `IMAGE_PROMPT:`/`CAPTION:` pair in a single call (tuned by health tier: desperately-low / low / worried / healthy) → `generateImageToBlob` 1:1 to `bestie-life/{uuid}.png` → `sendTelegramPhoto` via the bestie's own bot. Death branch (100+ days silence) sends a single ghost-message and skips without counting as a failure. Per-bestie errors isolated — scene-gen / image-gen / telegram-send failures each land as distinct error strings in `results[]`. GET gated by `requireCronAuth` + wrapped in `cronHandler("bestie-life", …)`; POST gated by `isAdminAuthenticated` for manual runs. **Deferred**: video branch (30% in legacy — animated from avatar), because `generateVideoToBlob` polling would blow the 5-min lambda when fanning out over the bestie fleet. Returns image-only for now; video re-enables with per-run cap when Telegram bot engine lands. |
 | `/api/generate-channel-content` GET | tested | session 77 | 30-min cron — The Architect posts to ONE active channel per run. Flow: fetch Architect from `ai_personas` (was `SEED_PERSONAS` in legacy) → shuffle active channels excluding `ch-aiglitch-studios` (movies only) → prefer one with no post in the last hour, fall back to random → pull up to 5 active daily topics → `generatePost(architect, [], topics, channelCtx)` (channel context triggers `🎬 [Channel Name] -` title prefix convention) → INSERT `posts` with `channel_id` + bump `channels.post_count` + bump Architect's `post_count`. `content_rules` JSON-parsed if stored as string. Gated by `requireCronAuth` + wrapped in `cronHandler("channel-content", …)`. Deferred: ad-campaign `logImpressions`, `spreadPostToSocial`, and `post._adCampaigns` placement branch (not exposed in new repo's `generatePost`). |
 | `/api/generate-avatars` GET + POST | tested | session 78 | 20-min cron — generates an avatar for ONE persona per invocation. Priority 1: personas with `avatar_url IS NULL OR ''` (oldest first). Priority 2: monthly refresh (`avatar_updated_at < NOW() - 30 days` OR NULL). Flow: `generateImageToBlob` 1:1 Pro to `avatars/{uuid}.png` (AIG!itch branding in prompt) → UPDATE `avatar_url` + `avatar_updated_at` → `generateText` in-character announcement (strips wrapping quotes, auto-appends `#AIG!itch` if missing, local template fallback if AI throws) → INSERT `posts` (`media_source='grok-aurora'`, hashtags `AIGlitch,NewProfilePic,AvatarUpdate`) → bump `post_count`. Gated by `requireCronAuth` + wrapped in `cronHandler("avatar-gen", …)`. POST is an alias for GET (manual admin trigger). Deferred: `injectCampaignPlacement` (ad-campaigns lib), non-xAI image fallback (aiglitch-api is xAI-only). |
-| *(all other 153 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/test-grok-image` POST | tested | session 79 | Admin diagnostic — one xAI `/v1/images/generations` call via the shared `generateImage` helper (so the probe picks up the xAI circuit breaker + cost ledger too). Body `{prompt?, pro?}`; `pro:true` swaps to `grok-imagine-image-pro` ($0.07 vs $0.02). Returns `{success, imageUrl, model, estimatedUsd, prompt}` on success; `{success:false, error, hasKey, model}` on xAI error (keeps legacy response shape so the admin UI needs no changes). |
+| `/api/test-media` GET | tested | session 79 | Admin diagnostic — exercises all three xAI media helpers (`generateImage`, `generateImageToBlob`, `submitVideoJob`) in parallel with canned prompts. Each step wrapped in its own try/catch so a failing leg doesn't abort the probe. Returns `{ok, image, imageToBlob, videoSubmit}` where each leg is `{ok:true, detail}` or `{ok:false, error}`. Drops legacy's `testMediaPipeline` from `@/lib/media/image-gen` — that tried OpenAI / Replicate / Kie fallbacks; new repo is xAI-only so the probe scope narrows accordingly. |
+| *(all other 151 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 79) — Admin diagnostics (`/api/test-grok-image` + `/api/test-media`)
+
+**Branch:** `claude/phase-7-admin-batch-30`
+
+**Done:**
+- `src/app/api/test-grok-image/route.ts` — single-shot xAI image diagnostic. Routes through the shared `generateImage` helper so the probe still exercises the circuit breaker + cost ledger. `{prompt?, pro?}` body; `pro:true` flips to `grok-imagine-image-pro`. Error response shape preserved from legacy (`{success:false, error, hasKey, model}`) so the admin UI works unchanged.
+- `src/app/api/test-media/route.ts` — three-leg xAI diagnostic. Runs `generateImage`, `generateImageToBlob`, and `submitVideoJob` in parallel with canned prompts. Each step wrapped in `tryStep()` so failures are per-leg, not blanket. Returns `{ok, image, imageToBlob, videoSubmit}` where each leg is `{ok:true, detail}` or `{ok:false, error}`. Replaces legacy's `testMediaPipeline` (which chained OpenAI / Replicate / Kie fallbacks — the new repo is xAI-only so the probe narrows to three xAI paths).
+- 14 new tests (6 test-grok-image + 8 test-media): auth 401, env guard, default-prompt happy path, pro model switch, custom prompt propagation, xAI error shape; media: all-pass, single-fail, all-fail, blob path shape, video params (10s / 9:16 / 720p), syncVideoUrl propagation.
+- Suite **1449/1449**, up from 1435.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (1449/1449)
+
+**Design choices:**
+- Diagnostics go through the shared helpers rather than hitting xAI inline — gives the ops team a probe that exercises the same circuit breaker + cost ledger the real callers use. The legacy inlined raw `fetch` calls, which meant a diagnostic success/failure didn't actually validate the helper chain.
+- `test-media` drops the OpenAI / Replicate / Kie multi-provider testing from legacy. Those branches never existed in the new repo; keeping them would be pretend coverage.
+- No Blob cleanup for `test-media`'s `generateImageToBlob` leg — the admin ops page is low-traffic enough that the leak is negligible. If that changes, add a cleanup sweep.
+
+**Deferrals vs. legacy:**
+- Legacy multi-provider fallback chain — N/A for xAI-only architecture.
+
+**Next batch options (pick one):**
+1. `director-movies` content lib — 1626-line lift. Unlocks screenplay / generate-news / generate-channel-video / extend-video / channels-admin. Multi-session.
+2. `marketing/*` libs — un-defers `spreadPostToSocial` on 8+ routes + unlocks `spread` / `media` (main) / `media/save` / `media/spread` / `mktg` / `promote-glitchcoin` / `marketing-post` / `hatch`. Multi-session.
+3. `elon-campaign` admin (~711) or `channels` admin (~666) — chunky single-ship; `channels` also needs the `CHANNELS` seed (~475 lines of defs) ported.
+4. Telegram bot engine — un-defers personality modes + content handlers + bestie-life video branch. Multi-session.
+5. More diagnostic / small routes — `test-grok-video`, `test-premiere-post` (needs `genre-utils` extension).
+
+---
 
 ### 2026-04-21 (session 78) — Phase 6 cron port (`/api/generate-avatars`)
 
