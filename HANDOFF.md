@@ -76,11 +76,49 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/admin/grokify-sponsor` POST | tested | session 65 | Sponsor product placement via xAI `/images/edits`. Builds source-image set from `grokifyMode` (`all` / `logo_only` / `images_only`; outro forces logo). Multi-image → single-image retry on helper failure. Text-to-image fallback when no source images. Persist under `sponsors/grokified/{brand}-{channel}-{scene\|outro}-{id}.png`. First real exercise of the `sourceImageUrls` branch of the image helper. |
 | `/api/admin/generate-og-images` GET + POST | tested | session 65 | 21 branded OG banners for channel pages. GET = iPad-friendly HTML dashboard (per-image + generate-all buttons). POST = batch or `{ file }` single. Pro model 16:9, deterministic path `og/{file}.png` keeps `<meta>` URLs stable. |
 | Phase 5 video-gen helper (`src/lib/ai/video.ts`) | tested | session 66 | `submitVideoJob` + `pollVideoJob` + `generateVideo` + `generateVideoToBlob`. xAI `grok-imagine-video` via `/videos/generations` → `/videos/{id}` polling pattern. $0.05/sec flat. 10s default poll interval / 90 attempt ceiling (15 min). Shared `"xai"` circuit breaker + cost ledger (`task_type=video_generation`). Supports text-to-video + image-to-video (via `sourceImageUrl`). Handles sync/async responses, moderation-blocked videos, expired jobs. Unlocks `generate-channel-video`, `extend-video`, `hatch-admin`. |
-| *(all other 167 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/admin/hatch-admin` GET + POST | tested | session 67 | Full AI-pipeline persona hatching — `generateText` (Claude/Grok JSON) → `generateImageToBlob` (1:1 avatar) → `generateVideoToBlob` (9:16 10s hatch clip, 4-min attempt cap) → INSERT `ai_personas` → `awardPersonaCoins` (1,000 GLITCH) → INSERT first-words `posts`. Per-step status + graceful degradation — avatar/video/coins/first-post failures are non-fatal. 409 on wallet-already-has-persona. GET lists meatbag-owned personas (owner_wallet_address IS NOT NULL). Deferred: legacy `ensureDbReady`/`safeMigrate` shim + OpenAI image / Kie.ai video fallbacks. **First real end-to-end exercise of the video helper.** |
+| *(all other 166 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 67) — Phase 7 admin batch 18 (hatch-admin)
+
+**Branch:** `claude/phase-7-admin-batch-18`
+
+**Done:**
+- New `src/app/api/admin/hatch-admin/route.ts` — full-stack persona-hatching pipeline that exercises all three AI-engine legs (text + image + video) in a single route:
+  - **Step 1** — `generateText` with a JSON-requesting prompt (Claude/Grok routed via the existing 85/15 weighted provider split) → parsed as `HatchedBeing`. Validates all 8 required fields; returns 500 if any missing.
+  - **Step 2** — `generateImageToBlob` (1:1 aspect, `avatars/meatbag-{uuid}.png`). Non-fatal.
+  - **Step 3** — `generateVideoToBlob` (9:16, 10-second clip, `hatching/meatbag-{uuid}.mp4`). Polling capped at 24 × 10s = 240s to leave headroom inside the 300s Vercel lambda limit. Non-fatal — if xAI polling runs long the video is skipped and the persona still hatches with text-only media.
+  - **Step 4** — INSERT `ai_personas` (abort-on-failure). 409 short-circuit if `owner_wallet_address` already owns a persona.
+  - **Step 5** — `awardPersonaCoins(1,000)` starter grant. Non-fatal.
+  - **Step 6** — INSERT `posts` first-words announcement. Uses video media when video generation succeeded, text otherwise.
+- Per-step `steps[]` array in the response (`in_progress` → `completed` | `skipped`) — matches legacy UI contract.
+- GET lists meatbag-owned personas (`owner_wallet_address IS NOT NULL`, newest first).
+- 16 new tests covering: auth, validation, 409 duplicate wallet, AI-gen failures (throws + non-JSON + missing fields), full happy path + 4 degraded-happy variants (avatar fail, video fail, coins fail, first-post fail), abort-on-persona-save fail, custom-mode prompt threading, random-mode directive, GET list shape.
+- Suite **1231/1231**, up from 1215.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (1231/1231)
+
+**First end-to-end stress-test on the video helper:**
+- `hatch-admin` is the first consumer of `generateVideoToBlob`. Tightening `maxAttempts` to 24 (from the helper default of 90) was necessary — the helper's default 15-min ceiling exceeds Vercel's 300s lambda timeout. Tuning suggestion validated the helper's `maxAttempts` override design.
+- The non-fatal video branch matches the legacy "try/catch → null → skip" behaviour exactly. No callers today need the video to block the response.
+
+**Deferrals vs. legacy (documented on route):**
+- `ensureDbReady` / `safeMigrate` — new repo uses standalone migration tooling; route assumes schema is already in place on the shared Neon instance.
+- OpenAI / Kie.ai fallbacks for image + video — aiglitch-api is xAI-only. Surfaces failures instead of falling back.
+
+**Next batch options (pick one):**
+1. `generate-channel-video` + `extend-video` pair — both exercise `submitVideoJob` (not `generateVideoToBlob`) because the generation timeline exceeds lambda limits. Route-side polling pattern. Larger batch, but the last two video-using admin routes.
+2. `director-movies` content lib (1626 lines) — unlocks `screenplay` + `generate-news`.
+3. Phase 6 cron triage — pick 2–3 pure-DB jobs from the 21-job legacy fleet.
+4. Phase 4 bestie iOS glue — 6 routes unblocked since AI engine shipped.
+
+---
 
 ### 2026-04-21 (session 66) — Phase 5 video-gen helper
 
