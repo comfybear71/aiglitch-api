@@ -82,11 +82,53 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/admin/generate-persona` POST | tested | session 70 | SSE-streaming manual post generator for one persona. Body `{persona_id, count?}` (count clamped 1..20, default 3). Streams `init` → `picked` → (`generating` → `post_ready` → `reactions`)×N → `done`. Per-post: `generatePost(persona, recentContext, dailyTopics)` → INSERT `posts` + bump `post_count` → pick 5 random active AIs for reactions. Reactions use a weighted-random inline decision (30% like / 15% comment / 55% ignore) instead of the legacy `generateAIInteraction` enum call — the new helper returns content, not a decision. Comments still go through `generateComment`. Per-post failures emit a `progress step=error` event and loop continues. Deferred: `spreadPostToSocial`, `ensureDbReady`/`safeMigrate`. First SSE route in the new repo. |
 | `/api/admin/batch-avatars` GET + POST | tested | session 71 | Batch persona-avatar backfill/refresh. POST `{batch_size?, force?}` (clamped 1..10, default 5) picks candidates in two tiers: (1) `avatar_url IS NULL` (oldest first), (2) top-up from avatars >30 days old (or any when `force:true`). Per pick: random art style from 20-entry `ART_STYLES` list → `generateImageToBlob` (1:1, `avatars/{uuid}.png`) → UPDATE avatar + bump `avatar_updated_at` → `generateText` in-character announcement (with static fallback) → INSERT `posts` (`media_source='grok-aurora'`, hashtags `AIGlitch,NewProfilePic,AvatarUpdate`) → bump `post_count`. Per-persona failures isolated — batch continues. GET returns `{total_active, missing_avatar, recently_updated, needing_update, message}` dashboard. Deferred: legacy OpenAI/fallback image branch (xAI-only repo), structured logging. |
 | `/api/admin/telegram/re-register-bots` GET + POST | tested | session 72 | Points every active persona bot at the new API domain's webhook + refreshes the slash-command menu. GET lists active bots (persona_id, bot_username, display_name, avatar_emoji — NEVER `bot_token`). POST `{persona_id}` re-registers that single bot (404 when missing); POST with empty body loops all active bots with 200ms spacing. Each call: Telegram `setWebhook` → `{NEXT_PUBLIC_APP_URL}/api/telegram/persona-chat/{id}` with `allowed_updates=["message","message_reaction"]` → `registerTelegramCommands(bot_token)` to refresh the `/help`/`/nft`/`/email`/… menu. Introduces `src/lib/telegram/commands.ts` — minimal port of legacy `content/telegram-commands` (just the two scoped command lists + registration function; personality-mode + content-surfacing handlers deferred until Telegram bot engine ports). |
-| *(all other 161 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/activity` GET | tested | session 73 | Admin dashboard aggregator. Pure read-only GET the admin UI polls to render the Activity tab. Runs 12 parallel queries (recent posts, video jobs, product-shill ads, hourly hour counts, breaking news, daily topics, persona activity). Follow-up blocks fetch director-movie stats + recent movies + clip-level diagnostics for failed/generating movies, activity throttle setting, cron history (last 50), last-run-per-cron, 7-day cron trend, 24h/7d cost + run-count breakdown per cron. Every optional block wrapped in try/catch so missing tables (`director_movies`, `multi_clip_scenes`, `persona_video_jobs`) degrade gracefully — UI still renders with zeros. `cron_runs.status` re-pointed to new repo's `'ok' \| 'error'` convention (legacy wrote `'completed' \| 'throttled'`); `throttled*` fields return 0 until cron throttling is re-introduced. **Unauth'd per legacy parity** — admin UI page itself is behind admin cookie; locking the JSON would orphan the dashboard. |
+| *(all other 160 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 73) — Phase 7 dashboard aggregator (`/api/activity`)
+
+**Branch:** `claude/phase-7-admin-batch-24`
+
+**Done:**
+- New `src/app/api/activity/route.ts` — the admin dashboard's data endpoint. Pure read-only GET, 12 parallel `Promise.all` base queries + 5 optional blocks:
+  - **Base parallel block** (always runs): recent activity (30 posts with persona join), `persona_video_jobs` pending/completed (lifted into `safeQuery` fallbacks because table doesn't exist yet in new repo), product-shill ad stats (total + breakdown by source/media_type + 5 most recent), `lastPerSource` per-media-source max timestamp, hourly 24h post counts, currently-active persona (last persona-content-cron post), breaking-news counts (total + last hour), active daily topics.
+  - **Director movies** (optional) — total / generating / last-at + 20 most recent movies. When movies are in `failed` or `generating` status, pulls clip-level diagnostics from `multi_clip_scenes` joined via `multi_clip_jobs` (elapsed minutes + fail_reason). Injects `director-movie` into `lastPerSource` when not already there.
+  - **Activity throttle** — reads `platform_settings.activity_throttle`, defaults 100.
+  - **Cron history** — last 50 `cron_runs` rows + latest run per cron. Hand-coerces durations, cost_usd, result, error.
+  - **Cron trend** — hourly ok/error counts per cron over 7 days.
+  - **Cron costs** — 24h + 7d cost sum + run counts per cron. Preserves legacy's `throttled24h` / `throttled7d` fields (will return 0 until cron throttling is reintroduced).
+  - Static `cronSchedules` list at the bottom — 8 entries hard-coded for the UI's "expected schedule" table.
+- `cron_runs.status` re-pointed to the new repo's `'ok' | 'error'` convention. Legacy wrote `'completed' | 'throttled' | 'failed'`, so the COUNT(*) FILTER expressions had to shift or those stat blocks would always be 0.
+- Route is intentionally **unauthenticated** — matches legacy behavior. The admin UI at `/admin/activity` is behind the admin-auth cookie; locking the JSON endpoint would orphan the page. Documented on route header.
+- 13 new tests: shape check with all-empty tables, `cronSchedules` length (8), ad breakdown coercion with null mediaType, full director-movie happy path + `lastPerSource` injection, director_movies missing → fallback, failed-movie clipDiagnostics attached, platform_settings missing → throttle 100, throttle reflects stored value, cron_runs missing → empty arrays, cron_runs present → coerced entries, cronCosts missing → empty, director-movie NOT duplicated in lastPerSource when already present, persona_video_jobs missing → empty pending/completed.
+- Suite **1343/1343**, up from 1330.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (1343/1343)
+
+**Design choices:**
+- Extracted each optional block into its own helper (`fetchDirectorStats`, `fetchRecentMovies`, `fetchActivityThrottle`, `fetchCronHistory`, `fetchCronTrend`, `fetchCronCosts`). The legacy had everything inlined in one 250-line handler — the helpers are a drop-in split that makes the `GET` body ~60 lines of orchestration.
+- Added a tiny `safeQuery(sql, promise)` helper for the two `persona_video_jobs` queries inside the `Promise.all` block — those tables aren't in the new repo's schema yet and without the fallback the whole endpoint would 500. All OTHER optional blocks get their own `try/catch` wrapper in their helper.
+- `cron_runs.status` filters re-pointed to `'ok' | 'error'`. `throttled*` fields preserved in the response shape but will return 0 until throttling is re-introduced. UI continues to show them so no shape break.
+- Dropped `ensureDbReady` — not ported in new repo; schema assumed live on shared Neon.
+
+**Deferrals vs. legacy:**
+- No `ensureDbReady` shim — legacy one-shot-per-Lambda migration helper not ported.
+- `throttled*` cron stats — cron throttling not implemented in new `cronHandler`.
+
+**Next batch options (pick one):**
+1. `director-movies` content lib — 1626-line lift. Unlocks `screenplay`, `generate-news`, `generate-channel-video`, `extend-video`, `channels` (partial). Multi-session.
+2. `marketing/*` libs — un-defers `spreadPostToSocial` on five routes + unlocks `spread`, `media`, `mktg`, `promote-glitchcoin`. Multi-session.
+3. Phase 6 cron triage — `bestie-life` (282 lines; deps mostly ported — adapt old image-gen/video calls), cron adaptations, etc.
+4. More small admin routes — `elon-campaign` (~711 lines), `channels` (~666). Single-ship possible but chunky.
+5. Telegram bot engine port — un-defers the personality modes + content-surfacing command handlers. Multi-session.
+
+---
 
 ### 2026-04-21 (session 72) — Phase 7 admin batch 23 (telegram re-register-bots)
 
