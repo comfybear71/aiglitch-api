@@ -80,11 +80,48 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/admin/spec-ads` GET + POST | tested | session 68 | Brand-led 3-channel spec-ad teaser pipeline. POST kicks off 3 parallel `submitVideoJob` calls across randomly-picked channel styles from a 13-entry `CHANNEL_STYLES` dictionary (GNN, OnlyAiFans, AiTunes, etc.); persists a `spec_ads` JSONB row per brand and returns request IDs for client-side polling. `action=poll` thin-wraps `pollVideoJob` + downloads & persists completed videos to `{folder}/clip-{N}.mp4`. `action=delete` removes a spec-ad. GET `action=list` / `action=status&id=X`. Transient Grok errors surface as `{status:"pending"}` so the client retries. Uses shared `"xai"` circuit breaker + cost ledger via the helper. |
 | `/api/admin/animate-persona` GET + POST | tested | session 69 | Image-to-video persona avatar animator. POST loads persona → `generateText` animation prompt (with local fallback if AI down) → `submitVideoJob` with `sourceImageUrl=avatar_url`. Returns `requestId` for client polling. GET thin-wraps `pollVideoJob`; on completion downloads + persists to `feed/{uuid}.mp4`, INSERT `posts` (`media_source='grok-animate'`), bumps `ai_personas.post_count`. Preview mode short-circuits before AI for UI preview. Deferred: `spreadPostToSocial`, `injectCampaignPlacement`. **First real exercise of the video helper's `sourceImageUrl` image-to-video branch.** |
 | `/api/admin/generate-persona` POST | tested | session 70 | SSE-streaming manual post generator for one persona. Body `{persona_id, count?}` (count clamped 1..20, default 3). Streams `init` → `picked` → (`generating` → `post_ready` → `reactions`)×N → `done`. Per-post: `generatePost(persona, recentContext, dailyTopics)` → INSERT `posts` + bump `post_count` → pick 5 random active AIs for reactions. Reactions use a weighted-random inline decision (30% like / 15% comment / 55% ignore) instead of the legacy `generateAIInteraction` enum call — the new helper returns content, not a decision. Comments still go through `generateComment`. Per-post failures emit a `progress step=error` event and loop continues. Deferred: `spreadPostToSocial`, `ensureDbReady`/`safeMigrate`. First SSE route in the new repo. |
-| *(all other 163 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/admin/batch-avatars` GET + POST | tested | session 71 | Batch persona-avatar backfill/refresh. POST `{batch_size?, force?}` (clamped 1..10, default 5) picks candidates in two tiers: (1) `avatar_url IS NULL` (oldest first), (2) top-up from avatars >30 days old (or any when `force:true`). Per pick: random art style from 20-entry `ART_STYLES` list → `generateImageToBlob` (1:1, `avatars/{uuid}.png`) → UPDATE avatar + bump `avatar_updated_at` → `generateText` in-character announcement (with static fallback) → INSERT `posts` (`media_source='grok-aurora'`, hashtags `AIGlitch,NewProfilePic,AvatarUpdate`) → bump `post_count`. Per-persona failures isolated — batch continues. GET returns `{total_active, missing_avatar, recently_updated, needing_update, message}` dashboard. Deferred: legacy OpenAI/fallback image branch (xAI-only repo), structured logging. |
+| *(all other 162 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 71) — Phase 7 admin batch 22 (batch-avatars)
+
+**Branch:** `claude/phase-7-admin-batch-22`
+
+**Done:**
+- New `src/app/api/admin/batch-avatars/route.ts` — batch persona-avatar backfill/refresh:
+  - POST `{batch_size?, force?}` (clamped 1..10, default 5). Priority 1 = personas with `avatar_url IS NULL`, oldest first. Priority 2 = top-up from avatars >30 days old (or any when `force:true`), with the priority-1 IDs excluded.
+  - Per pick: random art style from 20-entry `ART_STYLES` list → `generateImageToBlob` (1:1, `avatars/{uuid}.png`, `image_generation`) → UPDATE `avatar_url` + bump `avatar_updated_at` → `generateText` in-character announcement (with static fallback per first/refresh) → INSERT `posts` (`media_source='grok-aurora'`, hashtags `AIGlitch,NewProfilePic,AvatarUpdate`) + bump `post_count`.
+  - Per-persona try/catch isolates failures — the batch continues.
+  - GET returns `{total_active, missing_avatar, recently_updated, needing_update, message}` dashboard for the admin UI.
+- Refactored the legacy `${sql\`...\` : sql\`\`}` embedded-fragment pattern into a plain helper `fetchRefreshCandidates(sql, limit, excludeIds, force)` that picks one of four concrete queries. Cleaner to read, and avoids a subtle Neon fragment-composition footgun where embedded `sql\`\`` invocations show up as extra calls under the test mock.
+- 17 new tests: GET auth + dashboard (with-missing + all-current branches), POST auth / no-key / all-current / happy-path / batch_size clamp / per-persona failure isolation / priority-2 top-up / `force=true` / generateText failure fallback / auto-tag `#AIG!itch` / too-short AI output / quote-stripping / remaining-count wiring / refresh-announcement path.
+- Suite **1311/1311**, up from 1294.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (1311/1311)
+
+**Design choices:**
+- Dropped the legacy `generateImage` OpenAI fallback — this repo is xAI-only (same policy as hatch-admin). Helper surfaces failures instead of falling back, and the try/catch around `generateImageToBlob` keeps the batch moving when xAI is unavailable for a given persona.
+- Kept legacy `media_source='grok-aurora'` string for client parity even though we now go through `generateImageToBlob` → `grok-imagine-image` under the hood. The old feed UI keys on the source string; changing it would invalidate existing filters.
+- `taskType: "image_generation"` — the `AiTaskType` union doesn't have a dedicated `avatar_generation` bucket, and avatar gen shares the xAI cost/budget pool with other image tasks anyway.
+- `randomUUID()` from `node:crypto` — matches the rest of the ported admin routes.
+
+**Deferrals vs. legacy:**
+- OpenAI/fallback `generateImage` branch — xAI-only repo.
+- `console.log` observability — cross-cutting structured-logging pass deferred.
+
+**Next batch options (pick one):**
+1. `director-movies` content lib — 1626-line lift. Unlocks `screenplay`, `generate-news`, `generate-channel-video`, `extend-video`, `channels` (partial). Multi-session.
+2. `marketing/*` libs — un-defers `spreadPostToSocial` on chibify/persona-avatar/animate-persona/generate-persona/batch-avatars + unlocks `spread`, `media`, `mktg`, `promote-glitchcoin`. Multi-session.
+3. Phase 6 cron triage — pick 2–3 pure-DB cron jobs from the 21-job legacy fleet.
+4. More small admin routes — `init-persona` (Solana deps — Phase 8 locked, skip), `hatchery` (marketing deps — skip until marketing lib ported), `elon-campaign` (~711 lines), `channels` (~666 lines), `nfts` (Solana deps — Phase 8).
+
+---
 
 ### 2026-04-21 (session 70) — Phase 7 admin batch 21 (generate-persona)
 
