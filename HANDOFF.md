@@ -83,11 +83,49 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/admin/batch-avatars` GET + POST | tested | session 71 | Batch persona-avatar backfill/refresh. POST `{batch_size?, force?}` (clamped 1..10, default 5) picks candidates in two tiers: (1) `avatar_url IS NULL` (oldest first), (2) top-up from avatars >30 days old (or any when `force:true`). Per pick: random art style from 20-entry `ART_STYLES` list → `generateImageToBlob` (1:1, `avatars/{uuid}.png`) → UPDATE avatar + bump `avatar_updated_at` → `generateText` in-character announcement (with static fallback) → INSERT `posts` (`media_source='grok-aurora'`, hashtags `AIGlitch,NewProfilePic,AvatarUpdate`) → bump `post_count`. Per-persona failures isolated — batch continues. GET returns `{total_active, missing_avatar, recently_updated, needing_update, message}` dashboard. Deferred: legacy OpenAI/fallback image branch (xAI-only repo), structured logging. |
 | `/api/admin/telegram/re-register-bots` GET + POST | tested | session 72 | Points every active persona bot at the new API domain's webhook + refreshes the slash-command menu. GET lists active bots (persona_id, bot_username, display_name, avatar_emoji — NEVER `bot_token`). POST `{persona_id}` re-registers that single bot (404 when missing); POST with empty body loops all active bots with 200ms spacing. Each call: Telegram `setWebhook` → `{NEXT_PUBLIC_APP_URL}/api/telegram/persona-chat/{id}` with `allowed_updates=["message","message_reaction"]` → `registerTelegramCommands(bot_token)` to refresh the `/help`/`/nft`/`/email`/… menu. Introduces `src/lib/telegram/commands.ts` — minimal port of legacy `content/telegram-commands` (just the two scoped command lists + registration function; personality-mode + content-surfacing handlers deferred until Telegram bot engine ports). |
 | `/api/activity` GET | tested | session 73 | Admin dashboard aggregator. Pure read-only GET the admin UI polls to render the Activity tab. Runs 12 parallel queries (recent posts, video jobs, product-shill ads, hourly hour counts, breaking news, daily topics, persona activity). Follow-up blocks fetch director-movie stats + recent movies + clip-level diagnostics for failed/generating movies, activity throttle setting, cron history (last 50), last-run-per-cron, 7-day cron trend, 24h/7d cost + run-count breakdown per cron. Every optional block wrapped in try/catch so missing tables (`director_movies`, `multi_clip_scenes`, `persona_video_jobs`) degrade gracefully — UI still renders with zeros. `cron_runs.status` re-pointed to new repo's `'ok' \| 'error'` convention (legacy wrote `'completed' \| 'throttled'`); `throttled*` fields return 0 until cron throttling is re-introduced. **Unauth'd per legacy parity** — admin UI page itself is behind admin cookie; locking the JSON would orphan the dashboard. |
-| *(all other 160 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/generate-videos` GET + POST | tested | session 74 | Premiere trailer cron — two-phase async video pipeline using the shared `submitVideoJob` + `pollVideoJob` helpers. POST picks N (1..5, default 1) random prompts from 10-entry `VIDEO_PROMPTS` dict and submits each (10s, 9:16, 720p). Returns `{jobs:[{requestId, title, genre, tagline, prompt, error?}]}`. Synchronous completions come back as `sync:{url}` request IDs. GET `?id=&title=&genre=&tagline=` polls one job; on `done`, downloads + persists to `premiere/{genre}/{uuid}.mp4`, INSERTs `posts` (`post_type='premiere'`, `media_source='grok-video'`, hashtags `AIGlitchPremieres,AIGlitch{GenreCap}`), bumps the random-picked persona's `post_count`. Both paths gated by `requireCronAuth` (legacy's `checkCronAuth` equivalent). Deferred: `spreadPostToSocial` (marketing lib), `ensureDbReady` (schema assumed live). **First cron on the new repo to exercise image-free text-to-video through the shared helper** — validates the submit/poll separation at cron cadence. |
+| *(all other 159 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 74) — Phase 6 cron port (`/api/generate-videos`)
+
+**Branch:** `claude/phase-7-admin-batch-25`
+
+**Done:**
+- New `src/app/api/generate-videos/route.ts` — premiere-trailer cron, the first text-to-video cron on the new repo.
+  - POST picks 1..5 (default 1) random prompts from a 10-entry `VIDEO_PROMPTS` dictionary (OVERRIDE, FIRST LIGHT, SEASONS, SPROUT, CACHED, EMPLOYEE OF THE MONTH, GHOST PROTOCOL: ZERO, THE OBSERVER, PET SHOP AFTER DARK, WRITTEN IN RED — same ten as legacy). Each `submitVideoJob` call passes `duration:10, aspectRatio:"9:16", resolution:"720p", taskType:"video_generation"` — everything routed through the shared `"xai"` circuit breaker + cost ledger. Response: `{success, jobs:[{requestId, title, genre, tagline, prompt, error?}]}`. Per-movie submit failures isolated — the loop keeps going and tags the failed entry with the error.
+  - Synchronous xAI video URLs (rare but handled in the helper) come back as `sync:{url}` request IDs. GET recognizes the `sync:` prefix and short-circuits straight to persist + post, skipping the poll.
+  - GET `?id=&title=&genre=&tagline=` polls one job. On `done`, downloads the xAI video, uploads to `premiere/{genre}/{uuid}.mp4` via `put`, picks a random active persona, INSERTs `posts` (`post_type='premiere'`, `media_source='grok-video'`, hashtags `AIGlitchPremieres,AIGlitch{GenreCap}`, AI like count 100–399), bumps the persona's `post_count`. Handles `moderation_failed` / `expired` / `failed` / poll-exception / persist-exception / missing-video-url with distinct status codes the cron runner can switch on.
+  - Both handlers gated by `requireCronAuth` — legacy's `checkCronAuth` equivalent in the new repo.
+- 22 new tests split across POST + GET: auth (401), env guard (500), count default + clamping (0→1, 99→5), submit params (cinematic prefix, 10s/9:16/720p), sync URL handling, per-movie error isolation, returned job shape; GET 400-on-missing-id, sync: short-circuit + blob persist, still-pending, moderation blocked, done-with-videoUrl persists + hashtag + genre-cap in content, expired/failed passthrough, poll exception → status=error, no-active-personas → persist_failed, video download failure → persist_failed, default query params land in `/premiere/action/`.
+- Suite **1365/1365**, up from 1343.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (1365/1365)
+
+**Design choices:**
+- Used `submitVideoJob` + `pollVideoJob` instead of inline xAI fetches — same pattern as spec-ads / animate-persona / hatch-admin. Route stays pure orchestration and gets the breaker + cost ledger for free.
+- Static `VIDEO_PROMPTS` array preserved verbatim — the 10 trailers are baked into the feature, not AI-generated.
+- `Math.random` used for shuffle + picking the random persona + ai_like_count — legacy parity, not worth a crypto-secure RNG for cosmetic fields.
+- Replaced `v4 as uuidv4` with `randomUUID` — no new deps.
+- Kept the `sync:{url}` request-id convention from legacy even though the new helper returns it as `syncVideoUrl`. The cron runner that calls POST stores the list of request IDs and later GETs each one — this convention lets sync completions flow through the SAME GET path as async ones without a separate "completed" store.
+
+**Deferrals vs. legacy:**
+- `spreadPostToSocial` — marketing lib still not ported; premieres stay on-platform. When marketing lib lands, this un-defers alongside chibify / persona-avatar / animate-persona / generate-persona.
+- `ensureDbReady` / `safeMigrate` — schema assumed live on shared Neon.
+
+**Next batch options (pick one):**
+1. `director-movies` content lib — 1626-line lift. Unlocks `screenplay`, `generate-news`, `generate-channel-video`, `extend-video`, `channels`. Multi-session.
+2. `marketing/*` libs — un-defers `spreadPostToSocial` on 6 already-ported routes (chibify / persona-avatar / animate-persona / generate-persona / spec-ads / generate-videos) + unlocks `spread`, `media`, `mktg`, `promote-glitchcoin`, `marketing-post`, `hatch`. Multi-session.
+3. Phase 6 cron triage — a few more pure-DB / simple-dep cron jobs exist (e.g. `bestie-life` has most deps ported).
+4. Admin route chunkiers — `elon-campaign` (~711), `channels` (~666).
+5. Telegram bot engine — un-defers personality-mode overlays + content-surfacing handlers. Multi-session.
+
+---
 
 ### 2026-04-21 (session 73) — Phase 7 dashboard aggregator (`/api/activity`)
 
