@@ -71,11 +71,43 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | Phase 5 image-gen helper (`src/lib/ai/image.ts`) | tested | session 63 | `generateImage` + `generateImageToBlob` — xAI `grok-imagine-image` / `-pro` ($0.02 / $0.07 per image). Shared `"xai"` circuit breaker; fire-and-forget cost ledger (`task_type=image_generation`). Supports `/images/generations` + `/images/edits` (via `sourceImageUrls`). Unlocks 6 deferred admin routes. |
 | `/api/admin/merch` generate action | tested | session 63 | Flipped from 501 → calls `generateImageToBlob` + INSERT `merch_library` with `source='generate'`. Blob path `merch/designs/{uuid}.png`. |
 | `/api/admin/nft-marketplace` generate action | tested | session 63 | Flipped from 501 → calls `generateImageToBlob` + UPSERT `nft_product_images` on `product_id`. Blob path `marketplace/{product_id}-{slug}.png`. Uses legacy prompt template verbatim. |
+| `/api/admin/persona-avatar` POST | tested | session 64 | Admin override — regenerates persona avatar via Grok Aurora Pro 1:1. UPDATE `ai_personas.avatar_url` + `avatar_updated_at`; optional in-character feed-post via `generateText` with local fallback template. Deferred: `injectCampaignPlacement`, non-xAI fallback pipeline. |
+| `/api/admin/chibify` GET + POST | tested | session 64 | Batch chibify. GET = prompt preview. POST loops over `persona_ids` with per-persona error isolation; each successful chibi → Blob + INSERT `posts` (`media_source='grok-aurora'`) + `post_count` bump. Deferred: `injectCampaignPlacement`, `logImpressions`, `spreadPostToSocial`. |
 | *(all other 169 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 64) — Phase 7 admin batch 16 (persona-avatar + chibify)
+
+**Branch:** `claude/phase-7-admin-batch-16`
+
+**Done:**
+- New `src/app/api/admin/persona-avatar/route.ts` — admin avatar override. POST → `generateImageToBlob` (Grok Aurora Pro 1:1) → UPDATE `ai_personas.avatar_url` + `avatar_updated_at` → optional in-character announcement via `generateText` + INSERT `posts` + bump `post_count`. Local template fallback when text gen fails (matches legacy behaviour). 400/404 on missing persona_id / persona not found. Returns `{ success, avatar_url, source: "grok-aurora", posted_to_feed, post_id, admin_override: true }`.
+- New `src/app/api/admin/chibify/route.ts` — batch chibify. GET `?persona_id=X` previews the chibi prompt. POST `{ persona_ids: string[] }` loops with per-persona error isolation: rejects on no-avatar, persona-not-found, generic errors — each captured in the `results` array without breaking the loop. Happy personas get `chibi/{uuid}.png` Blob + INSERT `posts` (hashtags `AIGlitch,MadeInGrok,Chibi,ChibiArt,Kawaii`, `media_source='grok-aurora'`) + `post_count` bump.
+- 21 new tests (9 persona-avatar + 12 chibify).
+- Suite **1174/1174**, up from 1153.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (1174/1174)
+
+**Deferrals (intentional, documented on the route):**
+- Both routes skip `injectCampaignPlacement` — `@/lib/ad-campaigns` not ported yet.
+- Chibify skips `spreadPostToSocial` + `logImpressions`. Feed post runs; external platform mirroring deferred until `@/lib/marketing/spread-post` lands.
+- Persona-avatar skips the non-xAI image-gen fallback pipeline. aiglitch-api exposes Grok only; if the helper throws, the route returns 500 (legacy fell back to OpenAI DALL-E).
+
+**Validation of the image-gen helper on real routes:**
+- Both routes call `generateImageToBlob({ model: "grok-imagine-image-pro", aspectRatio: "1:1" })` — first real usage of the Pro model and the `aspectRatio` passthrough. Helper tests already cover both paths; these route tests confirm the wiring.
+
+**Next admin batch options (pick one):**
+1. `grokify-sponsor` — exercises the `/images/edits` branch via `sourceImageUrls` with a text-to-image fallback. Last untested branch of the image-gen helper. Solo-or-pair candidate.
+2. `generate-og-images` — bulk OG-image generation for persona pages. Pure text-to-image; pairs well with something else.
+3. Port `director-movies` content lib + flip `screenplay` + `generate-news` — big lift but unlocks 2 routes + unblocks further screenplay-related work.
+4. Start a video-gen helper in `@/lib/ai/` — mirrors this batch's image-helper pattern. Unlocks `generate-channel-video`, `extend-video`, plus the video half of `hatch-admin`.
+
+---
 
 ### 2026-04-21 (session 63) — Phase 5 image-gen helper + flip merch + nft-marketplace
 
