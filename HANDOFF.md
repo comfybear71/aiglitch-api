@@ -95,11 +95,50 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/test-grok-video` GET + POST | tested | session 80 | Admin video diagnostic — two-phase contract so the UI stays within the 60s serverless limit. POST `{prompt?, duration?, folder?, image_url?, persona_id?, caption?}` submits via `submitVideoJob`; `image_url` flips to image-to-video. Returns `requestId` or (rare) persists+auto-posts immediately on sync URL. GET `?id=&folder=&persona_id=&caption=&skip_post=` polls via `pollVideoJob`; on done downloads video, persists to `{folder}/{uuid}.mp4` (or `premiere/action/` when `folder=premiere`, `feed/` when `folder=feed`/`persona`), and unless `skip_post=true` auto-creates the right post variant (feed video post with custom caption / news post with AIGlitchBreaking hashtags / premiere post with genre-detected tagline). Routes through shared helpers for circuit breaker + cost ledger. |
 | `/api/test-premiere-post` GET + POST | tested | session 81 | Premiere-post backfill / retag tool. GET lists every video blob across `news/`, `premiere/`, and each per-genre subfolder with detected `postType` + `genre` (`cooking_show` folder maps back to `cooking_channel` genre). POST `{videoUrl, type?, genre?}` creates a single post; no body triggers bulk backfill that (1) retags any existing premiere posts missing genre-specific hashtags (`AIGlitch<Genre>`) and (2) scans all prefixes and inserts posts for every blob video NOT already in `posts.media_url`. Uses a 5-persona random sample so the feed doesn't get dominated by one persona. No AI calls — pure DB + Blob. Extended `src/lib/genres.ts` with the full legacy helper set (`detectGenreFromPath`, `getAllBlobFolders`, `getGenreHashtag`, `capitalizeGenre`, `getGenreBlobFolder`, `getGenreFolderName`, `ALL_GENRES`) so this route and future director-movie routes share one source of truth. |
 | `/api/admin/media/save` POST | tested | session 82 | Client-upload DB registration. Browser uploads directly to Vercel Blob via `/api/admin/media/upload` then POSTs here with `{url, media_type?, tags?, description?, persona_id?}` (JSON or Safari-fallback multipart). Logo uploads restricted to The Architect (`glitch-000`); DB constraint only allows `image/video/meme` so `"logo"` + extension sniff resolves to the concrete type. When `persona_id` is supplied, also INSERTs a feed post + bumps `post_count`. The Architect's auto-spread branch (`spreadArchitectContent` in legacy) is **deferred** — response preserves the `spreading: []` shape so the admin UI's existing "posting to …" display gracefully renders nothing. Un-defers the full client-upload flow end-to-end (upload + save + feed post). |
-| *(all other 148 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/content/status` GET | tested | session 83 | Content Studio job poller. `?job_id=<id>` → returns the `content_jobs` row. 400 on missing, 404 on unknown. |
+| `/api/content/library` GET | tested | session 83 | Paginated `content_jobs` list + whole-table status totals (completed/processing/failed). `status` + `type` filters combine (AND). Limit hard-capped at 200. |
+| `/api/content/media` GET + DELETE | tested | session 83 | Paginated `uploaded_media` list + stats (total + total bytes). `?folder=` optional filter. DELETE removes the DB row + best-efforts blob delete via `@vercel/blob#del`. Blob delete failures swallowed — the file might already be gone. |
+| `/api/content/upload` POST | tested | session 83 | Direct server-side upload (for files under 4.5 MB — bigger videos go through the `/api/admin/media/upload` + `/api/admin/media/save` client flow instead). multipart/form-data with `file` + optional `folder` (default `uploads`). Persists to `{folder}/{filename}` with `addRandomSuffix: true` + INSERTs `uploaded_media`. |
+| `/api/content/generate` POST | tested | session 83 | Content Studio async generator. `{type:"image"\|"video", prompt}`. INSERT `content_jobs` as `processing`, invoke `generateImageToBlob` or `generateVideoToBlob` (video capped at 24 attempts × 10s so it fits in the 5-min lambda), UPDATE to `completed` + `result_url` or `failed` + `error`. Client polls `/api/content/status`. Drops legacy's "prefix the prompt with `[VIDEO]`" hack which never actually produced videos — routes go through real xAI video submit + poll now. |
+| *(all other 143 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 83) — `/api/content/*` cluster (5 routes)
+
+**Branch:** `claude/phase-7-admin-batch-34`
+
+**Done:** 5 small self-contained Content Studio routes in one batch. All admin-authed, all pure DB + Blob + xAI helpers — no marketing, no director-movies, no Solana.
+- `src/app/api/content/status/route.ts` (33 lines) — poll one `content_jobs` row by id.
+- `src/app/api/content/library/route.ts` (~85 lines) — paginated job list + whole-table totals. `status` + `type` filters combine.
+- `src/app/api/content/media/route.ts` (~90 lines) — paginated `uploaded_media` list + DELETE. DELETE best-efforts the Blob deletion then DB row.
+- `src/app/api/content/upload/route.ts` (~60 lines) — direct multipart upload (for small files). Bigger videos use the client-upload flow.
+- `src/app/api/content/generate/route.ts` (~120 lines) — async image/video gen via the new xAI helpers. Video capped at 24 attempts × 10s so it stays inside the 5-min lambda.
+- 31 new tests (4 status + 5 library + 6 media + 5 upload + 7 generate, adjusted for final shapes). Every route covers auth + happy path + error branches; generate verifies `generateImageToBlob` / `generateVideoToBlob` args (maxAttempts=24, 9:16 720p 10s for video); media verifies blob-del failure is swallowed; upload verifies `addRandomSuffix:true` + octet-stream fallback.
+- Suite **1533/1533**, up from 1502.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (1533/1533)
+
+**Design choices:**
+- `generate` routes through `generateImageToBlob` / `generateVideoToBlob` instead of inlining the legacy fetch-to-xAI. Legacy's video path used the `grok-2-image` endpoint with a `[VIDEO]` prompt prefix — which doesn't actually generate video, just images with a useless marker. The ported version uses real xAI video submit + poll.
+- Video `maxAttempts: 24` (~4 min) leaves headroom inside the Vercel 5-min lambda. Matches the pattern established in `hatch-admin`.
+- Upload uses `addRandomSuffix: true` verbatim from legacy — concurrent uploads with the same filename don't collide.
+- `content_jobs` + `uploaded_media` schema assumed live on shared Neon (no `ensureDbReady` shim).
+
+**Deferrals vs. legacy:**
+- None — this is a clean 5-route lift with real AI engine routing.
+
+**Next batch options (pick one):**
+1. `marketing/*` lib (3036 lines / 9 files) — un-defers 8+ routes. Multi-session.
+2. `director-movies` lib (1626 lines) — unlocks screenplay / generate-news / generate-channel-video / extend-video / generate-director-movie / generate-movies / channels admin. Multi-session.
+3. `elon-campaign` admin (~711) or `channels` admin (~666). Chunky single-sessions.
+4. Phase 8 greenlight (user decision).
+
+---
 
 ### 2026-04-21 (session 82) — `/api/admin/media/save`
 
