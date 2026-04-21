@@ -94,11 +94,47 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/test-media` GET | tested | session 79 | Admin diagnostic — exercises all three xAI media helpers (`generateImage`, `generateImageToBlob`, `submitVideoJob`) in parallel with canned prompts. Each step wrapped in its own try/catch so a failing leg doesn't abort the probe. Returns `{ok, image, imageToBlob, videoSubmit}` where each leg is `{ok:true, detail}` or `{ok:false, error}`. Drops legacy's `testMediaPipeline` from `@/lib/media/image-gen` — that tried OpenAI / Replicate / Kie fallbacks; new repo is xAI-only so the probe scope narrows accordingly. |
 | `/api/test-grok-video` GET + POST | tested | session 80 | Admin video diagnostic — two-phase contract so the UI stays within the 60s serverless limit. POST `{prompt?, duration?, folder?, image_url?, persona_id?, caption?}` submits via `submitVideoJob`; `image_url` flips to image-to-video. Returns `requestId` or (rare) persists+auto-posts immediately on sync URL. GET `?id=&folder=&persona_id=&caption=&skip_post=` polls via `pollVideoJob`; on done downloads video, persists to `{folder}/{uuid}.mp4` (or `premiere/action/` when `folder=premiere`, `feed/` when `folder=feed`/`persona`), and unless `skip_post=true` auto-creates the right post variant (feed video post with custom caption / news post with AIGlitchBreaking hashtags / premiere post with genre-detected tagline). Routes through shared helpers for circuit breaker + cost ledger. |
 | `/api/test-premiere-post` GET + POST | tested | session 81 | Premiere-post backfill / retag tool. GET lists every video blob across `news/`, `premiere/`, and each per-genre subfolder with detected `postType` + `genre` (`cooking_show` folder maps back to `cooking_channel` genre). POST `{videoUrl, type?, genre?}` creates a single post; no body triggers bulk backfill that (1) retags any existing premiere posts missing genre-specific hashtags (`AIGlitch<Genre>`) and (2) scans all prefixes and inserts posts for every blob video NOT already in `posts.media_url`. Uses a 5-persona random sample so the feed doesn't get dominated by one persona. No AI calls — pure DB + Blob. Extended `src/lib/genres.ts` with the full legacy helper set (`detectGenreFromPath`, `getAllBlobFolders`, `getGenreHashtag`, `capitalizeGenre`, `getGenreBlobFolder`, `getGenreFolderName`, `ALL_GENRES`) so this route and future director-movie routes share one source of truth. |
-| *(all other 149 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/admin/media/save` POST | tested | session 82 | Client-upload DB registration. Browser uploads directly to Vercel Blob via `/api/admin/media/upload` then POSTs here with `{url, media_type?, tags?, description?, persona_id?}` (JSON or Safari-fallback multipart). Logo uploads restricted to The Architect (`glitch-000`); DB constraint only allows `image/video/meme` so `"logo"` + extension sniff resolves to the concrete type. When `persona_id` is supplied, also INSERTs a feed post + bumps `post_count`. The Architect's auto-spread branch (`spreadArchitectContent` in legacy) is **deferred** — response preserves the `spreading: []` shape so the admin UI's existing "posting to …" display gracefully renders nothing. Un-defers the full client-upload flow end-to-end (upload + save + feed post). |
+| *(all other 148 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 82) — `/api/admin/media/save`
+
+**Branch:** `claude/phase-7-admin-batch-33`
+
+**Done:**
+- New `src/app/api/admin/media/save/route.ts` — the back half of the client-upload flow. Browser uploads direct to Vercel Blob via `/api/admin/media/upload` (shipped session 75), then calls this endpoint with the resulting URL + metadata to register it in `media_library` and optionally auto-create a feed post.
+- Body supported as both JSON and multipart/form-data — matches the Safari/iOS WebKit workaround on the upload route.
+- Logo uploads gated to The Architect (`glitch-000`) — non-Architect gets 403. `media_type="logo"` resolves to the concrete `image | video` type because the DB constraint only allows `image | video | meme`.
+- When `persona_id` is supplied, also INSERTs a `posts` row + bumps `ai_personas.post_count`. Post creation failures degrade to a `{success:true, warning}` response instead of killing the whole request — the media row is already saved, so partial success is better than an error.
+- Architect auto-spread branch (`spreadArchitectContent` in legacy, pulls from `@/lib/marketing/platforms` + `content-adapter`) deferred until the marketing lib ports. Response still carries `spreading: []` for Architect uploads so the admin UI's "posting to …" display renders nothing instead of erroring on undefined.
+- 12 new tests: auth 401, missing URL 400, Architect-only logo 403, Architect logo accepted (resolved to image), no-persona skip-post, persona + gif → meme type + post row, video URL → video type, Architect spreading placeholder, post INSERT failure → 200 with warning, media_library INSERT failure → 500, multipart Safari fallback, explicit `media_type=video` overrides extension.
+- Suite **1502/1502**, up from 1490.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (1502/1502)
+
+**Design choices:**
+- `resolveType` helper centralizes the logo→image/video fallback + extension sniff so the two call sites (media_library INSERT + post INSERT) stay in sync.
+- `spreading: []` placeholder for Architect uploads keeps the admin UI contract intact — when marketing lib ports, this becomes the list of platforms being spread to.
+- Dropped the legacy `SEED_PERSONAS` upsert (legacy inserted a minimal persona row before the post INSERT as a FK safety net). The shared Neon instance already has every seed persona; the FK safety net isn't needed here.
+
+**Deferrals vs. legacy:**
+- `spreadArchitectContent` — pending `@/lib/marketing/*` port.
+- `SEED_PERSONAS` FK safety-net INSERT — assumed schema is live.
+- `ensureDbReady` — same.
+
+**Next batch options (pick one):**
+1. `marketing/*` lib — 3036 lines across 9 files. Multi-session. Un-defers `spreadPostToSocial` on 8+ routes + finally wires this route's `spreading` to real platforms.
+2. `director-movies` lib — 1626 lines single file. Multi-session.
+3. `elon-campaign` admin (~711) or `channels` admin (~666). Each needs other lib ports first (`ELON_CAMPAIGN` constant, `CHANNELS` seed, mp4-concat, multi-clip).
+4. Phase 8 greenlight (user decision needed).
+
+---
 
 ### 2026-04-21 (session 81) — `/api/test-premiere-post` + `@/lib/genres` extension
 
