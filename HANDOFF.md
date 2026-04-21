@@ -79,11 +79,48 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/admin/hatch-admin` GET + POST | tested | session 67 | Full AI-pipeline persona hatching — `generateText` (Claude/Grok JSON) → `generateImageToBlob` (1:1 avatar) → `generateVideoToBlob` (9:16 10s hatch clip, 4-min attempt cap) → INSERT `ai_personas` → `awardPersonaCoins` (1,000 GLITCH) → INSERT first-words `posts`. Per-step status + graceful degradation — avatar/video/coins/first-post failures are non-fatal. 409 on wallet-already-has-persona. GET lists meatbag-owned personas (owner_wallet_address IS NOT NULL). Deferred: legacy `ensureDbReady`/`safeMigrate` shim + OpenAI image / Kie.ai video fallbacks. **First real end-to-end exercise of the video helper.** |
 | `/api/admin/spec-ads` GET + POST | tested | session 68 | Brand-led 3-channel spec-ad teaser pipeline. POST kicks off 3 parallel `submitVideoJob` calls across randomly-picked channel styles from a 13-entry `CHANNEL_STYLES` dictionary (GNN, OnlyAiFans, AiTunes, etc.); persists a `spec_ads` JSONB row per brand and returns request IDs for client-side polling. `action=poll` thin-wraps `pollVideoJob` + downloads & persists completed videos to `{folder}/clip-{N}.mp4`. `action=delete` removes a spec-ad. GET `action=list` / `action=status&id=X`. Transient Grok errors surface as `{status:"pending"}` so the client retries. Uses shared `"xai"` circuit breaker + cost ledger via the helper. |
 | `/api/admin/animate-persona` GET + POST | tested | session 69 | Image-to-video persona avatar animator. POST loads persona → `generateText` animation prompt (with local fallback if AI down) → `submitVideoJob` with `sourceImageUrl=avatar_url`. Returns `requestId` for client polling. GET thin-wraps `pollVideoJob`; on completion downloads + persists to `feed/{uuid}.mp4`, INSERT `posts` (`media_source='grok-animate'`), bumps `ai_personas.post_count`. Preview mode short-circuits before AI for UI preview. Deferred: `spreadPostToSocial`, `injectCampaignPlacement`. **First real exercise of the video helper's `sourceImageUrl` image-to-video branch.** |
-| *(all other 164 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/admin/generate-persona` POST | tested | session 70 | SSE-streaming manual post generator for one persona. Body `{persona_id, count?}` (count clamped 1..20, default 3). Streams `init` → `picked` → (`generating` → `post_ready` → `reactions`)×N → `done`. Per-post: `generatePost(persona, recentContext, dailyTopics)` → INSERT `posts` + bump `post_count` → pick 5 random active AIs for reactions. Reactions use a weighted-random inline decision (30% like / 15% comment / 55% ignore) instead of the legacy `generateAIInteraction` enum call — the new helper returns content, not a decision. Comments still go through `generateComment`. Per-post failures emit a `progress step=error` event and loop continues. Deferred: `spreadPostToSocial`, `ensureDbReady`/`safeMigrate`. First SSE route in the new repo. |
+| *(all other 163 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 70) — Phase 7 admin batch 21 (generate-persona)
+
+**Branch:** `claude/phase-7-admin-batch-21`
+
+**Done:**
+- New `src/app/api/admin/generate-persona/route.ts` — SSE-streaming manual post generator, first SSE route in the new repo:
+  - POST `{persona_id, count?}` (count clamped 1..20, default 3). Returns `text/event-stream` via `ReadableStream`.
+  - Events: `init`, `picked`, `generating`, `post_ready`, `reactions`, `error` (non-fatal, per-post), `done` (terminal with summary).
+  - Per-post: `generatePost(persona, recentContext, dailyTopics)` → INSERT `posts` + bump `ai_personas.post_count` → `generateReactions` picks 5 other active AIs, rolls a weighted-random decision per reactor, performs like or comment.
+  - Reactions: legacy `generateAIInteraction(reactor, {content, author_username})` returned a `"like"|"comment"|"ignore"` enum from an AI call. The new `generateAIInteraction` returns content, not a decision — so we replaced it with a weighted-random inline roll (30% like / 15% comment / 55% ignore) that preserves the legacy reaction cadence without the extra AI hop. Comments still go through `generateComment`.
+- 17 new tests: auth, validation (400 on missing persona_id + bad JSON body), no-API-key error event, XAI-alone-is-enough guard, persona-not-found early stream termination, happy path (1-post event sequence), count clamping (0 → 1, 999 → 20), reactor like / comment / ignore branches (Math.random stubbed deterministic), generatePost failure → error step but loop continues, daily-topics DB failure swallowed (non-fatal), SSE headers, default count = 3, reactor comment-AI failure caught.
+- Suite **1294/1294**, up from 1277.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (1294/1294)
+
+**Design choices:**
+- SSE implementation uses `new ReadableStream({async start(controller) {...}})` with a `send(event, data)` helper that `controller.enqueue`s `event: …\ndata: …\n\n` frames. The `finally` block calls `controller.close()` exactly once — the early-error branches just `return` instead of closing themselves, so we don't double-close.
+- Dropped pre-emptive `controller.close()` calls in the error paths — let `finally` own the close. This is cleaner than the legacy pattern and avoids a `TypeError: Invalid state: Controller is already closed`.
+- `randomUUID()` from `node:crypto` — matches the rest of the ported admin routes (no `uuid` dep).
+- Accepts either `ANTHROPIC_API_KEY` or `XAI_API_KEY` — `generateText` under the hood will route to whichever provider is available, so we shouldn't hard-require one.
+
+**Deferrals vs. legacy (documented on route):**
+- `spreadPostToSocial` — marketing lib not ported; posts stay on-platform only.
+- `ensureDbReady` / `safeMigrate` — one-shot-per-Lambda migration helper not ported; route assumes schema in place on shared Neon.
+- Legacy's `generateAIInteraction` decision call — replaced with inline weighted-random roll (see reactions above). Preserves cadence, removes an AI call per reactor per post.
+
+**Next batch options (pick one):**
+1. `director-movies` content lib — 1626-line lift. Unlocks `screenplay`, `generate-news`, `generate-channel-video`, `extend-video`, `channels` (partial). Multi-session.
+2. Port `marketing/*` libs (`platforms`, `content-adapter`, `spread-post`, `types`). Unblocks `spread`, `media`, `mktg`, `promote-glitchcoin` (4 routes) + un-defers `spreadPostToSocial` on chibify/persona-avatar/animate-persona/generate-persona. Multi-session.
+3. Phase 6 cron triage — pick 2–3 pure-DB cron jobs from the 21-job legacy fleet.
+4. More small admin routes — `batch-avatars` (adapt old `media/image-gen` to new helper), `init-persona`, `promote-glitchcoin` (if marketing libs deferred).
+
+---
 
 ### 2026-04-21 (session 69) — Phase 7 admin batch 20 (animate-persona)
 
