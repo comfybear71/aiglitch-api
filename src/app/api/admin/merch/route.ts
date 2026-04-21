@@ -9,11 +9,10 @@
  *            • `capture` — client-extracted video frame as a data URL;
  *              parses contentType+base64, uploads to
  *              `merch/captures/{id}.{ext}`, INSERTs with source='capture'.
- *            • `generate` — **Phase 5 AI-engine action.** Legacy calls
- *              xAI `grok-imagine-image`; image generation is not yet
- *              ported into `@/lib/ai/`, so this returns 501 until a
- *              shared image-gen helper lands. Preserves the 3 other
- *              actions in the meantime.
+ *            • `generate` — calls `generateImageToBlob()` (xAI
+ *              `grok-imagine-image`), then INSERTs with source='generate'.
+ *              Shared image-gen helper handles the circuit breaker +
+ *              cost ledger.
  *            • `update` — partial metadata edit (label / category).
  *            • `delete` — deletes Blob + DB row (Blob delete is
  *              best-effort; DB delete always runs).
@@ -27,6 +26,7 @@ import { type NextRequest, NextResponse } from "next/server";
 import { put, del } from "@vercel/blob";
 import { getDb } from "@/lib/db";
 import { isAdminAuthenticated } from "@/lib/admin-auth";
+import { generateImageToBlob } from "@/lib/ai/image";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -105,6 +105,7 @@ export async function POST(request: NextRequest) {
     source_video_url?: string;
     prompt?: string;
     id?: string;
+    aspect_ratio?: "1:1" | "9:16" | "16:9";
   };
 
   const { action } = body;
@@ -149,19 +150,35 @@ export async function POST(request: NextRequest) {
   }
 
   if (action === "generate") {
-    // Legacy calls xAI grok-imagine-image. `@/lib/ai/` currently exposes
-    // text-only helpers (xaiComplete / claudeComplete / generateText) —
-    // no shared image-gen client yet. Defer until a helper lands so all
-    // image-generating admin routes can share one circuit breaker +
-    // cost-ledger path.
-    return NextResponse.json(
-      {
-        error: "Not implemented in aiglitch-api yet",
-        reason:
-          "Image generation requires a shared xAI image-gen helper under @/lib/ai/ (circuit breaker + cost ledger parity). The other merch actions (capture/update/delete/list) are fully ported; the generate action unblocks when the image-gen helper lands.",
-      },
-      { status: 501 },
-    );
+    const { prompt, label, category, aspect_ratio } = body;
+    if (!prompt) {
+      return NextResponse.json({ error: "prompt required" }, { status: 400 });
+    }
+
+    try {
+      const id = randomUUID();
+      const { blobUrl } = await generateImageToBlob({
+        prompt,
+        taskType: "image_generation",
+        blobPath: `merch/designs/${id}.png`,
+        aspectRatio: aspect_ratio,
+      });
+
+      await sql`
+        INSERT INTO merch_library (
+          id, source, image_url, label, category,
+          source_post_id, source_video_url, prompt_used
+        )
+        VALUES (
+          ${id}, 'generate', ${blobUrl}, ${label ?? null},
+          ${category ?? "design"}, NULL, NULL, ${prompt}
+        )
+      `;
+
+      return NextResponse.json({ success: true, id, image_url: blobUrl });
+    } catch (err) {
+      return NextResponse.json({ error: String(err) }, { status: 500 });
+    }
   }
 
   if (action === "update") {

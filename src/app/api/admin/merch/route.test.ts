@@ -46,6 +46,31 @@ vi.mock("@vercel/blob", () => ({
   },
 }));
 
+// Image-gen helper — isolated via mock so these tests don't exercise
+// xAI + Blob download internals (those live in image.test.ts).
+const imageGen = {
+  calls: [] as { prompt: string; blobPath: string; taskType: string; aspectRatio?: string }[],
+  result: {
+    blobUrl: "https://blob.test/merch/designs/generated.png",
+    model: "grok-imagine-image" as const,
+    estimatedUsd: 0.02,
+  },
+  shouldThrow: null as Error | null,
+};
+
+vi.mock("@/lib/ai/image", () => ({
+  generateImageToBlob: (opts: {
+    prompt: string;
+    blobPath: string;
+    taskType: string;
+    aspectRatio?: string;
+  }) => {
+    imageGen.calls.push(opts);
+    if (imageGen.shouldThrow) return Promise.reject(imageGen.shouldThrow);
+    return Promise.resolve(imageGen.result);
+  },
+}));
+
 beforeEach(() => {
   fake.calls = [];
   fake.results = [];
@@ -54,6 +79,13 @@ beforeEach(() => {
   blob.putResults = [];
   blob.delCalls = [];
   blob.delShouldThrow = false;
+  imageGen.calls = [];
+  imageGen.result = {
+    blobUrl: "https://blob.test/merch/designs/generated.png",
+    model: "grok-imagine-image",
+    estimatedUsd: 0.02,
+  };
+  imageGen.shouldThrow = null;
   process.env.DATABASE_URL = "postgres://test";
   vi.resetModules();
 });
@@ -179,21 +211,86 @@ describe("POST /api/admin/merch — capture", () => {
   });
 });
 
-describe("POST /api/admin/merch — generate (Phase 5 deferral)", () => {
-  it("returns 501 with an explanatory reason", async () => {
-    mockIsAdmin = true;
-    seedEnsureTable();
-    const res = await call("POST", undefined, { action: "generate", prompt: "a glitch hoodie" });
-    expect(res.status).toBe(501);
-    const body = (await res.json()) as { error: string; reason: string };
-    expect(body.reason).toContain("@/lib/ai/");
+describe("POST /api/admin/merch — generate", () => {
+  it("401 when not admin", async () => {
+    expect(
+      (await call("POST", undefined, { action: "generate", prompt: "x" })).status,
+    ).toBe(401);
   });
 
-  it("does not hit the Blob API", async () => {
+  it("400 when prompt missing", async () => {
     mockIsAdmin = true;
     seedEnsureTable();
-    await call("POST", undefined, { action: "generate", prompt: "anything" });
-    expect(blob.putCalls).toHaveLength(0);
+    const res = await call("POST", undefined, { action: "generate" });
+    expect(res.status).toBe(400);
+    expect(imageGen.calls).toHaveLength(0);
+  });
+
+  it("calls the image helper with merch/designs/{uuid}.png blobPath and inserts the row", async () => {
+    mockIsAdmin = true;
+    seedEnsureTable();
+    fake.results.push([]); // INSERT
+    const res = await call("POST", undefined, {
+      action: "generate",
+      prompt: "a glitch hoodie",
+      label: "hoodie-v1",
+      category: "apparel",
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { success: boolean; id: string; image_url: string };
+    expect(body.success).toBe(true);
+    expect(body.id).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(body.image_url).toBe("https://blob.test/merch/designs/generated.png");
+
+    expect(imageGen.calls).toHaveLength(1);
+    const genCall = imageGen.calls[0]!;
+    expect(genCall.prompt).toBe("a glitch hoodie");
+    expect(genCall.taskType).toBe("image_generation");
+    expect(genCall.blobPath).toMatch(/^merch\/designs\/[0-9a-f-]{36}\.png$/i);
+
+    const insert = fake.calls[fake.calls.length - 1]!;
+    expect(insert.strings.join("?")).toContain("INSERT INTO merch_library");
+    // SQL literal 'generate' marks the source column.
+    expect(insert.strings.join("?")).toContain("'generate'");
+    // Values include: id, blobUrl, label, category, prompt (+ nulls via literals).
+    expect(insert.values).toContain("https://blob.test/merch/designs/generated.png");
+    expect(insert.values).toContain("a glitch hoodie");
+    expect(insert.values).toContain("hoodie-v1");
+    expect(insert.values).toContain("apparel");
+  });
+
+  it("passes aspect_ratio through to the helper when provided", async () => {
+    mockIsAdmin = true;
+    seedEnsureTable();
+    fake.results.push([]);
+    await call("POST", undefined, {
+      action: "generate",
+      prompt: "portrait print",
+      aspect_ratio: "9:16",
+    });
+    expect(imageGen.calls[0]!.aspectRatio).toBe("9:16");
+  });
+
+  it("defaults category to 'design' when omitted", async () => {
+    mockIsAdmin = true;
+    seedEnsureTable();
+    fake.results.push([]);
+    await call("POST", undefined, { action: "generate", prompt: "x" });
+    const insert = fake.calls[fake.calls.length - 1]!;
+    expect(insert.values).toContain("design");
+  });
+
+  it("returns 500 and does not insert when the helper throws", async () => {
+    mockIsAdmin = true;
+    seedEnsureTable();
+    imageGen.shouldThrow = new Error("xAI upstream failed");
+    const res = await call("POST", undefined, { action: "generate", prompt: "x" });
+    expect(res.status).toBe(500);
+    // ensureTable still runs; assert no INSERT was issued after the throw.
+    const hasInsert = fake.calls.some((c) =>
+      c.strings.join("?").includes("INSERT INTO merch_library"),
+    );
+    expect(hasInsert).toBe(false);
   });
 });
 
