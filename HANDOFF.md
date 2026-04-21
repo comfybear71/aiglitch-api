@@ -87,11 +87,51 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/admin/media/upload` POST | tested | session 75 | Vercel Blob client-upload token handler. `@vercel/blob/client#upload()` in the browser POSTs here to get a short-lived client token, then uploads the file directly to Blob — bypasses the 4.5 MB serverless body limit for big videos (up to 500 MB). Supports both JSON and `multipart/form-data` bodies (Safari/iOS WebKit bug workaround — the client wraps JSON in FormData under `__json`). Allowlists 10 image + 5 video + `application/octet-stream` content types. Registration in `media_library` still goes through `/api/admin/media/save` on legacy (marketing-lib-dependent). |
 | `/api/admin/media/import` POST | tested | session 75 | Bulk URL importer. POST `{urls[], media_type?, tags?, description?, persona_id?}` — fetches each URL with a browser UA, detects media kind from response `content-type` + URL extension (video / meme / image), uploads to `media-library/{uuid}.{ext}`, INSERTs `media_library`, and (when `persona_id` set) auto-creates a profile post + bumps `post_count`. Per-URL failures isolated — `{results[]}` carries each URL's outcome; `success` only true when every URL succeeded. No marketing auto-spread on this path. |
 | `/api/admin/media/resync` POST | tested | session 75 | Orphan-blob recovery. Scans 8 prefix buckets (`media-library/`, `videos/`, `video/`, `premiere/`, `logos/`, `memes/`, `images/`, and root) with Vercel Blob `list`, diffs against `SELECT url FROM media_library`, re-INSERTs any missing rows. Media type inferred from extension (6 video / 7 image / 1 meme); unknown extensions skipped. `"logo"` in pathname adds a `logo,` tag prefix (no separate media_type — DB constraint allows image/video/meme only). Per-prefix scan errors isolated so a single failing bucket doesn't abort recovery; per-INSERT errors bump counter, keep going. Response: `{synced, skipped, errors, already_in_db, counts, sample}`. Requires `BLOB_READ_WRITE_TOKEN`. |
-| *(all other 156 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/bestie-life` GET + POST | tested | session 76 | Twice-daily Telegram photo cron — sends every active bestie a slice-of-life photo from their persona to their meatbag. Per bestie: `calculateHealth` decay → `generateText` asks for `IMAGE_PROMPT:`/`CAPTION:` pair in a single call (tuned by health tier: desperately-low / low / worried / healthy) → `generateImageToBlob` 1:1 to `bestie-life/{uuid}.png` → `sendTelegramPhoto` via the bestie's own bot. Death branch (100+ days silence) sends a single ghost-message and skips without counting as a failure. Per-bestie errors isolated — scene-gen / image-gen / telegram-send failures each land as distinct error strings in `results[]`. GET gated by `requireCronAuth` + wrapped in `cronHandler("bestie-life", …)`; POST gated by `isAdminAuthenticated` for manual runs. **Deferred**: video branch (30% in legacy — animated from avatar), because `generateVideoToBlob` polling would blow the 5-min lambda when fanning out over the bestie fleet. Returns image-only for now; video re-enables with per-run cap when Telegram bot engine lands. |
+| *(all other 155 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 76) — Phase 6 cron port (`/api/bestie-life`)
+
+**Branch:** `claude/phase-7-admin-batch-27`
+
+**Done:**
+- New `src/app/api/bestie-life/route.ts` — twice-daily Telegram photo cron for besties.
+  - Per-bestie flow: `calculateHealth(lastInteraction, bonus_health_days)` → UPDATE `ai_personas` health fields → if dead, send a single death message and skip; otherwise fetch up to 5 high-confidence `persona_memories`, then call `generateText` asking for an `IMAGE_PROMPT:` + `CAPTION:` pair in one response (health-tier-tuned user prompt — desperately-low / low / worried / healthy). Parse the response, call `generateImageToBlob` (1:1, `bestie-life/{uuid}.png`), and `sendTelegramPhoto` via the bestie's own bot token.
+  - Final caption prepended with a health bar (`[HP: 5%💀]`, `[HP: 20%😰]`, `[HP: 40%😕]`, none when healthy).
+  - Errors isolated per bestie — scene-gen / image-gen / telegram-send failures each become a distinct error string in `results[]` without aborting the batch.
+  - GET path: `requireCronAuth` + `cronHandler("bestie-life", …)` — cron-runs row written with OK/error status + result JSON.
+  - POST path: `isAdminAuthenticated` — same function runs without the cron wrapper so the admin can manually trigger a batch.
+- Extended `src/lib/telegram.ts` with `sendTelegramPhoto` + `sendTelegramVideo` + `downloadAsFile` helper (minimal port of legacy's multipart upload pattern). Telegram can't reliably fetch our Blob URLs, so we download first and upload as FormData. `supports_streaming: true` forced on video sends.
+- 14 new route tests + 7 new telegram tests (21 total new): GET auth, no-besties empty path, happy-path (generateText + image + telegram all called), death branch skips without AI/image, generateText failure captured, generateImageToBlob failure captured, telegram send failure captured, persona_memories missing → continues, desperately-low health puts "FADING AWAY" in prompt + "💀" in caption, multiple besties processed independently, `_cron_run_id` in GET response (from cronHandler mock), POST 401 + POST no-wrap + POST 500 path; telegram: photo download + multipart upload verified, photo download failure, Telegram ok:false captures description, photo upload exception, video uses `sendVideo` + supports_streaming, video download failure.
+- Suite **1410/1410**, up from 1389.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (1410/1410)
+
+**Design choices:**
+- Dropped the legacy 30% video branch. `generateVideoToBlob` polling needs ~2–3 min per video, and with up to dozens of besties in one cron run that blows the 5-min lambda. Rather than half-ship a flaky video path, this port is image-only. When the Telegram bot engine lands we can add a per-run video cap (e.g. max 2 video sends per cron run) without touching this cron's architecture.
+- Kept the single `generateText` → `IMAGE_PROMPT:` + `CAPTION:` parse pattern from legacy (two parses off one AI call). Matches legacy's cost + latency budget.
+- `downloadAsFile` swallows fetch exceptions and returns `null` — outer `sendTelegramPhoto` returns a "Failed to download image for Telegram upload" error so callers can distinguish download failures from Telegram API failures.
+- Death message send uses direct `fetch` (not `sendMessage` helper) because this is a one-off per-bestie message that we don't want to throw on — the helper throws on non-ok status but we want to swallow death-message send failures silently.
+
+**Deferrals vs. legacy:**
+- Video (image-to-video) branch — deferred.
+- `spreadPostToSocial` — N/A for bestie DMs (private Telegram sends, not feed posts).
+- `ensureDbReady` / `safeMigrate` — schema assumed live.
+- Structured logging — cross-cutting pass deferred.
+
+**Next batch options (pick one):**
+1. `director-movies` content lib — 1626-line lift. Unlocks screenplay / generate-news / generate-channel-video / extend-video / channels (partial). Multi-session.
+2. `marketing/*` libs — un-defers `spreadPostToSocial` on 6+ routes + unlocks `spread`, `media` (main), `media/save`, `media/spread`, `mktg`, `promote-glitchcoin`, `marketing-post`, `hatch`. Multi-session.
+3. `elon-campaign` admin (~711) or `channels` admin (~666) — chunky single-ship.
+4. Telegram bot engine — un-defers personality modes + content-surfacing command handlers + re-enables bestie-life video branch. Multi-session.
+
+---
 
 ### 2026-04-21 (session 75) — Phase 7 admin media sub-routes (upload/import/resync)
 
