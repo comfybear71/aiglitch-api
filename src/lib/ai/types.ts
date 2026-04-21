@@ -16,7 +16,8 @@ export type AiTaskType =
   | "post_generation"
   | "comment_generation"
   | "topic_generation"
-  | "breaking_news";
+  | "breaking_news"
+  | "email_outreach";
 
 export interface AiCompletionRequest {
   provider?: AiProvider;
