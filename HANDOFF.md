@@ -74,6 +74,30 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 
 ## Session log
 
+### 2026-04-21 (session 61) — Phase 7 admin batch 14
+
+**Branch:** `claude/phase-7-admin-batch-14`
+
+**Done:**
+- New `src/app/api/admin/blob-upload/route.ts` — Vercel Blob ingestion + listing. GET default lists video blobs across `VALID_FOLDERS` (news/, premiere/<genre>/, campaigns/); `?action=share_grokified` scans `sponsors/grokified/` and INSERTs new `posts` rows (persona `glitch-000`, `post_type='product_shill'`) with post_count bump; `?action=organize_sponsors` ports the one-shot legacy sponsor-image migration helper verbatim (source URLs still point at the legacy Blob store — no-op on fresh env, kept for parity). POST multipart FormData upload to `{folder}/{cleanName}` (no random suffix — genre detection relies on path). PUT copy-from-URL (single or `copies[]`), download → reupload with source Content-Type.
+- New `src/app/api/admin/merch/route.ts` — Merch Studio CRUD on `merch_library` (lazy `ensureTable()`). GET `?action=list` (default, 500 newest) / `?action=videos` (clamped `?limit`, joined with `ai_personas`). POST dispatches `capture` (data-URL frame → Blob `merch/captures/{id}.{ext}` + INSERT), `update` (partial label/category), `delete` (best-effort Blob del + DB delete — legacy parity). **`generate` stubbed to 501** — legacy calls xAI `grok-imagine-image`; image generation is not yet in `@/lib/ai/` (text-only today). The other 4 actions are fully ported; `generate` unblocks when a shared image-gen helper lands (mirrors the `users?action=recover_orphans` deferral pattern).
+- New dep `@vercel/blob` — first use in this repo; unblocks every future blob-touching admin route (nft-marketplace, persona-avatar, generate-og-images, etc.).
+- New helper in tests: multipart FormData body must be serialised and its Content-Type forwarded explicitly to `NextRequest` (the wrapper otherwise drops undici's auto-set boundary). Pattern captured in `blob-upload/route.test.ts` → reusable for any future multipart admin route.
+- 34 new tests (17 blob-upload + 17 merch).
+- Suite **1128/1128**, up from 1094.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (1128/1128)
+
+**Scoping notes (from this session):**
+- Reviewed every unported admin route. **Zero remaining pure-DB admin routes** — they all hit one of three gates: (a) needs `@vercel/blob` (this batch addresses the first two); (b) needs image/video generation helpers not yet in `@/lib/ai/`; (c) touches trading/Solana (§Trading gate). Next admin batch either waits for image-gen helpers or is scoped tightly to non-AI, non-trading blob routes (nft-marketplace GET is next candidate — blob-only product images, guarded DELETE).
+- `set-bot-token` — does not exist as a standalone legacy route (checked during scoping). Bot tokens are managed inside `persona_telegram_bots` via other admin UI.
+- `hatch-admin` — deferred. Multi-step AI pipeline (xAI Aurora image + Grok video + Claude JSON generation + `awardPersonaCoins`); image/video helpers not yet available.
+- `token-metadata` — trading-locked (TREASURY_PRIVATE_KEY + METADATA_AUTHORITY_*). Requires explicit per-endpoint written confirmation per SAFETY-RULES §Trading.
+
+---
+
 ### 2026-04-20 (session 47) — Phase 6 Telegram crons
 
 **Branch:** `claude/phase6-telegram-crons`
