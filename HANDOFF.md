@@ -75,11 +75,52 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/admin/chibify` GET + POST | tested | session 64 | Batch chibify. GET = prompt preview. POST loops over `persona_ids` with per-persona error isolation; each successful chibi → Blob + INSERT `posts` (`media_source='grok-aurora'`) + `post_count` bump. Deferred: `injectCampaignPlacement`, `logImpressions`, `spreadPostToSocial`. |
 | `/api/admin/grokify-sponsor` POST | tested | session 65 | Sponsor product placement via xAI `/images/edits`. Builds source-image set from `grokifyMode` (`all` / `logo_only` / `images_only`; outro forces logo). Multi-image → single-image retry on helper failure. Text-to-image fallback when no source images. Persist under `sponsors/grokified/{brand}-{channel}-{scene\|outro}-{id}.png`. First real exercise of the `sourceImageUrls` branch of the image helper. |
 | `/api/admin/generate-og-images` GET + POST | tested | session 65 | 21 branded OG banners for channel pages. GET = iPad-friendly HTML dashboard (per-image + generate-all buttons). POST = batch or `{ file }` single. Pro model 16:9, deterministic path `og/{file}.png` keeps `<meta>` URLs stable. |
+| Phase 5 video-gen helper (`src/lib/ai/video.ts`) | tested | session 66 | `submitVideoJob` + `pollVideoJob` + `generateVideo` + `generateVideoToBlob`. xAI `grok-imagine-video` via `/videos/generations` → `/videos/{id}` polling pattern. $0.05/sec flat. 10s default poll interval / 90 attempt ceiling (15 min). Shared `"xai"` circuit breaker + cost ledger (`task_type=video_generation`). Supports text-to-video + image-to-video (via `sourceImageUrl`). Handles sync/async responses, moderation-blocked videos, expired jobs. Unlocks `generate-channel-video`, `extend-video`, `hatch-admin`. |
 | *(all other 167 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 66) — Phase 5 video-gen helper
+
+**Branch:** `claude/phase-5-video-gen-helper`
+
+**Done:**
+- New `src/lib/ai/video.ts` — xAI video-generation helper mirroring the image-helper pattern, but built around xAI's async/polling job model:
+  - `submitVideoJob({ prompt, taskType, duration?, aspectRatio?, resolution?, sourceImageUrl? })` → `{ requestId, syncVideoUrl?, model, estimatedUsd, durationSec }`. POSTs `/videos/generations`. Handles the occasional synchronous response (video URL on submit) alongside the normal async `request_id` flow.
+  - `pollVideoJob(requestId)` → `{ requestId, status, videoUrl?, respectModeration? }`. Single GET `/videos/{id}`. Status enum: `pending` / `done` / `failed` / `expired`.
+  - `generateVideo(opts & { pollIntervalMs?, maxAttempts? })` → `{ videoUrl, requestId, model, estimatedUsd, durationSec }`. Submit + poll-to-completion. Defaults: 10s interval × 90 attempts = 15 min ceiling (matches legacy). Throws on `failed` / `expired` / moderation-block / missing URL / max-attempts timeout.
+  - `generateVideoToBlob(opts & { blobPath, contentType? })` → `{ blobUrl, requestId, model, estimatedUsd, durationSec, sizeBytes }`. One-shot for routes that don't need to expose a `requestId` to the client.
+- Pricing: `$0.05 / second` flat (`VIDEO_COST_PER_SECOND_USD`). Booked at submit time (not completion) — matches legacy. 10s default duration → $0.50 per clip.
+- Circuit breaker + cost ledger: shared `"xai"` provider key with text + image. Cost ledger `task_type=video_generation` (new `AiTaskType` variant). Fire-and-forget logging, `inputTokens=0/outputTokens=0`.
+- Image-to-video: `sourceImageUrl` maps to xAI's `image_url` request field (used by `extend-video`'s last-frame-to-clip flow and `hatch-admin`'s avatar-to-hatch-video flow).
+- Routes that want to return a `requestId` to the client (`generate-channel-video`, `extend-video` when async) call `submitVideoJob` + `pollVideoJob` directly; one-shot flows (`hatch-admin`) use `generateVideoToBlob`.
+- 20 new tests (submit × 6, poll × 3, generateVideo × 7, generateVideoToBlob × 3, helper paths × 1). Uses queued fetch mock + stubbed `@vercel/blob`; real circuit-breaker + cost-ledger modules (fail-open with no Redis/DB).
+- Suite **1215/1215**, up from 1195.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (1215/1215)
+
+**Design decisions (locked):**
+- **One breaker for xAI**: text + image + video share the `"xai"` key. A video failure can trip the circuit for text generation. Accepted trade-off; simpler than per-modality breakers.
+- **Submit-time cost booking**: xAI bills even if the video later fails / expires (the compute already ran). Charge at submit, not on completion. Matches legacy accounting.
+- **No Kie.ai fallback**: legacy routes fall back to Kie.ai on 401/403/429 from xAI. aiglitch-api is xAI-only by policy — if Grok is down, the route surfaces the failure. Documented on the helper + deferred for the consuming routes.
+- **Polling is caller-driven, not fire-and-forget**: the helper blocks until done / failed / expired. Routes that can't hold a 15-minute connection (Vercel lambda timeout is 300s max) must use `submitVideoJob` + their own polling UI. Documented in the header.
+
+**Unlock status:**
+- 🔓 `generate-channel-video` — now portable. Uses `submitVideoJob` + poll from client UI via a separate GET endpoint (existing pattern).
+- 🔓 `extend-video` — now portable. Frame-capture via existing image helper; scene-submission via this helper.
+- 🔓 `hatch-admin` — now portable. Full pipeline: Claude (persona JSON) + `generateImageToBlob` (avatar) + `generateVideoToBlob` (hatching video).
+
+**Next batch options (pick one):**
+1. Port `hatch-admin` solo — one route, three AI engine legs exercised (Claude text + Grok image + Grok video). Tight scope, real end-to-end check on the video helper.
+2. Port `generate-channel-video` + `extend-video` pair — both exercise `submitVideoJob` + polling. Larger batch but related.
+3. Port `director-movies` content lib — still the biggest non-video unblock (1626 lines, unlocks `screenplay` + `generate-news`).
+4. Phase 6 cron triage — pick 2–3 pure-DB cron jobs from the 21-job legacy fleet.
+
+---
 
 ### 2026-04-21 (session 65) — Phase 7 admin batch 17 (grokify-sponsor + generate-og-images)
 
