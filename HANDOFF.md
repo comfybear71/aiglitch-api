@@ -100,11 +100,48 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/content/media` GET + DELETE | tested | session 83 | Paginated `uploaded_media` list + stats (total + total bytes). `?folder=` optional filter. DELETE removes the DB row + best-efforts blob delete via `@vercel/blob#del`. Blob delete failures swallowed — the file might already be gone. |
 | `/api/content/upload` POST | tested | session 83 | Direct server-side upload (for files under 4.5 MB — bigger videos go through the `/api/admin/media/upload` + `/api/admin/media/save` client flow instead). multipart/form-data with `file` + optional `folder` (default `uploads`). Persists to `{folder}/{filename}` with `addRandomSuffix: true` + INSERTs `uploaded_media`. |
 | `/api/content/generate` POST | tested | session 83 | Content Studio async generator. `{type:"image"\|"video", prompt}`. INSERT `content_jobs` as `processing`, invoke `generateImageToBlob` or `generateVideoToBlob` (video capped at 24 attempts × 10s so it fits in the 5-min lambda), UPDATE to `completed` + `result_url` or `failed` + `error`. Client polls `/api/content/status`. Drops legacy's "prefix the prompt with `[VIDEO]`" hack which never actually produced videos — routes go through real xAI video submit + poll now. |
-| *(all other 143 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/admin/blob-upload/upload` POST | tested | session 84 | Client-upload token handler specialized for large premiere/news videos. Unlike `/api/admin/media/upload` (10+ content types + random suffix), this one is locked to 4 video types + `addRandomSuffix:false` so the clean folder path survives for `detectGenreFromPath` to infer genre from `/premiere/<genre>/`. 500 MB cap. JSON + Safari `__json` multipart fallback. |
+| `/api/admin/personas/set-bot-token` POST | tested | session 84 | Single-persona Telegram bot assignment. Mode A (no `bot_token` or empty string): flips `persona_telegram_bots.is_active` to FALSE. Mode B: validates token via Telegram `getMe` (bails BEFORE any DB write on invalid), registers webhook pointed at `{NEXT_PUBLIC_APP_URL}/api/telegram/persona-chat/{id}` with `message + message_reaction` updates (non-fatal if fails), DELETE + INSERT `persona_telegram_bots` row, then `registerTelegramCommands` for the slash-command menu. `bot_token` never in responses. Auto-creates the `persona_telegram_bots` table on first call. Companion to `/api/admin/telegram/re-register-bots` (bulk refresh). |
+| *(all other 141 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 84) — admin blob-upload + persona bot token
+
+**Branch:** `claude/phase-7-admin-batch-35`
+
+**Done:** Two small admin utilities in one batch.
+- `src/app/api/admin/blob-upload/upload/route.ts` — client-upload token handler specialized for premiere/news videos. Video-only allowlist (4 content types) + `addRandomSuffix:false` so the clean folder path (`premiere/{genre}/`) stays intact for `detectGenreFromPath`. 500 MB cap. Same JSON + Safari `__json` multipart fallback as the other client-upload routes.
+- `src/app/api/admin/personas/set-bot-token/route.ts` — assign or revoke a Telegram bot token for a single persona. Two modes via the body's `bot_token`:
+  - null / empty → `UPDATE persona_telegram_bots SET is_active = FALSE` (keeps row + webhook registered; re-enable is one UPDATE).
+  - present → `getMe` validation first (bail before DB writes), then `setWebhook` (non-fatal on failure), then DELETE + INSERT the row, then `registerTelegramCommands` for the slash menu (also non-fatal).
+  - Auto-creates `persona_telegram_bots` table on first call.
+  - `bot_token` never returned in the response.
+- 16 new tests across the pair: upload token opts lock to 4 video types + 500 MB + no random suffix; set-bot-token covers deactivate path, empty-string deactivate, invalid-getMe bail, network-exception 502, happy path with webhook + commands + DELETE-before-INSERT ordering verified, non-fatal webhook failure, non-fatal commands failure, getMe-missing-username 400.
+- Suite **1549/1549**, up from 1533.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (1549/1549)
+
+**Design choices:**
+- `blob-upload/upload` kept separate from `/api/admin/media/upload` even though the shapes look similar — the video-only allowlist + no-random-suffix is a genuine behaviour difference the admin UI relies on. Consolidating would regress genre detection.
+- `set-bot-token` does Telegram validation BEFORE any DB writes. Legacy did the same — matters because a mistyped token would otherwise persist garbage rows that the bulk re-register route would trip over.
+- `DELETE + INSERT` pattern matches legacy verbatim — a persona can only have one active bot row. UPSERT-on-conflict would preserve old columns we don't want (stale `telegram_chat_id` from the last meatbag).
+
+**Deferrals vs. legacy:**
+- None. Both routes have all deps ported.
+
+**Next batch options (pick one):**
+1. `marketing/*` lib — un-defers 8+ routes. Multi-session.
+2. `director-movies` lib — multi-session.
+3. `sponsors/[id]/ads` admin route (~194, just `claude.generateJSON` + `buildSponsoredAdPrompt` already ported — generateJSON replacement is trivial via `generateText` + parse).
+4. `channels/flush` admin (~225, needs channels-admin context).
+5. `elon-campaign` admin (~711).
+
+---
 
 ### 2026-04-21 (session 83) — `/api/content/*` cluster (5 routes)
 
