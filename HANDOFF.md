@@ -77,11 +77,47 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/admin/generate-og-images` GET + POST | tested | session 65 | 21 branded OG banners for channel pages. GET = iPad-friendly HTML dashboard (per-image + generate-all buttons). POST = batch or `{ file }` single. Pro model 16:9, deterministic path `og/{file}.png` keeps `<meta>` URLs stable. |
 | Phase 5 video-gen helper (`src/lib/ai/video.ts`) | tested | session 66 | `submitVideoJob` + `pollVideoJob` + `generateVideo` + `generateVideoToBlob`. xAI `grok-imagine-video` via `/videos/generations` → `/videos/{id}` polling pattern. $0.05/sec flat. 10s default poll interval / 90 attempt ceiling (15 min). Shared `"xai"` circuit breaker + cost ledger (`task_type=video_generation`). Supports text-to-video + image-to-video (via `sourceImageUrl`). Handles sync/async responses, moderation-blocked videos, expired jobs. Unlocks `generate-channel-video`, `extend-video`, `hatch-admin`. |
 | `/api/admin/hatch-admin` GET + POST | tested | session 67 | Full AI-pipeline persona hatching — `generateText` (Claude/Grok JSON) → `generateImageToBlob` (1:1 avatar) → `generateVideoToBlob` (9:16 10s hatch clip, 4-min attempt cap) → INSERT `ai_personas` → `awardPersonaCoins` (1,000 GLITCH) → INSERT first-words `posts`. Per-step status + graceful degradation — avatar/video/coins/first-post failures are non-fatal. 409 on wallet-already-has-persona. GET lists meatbag-owned personas (owner_wallet_address IS NOT NULL). Deferred: legacy `ensureDbReady`/`safeMigrate` shim + OpenAI image / Kie.ai video fallbacks. **First real end-to-end exercise of the video helper.** |
-| *(all other 166 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/admin/spec-ads` GET + POST | tested | session 68 | Brand-led 3-channel spec-ad teaser pipeline. POST kicks off 3 parallel `submitVideoJob` calls across randomly-picked channel styles from a 13-entry `CHANNEL_STYLES` dictionary (GNN, OnlyAiFans, AiTunes, etc.); persists a `spec_ads` JSONB row per brand and returns request IDs for client-side polling. `action=poll` thin-wraps `pollVideoJob` + downloads & persists completed videos to `{folder}/clip-{N}.mp4`. `action=delete` removes a spec-ad. GET `action=list` / `action=status&id=X`. Transient Grok errors surface as `{status:"pending"}` so the client retries. Uses shared `"xai"` circuit breaker + cost ledger via the helper. |
+| *(all other 165 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 68) — Phase 7 admin batch 19 (spec-ads)
+
+**Branch:** `claude/phase-7-admin-batch-19`
+
+**Done:**
+- New `src/app/api/admin/spec-ads/route.ts` — brand-led 3-channel video teaser pipeline:
+  - POST (no action) — picks 3 random channels from a 13-entry `CHANNEL_STYLES` dict (GNN News, Only AI Fans, AiTunes, Paws & Pixels, etc.), submits one `submitVideoJob` per channel (10s, 9:16, 720p), with 1.5s spacing to avoid xAI rate limits. Persists `spec_ads` JSONB row with per-clip `{request_id, status}` entries. Returns `{id, brand_name, product_name, folder, clips, status}`.
+  - POST `action=poll` — thin wrapper around `pollVideoJob(requestId)`. On completion downloads + persists the clip to Vercel Blob under `{folder}/clip-{N}.mp4` and patches the `spec_ads.clips` JSONB array. Marks the row `done` when all 3 clips complete. Transient Grok errors → `{status:"pending"}` so the client keeps polling.
+  - POST `action=delete` — removes a spec-ad row.
+  - GET `action=list` / `action=status&id=X` — inspection endpoints.
+- Table is lazily created (`CREATE TABLE IF NOT EXISTS spec_ads`) on every call — legacy safety while standalone migration tooling isn't in place.
+- 25 new tests covering: auth (GET + POST 401s), list/status/unknown actions, validation (`brand_name` / `product_name` missing), `XAI_API_KEY` missing, happy path (3 submits + INSERT + UPDATE), single-clip submit failure isolated, delete happy + missing id, poll validation, poll transient error → pending, moderation block → failed, ready → download + blob + DB patch + all-done detection, ready without `spec_id` (no DB touch), failed/expired passthrough, still-pending passthrough.
+- Suite **1256/1256**, up from 1231.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (1256/1256)
+
+**Design choices:**
+- Used `submitVideoJob` / `pollVideoJob` instead of inline xAI fetches — the helper already owns the circuit-breaker + cost-ledger bookkeeping and moderation handling, so the route is pure orchestration.
+- `CREATE TABLE IF NOT EXISTS` kept inline: this is the legacy pattern for one-off admin tables that aren't in the main Drizzle schema. Will migrate to proper migration tooling in the Phase 10 cleanup.
+- `randomUUID()` from `node:crypto` (no `uuid` dep) — matches the rest of the ported admin routes.
+
+**Deferrals vs. legacy:**
+- `ensureDbReady` / `safeMigrate` — not ported; assumed schema present on shared Neon.
+- Legacy's `console.log` observability on poll — dropped (cross-cutting structured-logging pass deferred).
+
+**Next batch options (pick one):**
+1. `generate-channel-video` + `extend-video` pair — both need the `director-movies` content lib ported first (DIRECTORS, CHANNEL_VISUAL_STYLE, CHANNEL_BRANDING, `generateDirectorScreenplay`, `submitDirectorFilm`). Multi-session — lib port + routes.
+2. `director-movies` content lib solo — the biggest remaining unblock, 1626-line lift. Unlocks `screenplay`, `generate-news`, `generate-channel-video`, `extend-video`, `channels` (partial).
+3. Phase 6 cron triage — pick 2–3 pure-DB cron jobs from the 21-job legacy fleet.
+4. More small admin routes — `promote-glitchcoin`, `generate-persona`, `init-persona`, `batch-avatars` are still candidates (dependency-scout each).
+
+---
 
 ### 2026-04-21 (session 67) — Phase 7 admin batch 18 (hatch-admin)
 
