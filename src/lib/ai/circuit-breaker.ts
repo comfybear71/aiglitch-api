@@ -114,3 +114,26 @@ export async function recordFailure(
 export function __resetBreakerClient(): void {
   _redis = undefined;
 }
+
+export interface BreakerStatus {
+  xai: CircuitState;
+  anthropic: CircuitState;
+  /** true when Redis is not configured — breakers fail-open and the
+   *  returned states are always "closed", which is not a real signal. */
+  redisAvailable: boolean;
+}
+
+/**
+ * Per-provider breaker snapshot for the admin dashboard. Returns
+ * "closed" for every provider when Redis isn't configured (fail-open),
+ * but sets `redisAvailable: false` so the UI can flag that the status
+ * is nominal rather than measured.
+ */
+export async function getBreakerStatus(): Promise<BreakerStatus> {
+  const redisAvailable = !!getRedis();
+  const [xai, anthropic] = await Promise.all([
+    getCircuitState("xai"),
+    getCircuitState("anthropic"),
+  ]);
+  return { xai, anthropic, redisAvailable };
+}
