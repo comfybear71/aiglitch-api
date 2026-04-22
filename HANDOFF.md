@@ -104,11 +104,46 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/admin/personas/set-bot-token` POST | tested | session 84 | Single-persona Telegram bot assignment. Mode A (no `bot_token` or empty string): flips `persona_telegram_bots.is_active` to FALSE. Mode B: validates token via Telegram `getMe` (bails BEFORE any DB write on invalid), registers webhook pointed at `{NEXT_PUBLIC_APP_URL}/api/telegram/persona-chat/{id}` with `message + message_reaction` updates (non-fatal if fails), DELETE + INSERT `persona_telegram_bots` row, then `registerTelegramCommands` for the slash-command menu. `bot_token` never in responses. Auto-creates the `persona_telegram_bots` table on first call. Companion to `/api/admin/telegram/re-register-bots` (bulk refresh). |
 | `/api/admin/sponsors/[id]/ads` GET + POST + PUT | tested | session 85 | Per-sponsor ads CRUD + AI prompt generation. GET default lists `sponsored_ads`; `?action=placements` joins `ad_campaigns` (brand-name matched) → `ad_impressions` → `posts` + `channels` for the "where is my brand placed" view (top 100). POST creates a draft row using `SPONSOR_PACKAGES` defaults (duration / glitch_cost / cash_equivalent / follow_ups / platforms / frequency / campaign_days) + caller overrides. PUT handles three modes: `action:"delete"`, `action:"generate"` (calls `buildSponsoredAdPrompt` + `generateText` + defensive JSON-from-text parse → `{video_prompt, caption, x_caption}`, flips status to `pending_review`), or default COALESCE update of status/video_url/post_ids/performance. Publishing (`status="published"`) deducts `glitch_cost` from `sponsors.glitch_balance` + bumps `total_spent`. Replaces legacy's `claude.generateJSON` with a `generateText` + `match(/\{...\}/)` inline parser. |
 | `/api/admin/channels/generate-title` GET + POST | tested | session 86 | Channel title-card video generator. Two-phase submit/poll via `submitVideoJob` + `pollVideoJob` (5s / 9:16 / 720p). POST `{channel_id, channel_slug, title, style_prompt?, preview?}` — builds a cinematic title-card prompt that spells the title letter-by-letter and repeats the exact string multiple times to combat xAI's misspelling bias. `preview:true` returns the prompt without submitting. Happy path returns `{phase:"submitted", requestId}`. Sync xAI returns short-circuit through `persistTitleVideo`. GET `?id=&channel_id=&channel_slug=` polls the job; on done downloads video, persists to `channels/{slug}/title-{uuid}.mp4`, and UPDATEs `channels.title_video_url`. Deferred: `injectCampaignPlacement` (ad-campaigns lib), `ensureDbReady`. |
-| *(all other 139 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/admin/channels/generate-promo` GET + POST + PUT | tested | session 87 | Channel promo-clip generator. Three-handler flow. POST `{channel_id, channel_slug, custom_prompt?, preview?}` submits one 10s 9:16 720p clip via `submitVideoJob`; 9 per-channel default scenes baked in (from legacy); `preview:true` returns the built prompt. Sync xAI URL short-circuits inline. GET `?id=REQUEST_ID` polls via `pollVideoJob`; on done downloads + persists to `channels/clips/{uuid}.mp4` (falls back to Grok URL if download fails). PUT `{channel_id, channel_slug, clip_urls}` downloads the confirmed clip, persists to `channels/{slug}/promo-{uuid}.mp4`, UPDATEs `channels.banner_url`, creates a promo post attributed to The Architect (`glitch-000`, channels are Architect-only) with `AIGlitchTV,AIGlitch` hashtags. Deferred: ad-campaigns `injectCampaignPlacement` + `logImpressions` + `ensureDbReady`. |
+| *(all other 138 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 87) — `/api/admin/channels/generate-promo`
+
+**Branch:** `claude/phase-7-admin-batch-38`
+
+**Done:**
+- New `src/app/api/admin/channels/generate-promo/route.ts` — three-handler promo-clip generator.
+  - POST submits a single 10s / 9:16 / 720p clip via `submitVideoJob`. Pulls the prompt from a 9-channel `CHANNEL_SCENES` dictionary (ai-fail-army, aitunes, paws-and-pixels, only-ai-fans, ai-dating, gnn, marketplace-qvc, ai-politicians, after-dark — ported verbatim from legacy). Strips the trailing "No text or watermarks." from the default and replaces with the AIG!itch-branding suffix. `custom_prompt` overrides the default; `preview:true` returns the prompt without submitting. Sync xAI completion is returned inline via `clips[].videoUrl`; async returns `clips[].requestId`.
+  - GET polls one request via `pollVideoJob`. On done: download + persist to `channels/clips/{uuid}.mp4`. Download failure falls back to returning the raw Grok URL (matches legacy's behaviour — the admin UI just needs *some* URL it can preview).
+  - PUT is the "save + create post" step the admin UI calls once the clip is ready. Downloads the clip again to `channels/{slug}/promo-{uuid}.mp4`, UPDATEs `channels.banner_url`, and INSERTs a promo post attributed to The Architect (`glitch-000`; channels are Architect-only per the feedback-loop contract). Post has `AIGlitchTV,AIGlitch` hashtags + a legacy-parity "📺 Welcome to {ChannelName}!" content template.
+- 22 new tests across the three handlers: POST auth / env guard / field validation / unknown-channel 400 / preview mode / custom-prompt override / happy submit args (10s 9:16 720p) / sync inline path / submit error; GET auth / id validation / env guard / pending / moderation / done-with-blob-persist / download-fail Grok fallback / expired / poll exception; PUT auth / field validation / happy path verifies channel_id + Architect author + capitalized channel name in content / download failure 500.
+- Suite **1607/1607**, up from 1585.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (1607/1607)
+
+**Design choices:**
+- Reused the submit/poll helper pattern from `generate-title` — keeps all channel video-gen routes on the same circuit-breaker + cost-ledger path.
+- GET's "download failed → return Grok URL" branch preserved from legacy: the admin UI's preview step works either way, and the PUT save step re-downloads from whatever URL the caller passes. No reason to fail the poll on a transient Blob download hiccup.
+- PUT's channel-name capitalization (`ai-news` → `Ai News`) is a direct lift from legacy — not strictly "correct" casing (would want `AI News`), but preserves the existing feed content exactly.
+
+**Deferrals vs. legacy:**
+- `injectCampaignPlacement` + `logImpressions` — ad-campaigns lib not ported. Legacy already wrapped the log branch in `try/catch {}`, so skipping it is behaviourally identical to a failure.
+- `ensureDbReady` — schema assumed live.
+
+**Next batch options (pick one):**
+1. `channels/flush` (~225 lines) — channel data cleanup; scope to confirm.
+2. `marketing/*` lib — multi-session.
+3. `director-movies` lib — multi-session. Unlocks `channels/generate-content` + 4 other routes.
+4. `elon-campaign` admin (~711).
+5. Phase 8 greenlight.
+
+---
 
 ### 2026-04-21 (session 86) — `/api/admin/channels/generate-title`
 
