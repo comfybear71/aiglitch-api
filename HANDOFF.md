@@ -108,11 +108,45 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/admin/channels/flush` GET + DELETE + POST | tested | session 88 | AI-driven channel content curation. GET lists channel posts for admin review (flags `broken:true` on video-posts-with-no-media_url). DELETE `{post_ids, delete_post?}` either permanently deletes rows or untags (`channel_id=NULL`). POST `{channel_id, dry_run?}` runs AI classification in batches of 20 against the channel's `content_rules/genre/description`, untags irrelevant posts + auto-flags broken/placeholder video posts. `dry_run` returns the classification without writing. **Deviation from legacy**: this port adds `isAdminAuthenticated` to all three handlers — legacy had NO auth check but the route is under `/api/admin/*` and mutates the DB (including `DELETE FROM posts`). Legacy `claude.generateJSON` replaced with `generateText` + defensive `\[…\]` regex parse so malformed model output short-circuits to "nothing flagged" instead of 500-ing. |
 | `/api/docs` GET | tested | session 89 | Static API documentation catalogue. Returns a structured JSON tree of every domain's routes (feed / personas / messaging / bestie / partner / coins / sponsors / token / NFTs / meatlab / admin / …) plus auth method descriptions. Public + `force-static` + `Cache-Control: public, s-maxage=3600, stale-while-revalidate=86400`. No runtime deps — pure literal payload. Consumed by the `/docs` ops-UI page. |
 | `/api/nft` GET + POST | tested | session 90 | NFT read API (no minting — that moved to marketplace + Phantom flow). GET `?action=collection_stats` returns whole-collection totals, rarity breakdown, 10 most-recent mints, and marketplace revenue split (persona vs. treasury); revenue block try/catch'd so missing `marketplace_revenue` table doesn't 500 the rest. `?action=supply` returns per-product mint counts + `max_per_product:100` for "X remaining" displays. Default (with `session_id`) fetches user's NFTs — joins on `phantom_wallet_address` so wallet-login migrations don't strand NFTs under an old session, and auto-repairs legacy session_ids on match. No session_id → `{nfts:[]}`. POST returns 410 Gone with marketplace redirect (matches legacy exactly). No Solana RPC — all reads from Neon mirror tables. |
-| *(all other 135 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/hatch/telegram` POST + DELETE | tested | session 91 | Meatbag-facing Telegram bot setup for a hatched persona. POST `{session_id, bot_token}` → resolves session to wallet → wallet to persona (`owner_wallet_address` match, 404 if unhatched) → validates token via Telegram `getMe` (bails before DB writes on invalid) → registers webhook at `{NEXT_PUBLIC_APP_URL}/api/telegram/persona-chat/{persona_id}` with `message+message_reaction` updates (non-fatal if fails) → DELETE + INSERT `persona_telegram_bots` row. DELETE `{session_id}` same resolution, then best-efforts unregisters the webhook and removes the row. `bot_token` never in responses. Falls back to `new URL(request.url).origin` when `NEXT_PUBLIC_APP_URL` isn't set. Counterpart to the admin's `/api/admin/personas/set-bot-token`. |
+| *(all other 134 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 91) — `/api/hatch/telegram`
+
+**Branch:** `claude/phase-7-admin-batch-42`
+
+**Done:**
+- New `src/app/api/hatch/telegram/route.ts` — meatbag-facing Telegram bot setup for a hatched persona. Session + wallet scoped (no admin auth needed — user must own the persona).
+  - POST validates body → resolves session → wallet → persona via a shared `resolvePersona` helper. 403 when no wallet, 404 when no hatched persona. Validates token via Telegram `getMe` before any DB write. Registers webhook (non-fatal on failure). DELETE + INSERT `persona_telegram_bots` row.
+  - DELETE uses the same resolver, best-efforts unregisters the webhook, then deletes the row. Webhook cleanup exceptions swallowed.
+  - `bot_token` never returned in responses.
+- 16 new tests: POST auth-adjacent (invalid JSON, missing fields, no wallet, no persona, invalid token bail, network exception 500, happy path verifying webhook URL + DELETE-before-INSERT, non-fatal webhook failure, `NEXT_PUBLIC_APP_URL` fallback to request origin); DELETE invalid JSON, missing field, no wallet 403, no persona 404, happy webhook cleanup + DB delete, no-existing-bot skip-cleanup, webhook exception swallowed.
+- Suite **1655/1655**, up from 1639.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (1655/1655)
+
+**Design choices:**
+- Factored `resolvePersona(sql, sessionId)` so POST and DELETE share the identical session→wallet→persona resolution + identical 403/404 error bodies. Legacy duplicated this inline in both handlers.
+- `NEXT_PUBLIC_APP_URL` fallback to `new URL(request.url).origin` matches legacy exactly — preserves dev / preview-deployment behaviour when the env var isn't set.
+- DELETE skips the `deleteWebhook` call when the bot row is already missing — avoids a useless Telegram round-trip.
+- DELETE stays parity with legacy: still returns `success:true` even if the persona had no bot to begin with (the row is a no-op DELETE).
+
+**Deferrals vs. legacy:**
+- None.
+
+**Next batch options (pick one):**
+1. `marketing/*` lib — 3036 lines. Multi-session.
+2. `director-movies` lib — 1626 lines. Multi-session.
+3. `elon-campaign` admin (~711).
+4. Phase 8 greenlight.
+
+---
 
 ### 2026-04-21 (session 90) — `/api/nft`
 
