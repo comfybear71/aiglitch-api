@@ -109,11 +109,57 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/docs` GET | tested | session 89 | Static API documentation catalogue. Returns a structured JSON tree of every domain's routes (feed / personas / messaging / bestie / partner / coins / sponsors / token / NFTs / meatlab / admin / …) plus auth method descriptions. Public + `force-static` + `Cache-Control: public, s-maxage=3600, stale-while-revalidate=86400`. No runtime deps — pure literal payload. Consumed by the `/docs` ops-UI page. |
 | `/api/nft` GET + POST | tested | session 90 | NFT read API (no minting — that moved to marketplace + Phantom flow). GET `?action=collection_stats` returns whole-collection totals, rarity breakdown, 10 most-recent mints, and marketplace revenue split (persona vs. treasury); revenue block try/catch'd so missing `marketplace_revenue` table doesn't 500 the rest. `?action=supply` returns per-product mint counts + `max_per_product:100` for "X remaining" displays. Default (with `session_id`) fetches user's NFTs — joins on `phantom_wallet_address` so wallet-login migrations don't strand NFTs under an old session, and auto-repairs legacy session_ids on match. No session_id → `{nfts:[]}`. POST returns 410 Gone with marketplace redirect (matches legacy exactly). No Solana RPC — all reads from Neon mirror tables. |
 | `/api/hatch/telegram` POST + DELETE | tested | session 91 | Meatbag-facing Telegram bot setup for a hatched persona. POST `{session_id, bot_token}` → resolves session to wallet → wallet to persona (`owner_wallet_address` match, 404 if unhatched) → validates token via Telegram `getMe` (bails before DB writes on invalid) → registers webhook at `{NEXT_PUBLIC_APP_URL}/api/telegram/persona-chat/{persona_id}` with `message+message_reaction` updates (non-fatal if fails) → DELETE + INSERT `persona_telegram_bots` row. DELETE `{session_id}` same resolution, then best-efforts unregisters the webhook and removes the row. `bot_token` never in responses. Falls back to `new URL(request.url).origin` when `NEXT_PUBLIC_APP_URL` isn't set. Counterpart to the admin's `/api/admin/personas/set-bot-token`. |
-| *(all other 134 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/admin/hatchery` GET + POST + PATCH | tested | session 92 | Streaming persona-hatching pipeline. GET lists recent hatchlings (max 50). POST `{type?, skip_video?}` streams NDJSON per-step progress (generating_being → avatar → video → save_persona → architect_announcement → first_words → glitch_gift → posting_socials → complete). `type` is an optional creative hint, or fully random. Admin-auth OR cron-auth. PATCH retroactively awards GLITCH to hatchlings with zero balance (legacy data repair). AI being generation uses `generateText` + defensive JSON regex parse. Avatar via `generateImageToBlob` (1:1 Pro). Video via `generateVideoToBlob` capped at 24×10s polls so the whole pipeline stays in the 5-min lambda. Avatar + video failures are non-fatal. Awards 1000 GLITCH via `awardPersonaCoins`. Deferred: `spreadPostToSocial` — `posting_socials` step emits `{platforms_posted:[], platforms_failed:[]}` so admin UI keeps rendering. Companion to `/api/admin/hatch-admin`. |
+| *(all other 133 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 92) — `/api/admin/hatchery` (streaming birth pipeline)
+
+**Branch:** `claude/phase-7-admin-batch-43`
+
+**Done:**
+- New `src/app/api/admin/hatchery/route.ts` — the streaming version of the persona hatch pipeline. Three handlers:
+  - **GET** — lists recent hatchings (personas with `hatched_by IS NOT NULL`). `?limit=20` default, capped at 50.
+  - **POST** — 8-step NDJSON stream with `{step, status, …data}\n` lines. Admin-auth OR cron-auth (legacy ran this on cron for scheduled hatches too). Steps:
+    1. `generating_being` — `generateText` + defensive JSON regex parse to get a complete HatchedBeing. Username sanitized + truncated to 20 chars.
+    2. `generating_avatar` — `generateImageToBlob` (1:1 Pro). Non-fatal.
+    3. `generating_video` — `generateVideoToBlob` with `maxAttempts:24` (~4min cap). Skipped entirely when `skip_video:true`. Non-fatal.
+    4. `saving_persona` — INSERT `ai_personas` with all fields including `hatched_by = glitch-000` and `hatching_video_url`.
+    5. `architect_announcement` — post from The Architect welcoming the being. AI-generated with template fallback. Content-type=image, media inherits from avatar/video.
+    6. `first_words` — hatchling's very first post (1-minute offset so it sorts after the announcement).
+    7. `glitch_gift` — hardcoded 1000-GLITCH template post + `awardPersonaCoins` actually transfers balance.
+    8. `posting_socials` — **deferred** stub. Emits `{platforms_posted:[], platforms_failed:[]}` so the admin UI's existing renderer doesn't break.
+    9. `complete` — full payload with persona + post IDs + gift amount + social result.
+  - **PATCH** — retroactive GLITCH award for hatched personas with zero balance (legacy data repair). Returns `{awarded:[names], amount}`.
+- Username collision check: if the AI picks a taken username, suffix with a random 4-digit number. Matches legacy behaviour.
+- 15 new tests: GET auth + happy path + limit clamp; PATCH auth + awards + empty list; POST auth (via cron mock), bad AI JSON failure, happy path verifies all 9 step transitions + helper-args (1:1 Pro avatar, 10s 9:16 720p with maxAttempts=24) + coins awarded 1000 + username sanitized, `skip_video:true` skips video step, avatar failure non-fatal, video failure non-fatal, announcement AI failure falls back to template, social spread stubbed (platforms_posted/platforms_failed empty arrays), username collision gets suffixed.
+- Suite **1670/1670**, up from 1655.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (1670/1670)
+
+**Design choices:**
+- NDJSON stream format (`{json}\n` per line + `Content-Type: text/plain`) preserved verbatim from legacy. Different from the SSE format used in `/api/admin/generate-persona` because the admin UI has client code that specifically expects line-delimited JSON.
+- Cron-auth fallback alongside admin-auth: legacy had both paths so scheduled cron hatches work without an admin session. Order matters — admin check runs first, cron only checked if admin fails.
+- Video capped at 24 polls × 10s to stay inside the 5-min lambda. Matches `hatch-admin` + `bestie-life` pattern.
+- Three helper functions (`postArchitectAnnouncement`, `postHatchlingFirstWords`, `postGlitchGift`) kept separate instead of inlined — each has its own AI-or-template fallback path and writing the three INSERTs in separate stages makes the stream output legible.
+- `stripWrappingQuotes` helper shared between announcement + first-words since both the AI responses sometimes come back wrapped in quotes.
+
+**Deferrals vs. legacy:**
+- `spreadPostToSocial` — marketing lib not ported. Step stays in the stream with empty arrays; re-wires on marketing lib port.
+- `ensureDbReady` — schema assumed live.
+
+**Next batch options (pick one):**
+1. `marketing/*` lib — 3036 lines. Multi-session. Un-defers 8+ routes + the hatchery social spread step.
+2. `director-movies` lib — 1626 lines. Multi-session. Unlocks 5 generator routes.
+3. `elon-campaign` admin (~711).
+4. Phase 8 greenlight.
+
+---
 
 ### 2026-04-21 (session 91) — `/api/hatch/telegram`
 
