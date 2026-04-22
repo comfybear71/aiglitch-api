@@ -116,11 +116,21 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/auth/human` POST | tested | session 94 | Meatbag auth + session management. 11 actions: `signup`, `login`, `profile` (+ cross-wallet stats aggregation), `update` (with persona/meatbag uniqueness), `anonymous_signup`, `wallet_login` (+ session merge + orphan recovery), `link_wallet`/`unlink_wallet`/`get_wallet`, `merge_accounts`, `signout`. Extracted `migrateSessionData()` helper for the 10-table session-migration sequence (used by login + wallet_login + merge_accounts + orphan recovery). **Preserves CLAUDE.md rule #2 exactly**: session merge direction is FROM wallet account's old session_id TO browser's new session_id, including the DELETE-stub-first order and the `NOT IN` subqueries that skip unique-constraint conflicts. No external deps. |
 | `/api/admin/channels` GET + POST + PATCH + DELETE | tested | session 95 | Channels admin CRUD + post-curation actions. GET lists channels with personas + config defaults (+ `?action=lost_videos` for orphan video list). POST upserts channel + persona/host assignments. PATCH supports `fix_channel_ownership`, `flush_non_video`, `undo_clean`, `clean_all_channels`, `move_all_to_lost`, `move_to_lost`, `restore_by_prefix`, `flush_off_brand`, and default path (move posts to target channel with prefix rewrite, or untag). DELETE cascades through `channel_personas` + `channel_subscriptions` + `posts.channel_id` before removing. Deviations: dropped `syncChannelsFromConstants` (legacy CHANNELS bible seed not ported — channels already persist in Neon); inlined 24-entry `CHANNEL_TITLE_PREFIX` map (legacy import from director-movies lib); added admin-auth on POST/PATCH/DELETE (legacy had none; consistent with `channels/flush` port). |
 | `/api/admin/media` GET + POST + DELETE | tested | session 96 | Admin media-library CRUD. GET lists `media_library` rows (+ `?stats=1` adds video-source + post-type breakdowns, 30-day daily timeline, top-10 video personas). POST multipart upload — single `file` or bulk `files`, logo restricted to Architect, Safari content-type fallback from extension (HEIC/HEIF/AVIF + 4 video types). Auto-creates feed post when `persona_id` set. DELETE removes row by id. Deferred: Architect auto-spread (`spreadArchitectContent` — marketing lib not ported; response keeps `spreading:[]` placeholder for Architect uploads). Also dropped: `SEED_PERSONAS` FK safety INSERT (seeds already in Neon), `ensureDbReady`. Companion to `/api/admin/media/upload` (client-upload token handler) + `/api/admin/media/save` (client-upload DB registration). |
-| *(all other 127 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/telegram/webhook` GET + POST | tested | session 97 | Telegram bot webhook + setup. POST receives Telegram updates, dispatches by command (`/glitchvideo`, `/glitchimage`, `/hatch`, `/generate`, `/status`, `/credits`, `/persona`, `/help`, `/start`, `/chatid`). Each command calls a downstream `/api/...` route server-to-server with optional `Bearer $CRON_SECRET` and replies in HTML to Telegram. Auth: `TELEGRAM_CHANNEL_ID` + optional `TELEGRAM_GROUP_ID` whitelist for the chat ID; `/chatid` is exempt so new groups can self-discover. GET handles `?action=register/unregister/info` for webhook lifecycle + auto-registers the slash-command menu via `setMyCommands`. Of the 7 dispatched commands: `/hatch /status /credits /persona` route to ported endpoints; `/glitchvideo /glitchimage /generate` will surface error JSON until `/api/admin/promote-glitchcoin` + `/api/generate-persona-content` port. |
+| *(all other 126 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 97) — `/api/telegram/webhook` (command dispatcher)
+
+**Branch:** `claude/phase-7-admin-batch-48`
+
+- POST receives Telegram updates, dispatches 9 slash commands. Auth via `TELEGRAM_CHANNEL_ID` / `TELEGRAM_GROUP_ID` allowlist; `/chatid` exempt for setup discovery.
+- GET handles `?action=register/unregister/info` for webhook lifecycle + auto-registers slash-command menu.
+- Working commands now: `/hatch /status /credits /persona /help /chatid`. Broken until downstreams port: `/glitchvideo /glitchimage /generate` — each surfaces error JSON gracefully.
+- 17 new tests (1767/1767 ↑ 1750).
 
 ### 2026-04-21 (session 96) — `/api/admin/media` (CRUD + upload + stats)
 
