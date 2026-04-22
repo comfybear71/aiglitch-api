@@ -106,11 +106,40 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/admin/channels/generate-title` GET + POST | tested | session 86 | Channel title-card video generator. Two-phase submit/poll via `submitVideoJob` + `pollVideoJob` (5s / 9:16 / 720p). POST `{channel_id, channel_slug, title, style_prompt?, preview?}` — builds a cinematic title-card prompt that spells the title letter-by-letter and repeats the exact string multiple times to combat xAI's misspelling bias. `preview:true` returns the prompt without submitting. Happy path returns `{phase:"submitted", requestId}`. Sync xAI returns short-circuit through `persistTitleVideo`. GET `?id=&channel_id=&channel_slug=` polls the job; on done downloads video, persists to `channels/{slug}/title-{uuid}.mp4`, and UPDATEs `channels.title_video_url`. Deferred: `injectCampaignPlacement` (ad-campaigns lib), `ensureDbReady`. |
 | `/api/admin/channels/generate-promo` GET + POST + PUT | tested | session 87 | Channel promo-clip generator. Three-handler flow. POST `{channel_id, channel_slug, custom_prompt?, preview?}` submits one 10s 9:16 720p clip via `submitVideoJob`; 9 per-channel default scenes baked in (from legacy); `preview:true` returns the built prompt. Sync xAI URL short-circuits inline. GET `?id=REQUEST_ID` polls via `pollVideoJob`; on done downloads + persists to `channels/clips/{uuid}.mp4` (falls back to Grok URL if download fails). PUT `{channel_id, channel_slug, clip_urls}` downloads the confirmed clip, persists to `channels/{slug}/promo-{uuid}.mp4`, UPDATEs `channels.banner_url`, creates a promo post attributed to The Architect (`glitch-000`, channels are Architect-only) with `AIGlitchTV,AIGlitch` hashtags. Deferred: ad-campaigns `injectCampaignPlacement` + `logImpressions` + `ensureDbReady`. |
 | `/api/admin/channels/flush` GET + DELETE + POST | tested | session 88 | AI-driven channel content curation. GET lists channel posts for admin review (flags `broken:true` on video-posts-with-no-media_url). DELETE `{post_ids, delete_post?}` either permanently deletes rows or untags (`channel_id=NULL`). POST `{channel_id, dry_run?}` runs AI classification in batches of 20 against the channel's `content_rules/genre/description`, untags irrelevant posts + auto-flags broken/placeholder video posts. `dry_run` returns the classification without writing. **Deviation from legacy**: this port adds `isAdminAuthenticated` to all three handlers — legacy had NO auth check but the route is under `/api/admin/*` and mutates the DB (including `DELETE FROM posts`). Legacy `claude.generateJSON` replaced with `generateText` + defensive `\[…\]` regex parse so malformed model output short-circuits to "nothing flagged" instead of 500-ing. |
-| *(all other 137 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/docs` GET | tested | session 89 | Static API documentation catalogue. Returns a structured JSON tree of every domain's routes (feed / personas / messaging / bestie / partner / coins / sponsors / token / NFTs / meatlab / admin / …) plus auth method descriptions. Public + `force-static` + `Cache-Control: public, s-maxage=3600, stale-while-revalidate=86400`. No runtime deps — pure literal payload. Consumed by the `/docs` ops-UI page. |
+| *(all other 136 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 89) — `/api/docs`
+
+**Branch:** `claude/phase-7-admin-batch-40`
+
+**Done:**
+- New `src/app/api/docs/route.ts` — static API documentation catalogue. Literal JSON payload covering every API domain (feed, personas, messaging, bestie, partner, coins, sponsors, token, NFTs, meatlab, admin, etc.) + auth method descriptions. Public, `force-static`, 1-hour fresh / 24-hour SWR `Cache-Control`. Consumed by the `/docs` ops-UI page + any external tooling introspecting the API.
+- 4 new tests: happy shape + version, primary-group coverage (feed/personas/messaging present), all four `authMethods` keys populated, Cache-Control header carries s-maxage + SWR.
+- Suite **1629/1629**, up from 1625.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (1629/1629)
+
+**Design choices:**
+- Kept the payload literal from legacy (no generation from route definitions). The docs catalogue is tightly curated — narrative descriptions, grouping, auth labels — and deriving them from the route tree would lose intent.
+- Set `dynamic = "force-static"` so Next can statically generate the response at build time. Matches the 1-hour s-maxage + 24-hour SWR cache policy.
+
+**Deferrals vs. legacy:**
+- None. Straight copy with pragmas added and a route-header doc block.
+
+**Next batch options (pick one):**
+1. `marketing/*` lib — un-defers 8+ routes. Multi-session.
+2. `director-movies` lib — multi-session.
+3. `elon-campaign` admin (~711).
+4. Phase 8 greenlight.
+
+---
 
 ### 2026-04-21 (session 88) — `/api/admin/channels/flush`
 
