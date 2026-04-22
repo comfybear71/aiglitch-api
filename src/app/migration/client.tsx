@@ -56,6 +56,20 @@ interface TestResponse {
   log_id: string | null;
 }
 
+interface RouteHintMethod {
+  description: string;
+  query?: string;
+  body?: unknown;
+  setup_notes?: string;
+  needs_admin?: boolean;
+  path_params?: Record<string, string>;
+}
+
+type HintResponse =
+  | { path: string; source: "curated"; methods: Record<string, RouteHintMethod> }
+  | { path: string; source: "jsdoc"; jsdoc: string }
+  | { path: string; source: "none"; message: string };
+
 interface LogRow {
   id: string;
   method: string;
@@ -535,12 +549,9 @@ function StatusTab({ status }: { status: StatusResponse }) {
 
 function TestTab({ status }: { status: StatusResponse }) {
   const allRoutes = useMemo(() => {
-    const portedPaths = new Set(status.ported.map((r) => r.path));
     return status.ported.map((r) => ({
       path: r.path,
       methods: r.methods,
-      ported: true,
-      note: portedPaths.has(r.path) ? "ported" : "pending",
     }));
   }, [status.ported]);
 
@@ -548,20 +559,100 @@ function TestTab({ status }: { status: StatusResponse }) {
   const [method, setMethod] = useState("GET");
   const [query, setQuery] = useState("");
   const [body, setBody] = useState("");
+  const [pathParams, setPathParams] = useState<Record<string, string>>({});
+  const [hint, setHint] = useState<HintResponse | null>(null);
+  const [hintLoading, setHintLoading] = useState(false);
   const [response, setResponse] = useState<TestResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // When route changes, reset method to first available
-  useEffect(() => {
-    const hit = allRoutes.find((r) => r.path === path);
-    if (hit && !hit.methods.includes(method)) {
-      setMethod(hit.methods[0] ?? "GET");
-    }
-  }, [path, allRoutes, method]);
-
   const currentMethods =
     allRoutes.find((r) => r.path === path)?.methods ?? ["GET"];
+
+  // Detect `[bracket]` segments in the current path — each needs a real value.
+  const bracketSegments = useMemo(() => {
+    const matches = path.match(/\[[^\]]+\]/g) ?? [];
+    return Array.from(new Set(matches));
+  }, [path]);
+
+  // Fetch the hint any time the selected route changes.
+  useEffect(() => {
+    if (!path) return;
+    let cancelled = false;
+    setHintLoading(true);
+    setHint(null);
+    fetch(`/api/admin/migration/route-hint?path=${encodeURIComponent(path)}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: HintResponse | null) => {
+        if (cancelled) return;
+        setHint(data);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setHintLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [path]);
+
+  // When the hint lands, auto-fill method + query + body + path_params.
+  useEffect(() => {
+    if (!hint) return;
+    if (hint.source === "curated") {
+      // Prefer GET if available; otherwise the first method the route exposes.
+      const available = currentMethods.filter((m) => hint.methods[m]);
+      const nextMethod =
+        available.includes(method) && hint.methods[method]
+          ? method
+          : (available[0] ?? currentMethods[0] ?? "GET");
+      if (nextMethod !== method) setMethod(nextMethod);
+
+      const m = hint.methods[nextMethod];
+      if (m) {
+        setQuery(m.query ?? "");
+        setBody(m.body !== undefined ? JSON.stringify(m.body, null, 2) : "");
+        setPathParams({ ...(m.path_params ?? {}) });
+      } else {
+        setQuery("");
+        setBody("");
+        setPathParams({});
+      }
+    } else {
+      // jsdoc / none — clear any stale autofill.
+      setQuery("");
+      setBody("");
+      setPathParams({});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hint]);
+
+  // When the method changes on a curated hint, refill from that method's entry.
+  useEffect(() => {
+    if (!hint || hint.source !== "curated") return;
+    const m = hint.methods[method];
+    if (!m) return;
+    setQuery(m.query ?? "");
+    setBody(m.body !== undefined ? JSON.stringify(m.body, null, 2) : "");
+    setPathParams({ ...(m.path_params ?? {}) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [method]);
+
+  // Resolve `[seg]` → actual value from pathParams for the outgoing request.
+  const resolvedPath = useMemo(() => {
+    let p = path;
+    for (const [key, value] of Object.entries(pathParams)) {
+      if (value) p = p.split(key).join(value);
+    }
+    return p;
+  }, [path, pathParams]);
+
+  const unresolvedSegments = bracketSegments.filter(
+    (s) => !pathParams[s] || pathParams[s]!.startsWith("REPLACE-"),
+  );
+
+  const currentMethodHint =
+    hint && hint.source === "curated" ? hint.methods[method] : undefined;
 
   const send = async () => {
     setLoading(true);
@@ -589,7 +680,7 @@ function TestTab({ status }: { status: StatusResponse }) {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          path,
+          path: resolvedPath,
           method,
           query: Object.keys(queryObj).length ? queryObj : undefined,
           body: parsedBody,
@@ -611,14 +702,16 @@ function TestTab({ status }: { status: StatusResponse }) {
   const curl = useMemo(() => {
     const queryStr = query.trim() ? `?${query.trim()}` : "";
     const base =
-      typeof window !== "undefined" ? window.location.origin : "https://api.aiglitch.app";
+      typeof window !== "undefined"
+        ? window.location.origin
+        : "https://api.aiglitch.app";
     const escaped = (body || "").replace(/'/g, "'\\''");
     const bodyPart =
       body.trim() && method !== "GET"
         ? ` \\\n  -H 'content-type: application/json' \\\n  -d '${escaped}'`
         : "";
-    return `curl -X ${method} '${base}${path}${queryStr}'${bodyPart}`;
-  }, [method, path, query, body]);
+    return `curl -X ${method} '${base}${resolvedPath}${queryStr}'${bodyPart}`;
+  }, [method, resolvedPath, query, body]);
 
   return (
     <>
@@ -654,8 +747,135 @@ function TestTab({ status }: { status: StatusResponse }) {
           </div>
         </div>
 
-        <div>
-          <label style={styles.label}>Query (e.g. session_id=abc&limit=10)</label>
+        {/* Hint panel — description + setup banner OR jsdoc fallback */}
+        {hintLoading && (
+          <div
+            style={{
+              fontSize: 12,
+              color: "#6b7280",
+              marginTop: 8,
+              fontStyle: "italic",
+            }}
+          >
+            Loading hint…
+          </div>
+        )}
+
+        {currentMethodHint && (
+          <div
+            style={{
+              background: "#eff6ff",
+              border: "1px solid #bfdbfe",
+              borderRadius: 6,
+              padding: 10,
+              marginTop: 10,
+              fontSize: 13,
+              color: "#1e3a8a",
+            }}
+          >
+            <strong>What this does:</strong> {currentMethodHint.description}
+          </div>
+        )}
+
+        {currentMethodHint?.setup_notes && (
+          <div
+            style={{
+              background: "#fefce8",
+              border: "1px solid #fde047",
+              borderRadius: 6,
+              padding: 10,
+              marginTop: 8,
+              fontSize: 13,
+              color: "#713f12",
+            }}
+          >
+            <strong>⚠️ Heads up:</strong> {currentMethodHint.setup_notes}
+            {currentMethodHint.needs_admin && (
+              <div style={{ marginTop: 4 }}>
+                Admin cookie required — the tester forwards yours automatically.
+              </div>
+            )}
+          </div>
+        )}
+
+        {hint && hint.source === "jsdoc" && (
+          <details
+            style={{
+              background: "#f9fafb",
+              border: "1px solid #e5e7eb",
+              borderRadius: 6,
+              padding: 10,
+              marginTop: 8,
+              fontSize: 13,
+            }}
+          >
+            <summary style={{ cursor: "pointer", color: "#374151" }}>
+              No curated example — showing the route&apos;s top doc comment
+            </summary>
+            <pre
+              style={{
+                whiteSpace: "pre-wrap",
+                marginTop: 8,
+                color: "#4b5563",
+                fontSize: 12,
+              }}
+            >
+              {hint.jsdoc}
+            </pre>
+          </details>
+        )}
+
+        {hint && hint.source === "none" && (
+          <div
+            style={{
+              fontSize: 12,
+              color: "#6b7280",
+              marginTop: 8,
+              fontStyle: "italic",
+            }}
+          >
+            No hint available for this route yet. Fire what you know and add an
+            entry to <code style={styles.code}>route-hints.ts</code> when you
+            figure it out.
+          </div>
+        )}
+
+        {/* Path params editor — appears only when the path has [brackets] */}
+        {bracketSegments.length > 0 && (
+          <div style={{ marginTop: 10 }}>
+            <label style={styles.label}>Path parameters</label>
+            {bracketSegments.map((seg) => (
+              <div key={seg} style={{ ...styles.row, marginBottom: 4 }}>
+                <code
+                  style={{ ...styles.code, minWidth: 80, textAlign: "center" }}
+                >
+                  {seg}
+                </code>
+                <input
+                  type="text"
+                  placeholder={`Value for ${seg}`}
+                  value={pathParams[seg] ?? ""}
+                  onChange={(e) =>
+                    setPathParams((prev) => ({ ...prev, [seg]: e.target.value }))
+                  }
+                  style={{ ...styles.input, flex: 1 }}
+                />
+              </div>
+            ))}
+            <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
+              Resolved path:{" "}
+              <code style={styles.code}>{resolvedPath}</code>
+            </div>
+          </div>
+        )}
+
+        <div style={{ marginTop: 10 }}>
+          <label style={styles.label}>
+            Query{" "}
+            <span style={{ color: "#6b7280", fontWeight: 400 }}>
+              (key=value&amp;key2=value2)
+            </span>
+          </label>
           <input
             type="text"
             placeholder="key=value&key2=value2"
@@ -672,16 +892,23 @@ function TestTab({ status }: { status: StatusResponse }) {
               placeholder='{"key": "value"}'
               value={body}
               onChange={(e) => setBody(e.target.value)}
-              style={{ ...styles.input, minHeight: 100, resize: "vertical" }}
+              style={{ ...styles.input, minHeight: 120, resize: "vertical" }}
             />
           </div>
         )}
 
-        <div style={{ marginTop: 12, display: "flex", gap: 8, alignItems: "center" }}>
+        <div
+          style={{ marginTop: 12, display: "flex", gap: 8, alignItems: "center" }}
+        >
           <button
             style={styles.btn("primary")}
             onClick={send}
-            disabled={loading || !path}
+            disabled={loading || !path || unresolvedSegments.length > 0}
+            title={
+              unresolvedSegments.length > 0
+                ? `Fill in values for ${unresolvedSegments.join(", ")} first`
+                : undefined
+            }
           >
             {loading ? "Sending…" : "Send"}
           </button>
@@ -696,7 +923,13 @@ function TestTab({ status }: { status: StatusResponse }) {
       </div>
 
       {err && (
-        <div style={{ ...styles.card, borderColor: "#fecaca", background: "#fef2f2" }}>
+        <div
+          style={{
+            ...styles.card,
+            borderColor: "#fecaca",
+            background: "#fef2f2",
+          }}
+        >
           <strong>Error:</strong> {err}
         </div>
       )}
