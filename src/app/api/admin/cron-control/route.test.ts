@@ -183,4 +183,38 @@ describe("POST /api/admin/cron-control", () => {
     expect(body.success).toBe(false);
     expect(body.status).toBe(503);
   });
+
+  it("uses api.aiglitch.app as base URL in production (bypasses Vercel Deployment Protection)", async () => {
+    mockIsAdmin = true;
+    process.env.CRON_SECRET = "secret";
+    process.env.VERCEL_ENV = "production";
+    process.env.VERCEL_URL = "aiglitch-api-xyz.vercel.app";
+    const fetchMock = mockFetch(true, 200, {});
+    vi.stubGlobal("fetch", fetchMock);
+
+    await callPOST({ job: "sponsor-burn" });
+
+    const url = fetchMock.mock.calls[0]![0] as string;
+    expect(url).toContain("https://api.aiglitch.app");
+    expect(url).not.toContain("vercel.app");
+
+    delete process.env.VERCEL_ENV;
+  });
+
+  it("CRON_BASE_URL override wins over every other fallback", async () => {
+    mockIsAdmin = true;
+    process.env.CRON_SECRET = "secret";
+    process.env.CRON_BASE_URL = "https://custom.example.com";
+    process.env.VERCEL_ENV = "production";
+    const fetchMock = mockFetch(true, 200, {});
+    vi.stubGlobal("fetch", fetchMock);
+
+    await callPOST({ job: "sponsor-burn" });
+
+    const url = fetchMock.mock.calls[0]![0] as string;
+    expect(url).toContain("https://custom.example.com");
+
+    delete process.env.CRON_BASE_URL;
+    delete process.env.VERCEL_ENV;
+  });
 });

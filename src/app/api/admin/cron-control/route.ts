@@ -150,7 +150,23 @@ export async function GET(request: NextRequest) {
 
 // ── POST: trigger a cron on demand ────────────────────────────────────
 
+/**
+ * Base URL for self-fetches when manually triggering a cron.
+ *
+ * Vercel's `VERCEL_URL` is the deployment-specific hostname
+ * (e.g. `aiglitch-api-xyz.vercel.app`) — which sits behind Vercel's
+ * Deployment Protection layer. That layer 401s requests regardless
+ * of our own CRON_SECRET Bearer token, so self-fetches via VERCEL_URL
+ * never reach the cron endpoint code.
+ *
+ * We hit the public production alias `api.aiglitch.app` instead —
+ * it routes to the same deployment but has no protection gate in
+ * front of it. Override via `CRON_BASE_URL` for local dev or
+ * non-prod environments (defaults cover the common cases).
+ */
 function getBaseUrl(): string {
+  if (process.env.CRON_BASE_URL) return process.env.CRON_BASE_URL;
+  if (process.env.VERCEL_ENV === "production") return "https://api.aiglitch.app";
   if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
   return "http://localhost:3000";
 }
