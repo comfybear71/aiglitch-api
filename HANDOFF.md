@@ -123,6 +123,18 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 
 ## Session log
 
+### 2026-04-21 (session 98) — Migration dashboard foundation (session 1 of 3)
+
+**Branch:** `claude/migration-dashboard-1`
+
+- New `BACKLOG.md` — auto-generated, categorized list of every pending route with blocker, complexity, session estimate, prereqs.
+- `src/lib/migration/backlog.ts` — typed source-of-truth catalogue of pending routes (54 entries, ~57 sessions estimated).
+- `src/lib/migration/scan.ts` — filesystem scanner that finds every ported route + its exported HTTP methods.
+- `GET /api/admin/migration/status` — admin-auth'd JSON combining ported (filesystem) + pending (catalog) with per-blocker groups + summary stats.
+- `scripts/gen-backlog.ts` — regenerator (`npx tsx scripts/gen-backlog.ts`).
+- 13 new tests (1780/1780 ↑ 1767).
+- Sessions 2-3 will add the `/migration` UI page + tester + request log + metrics.
+
 ### 2026-04-21 (session 97) — `/api/telegram/webhook` (command dispatcher)
 
 **Branch:** `claude/phase-7-admin-batch-48`
