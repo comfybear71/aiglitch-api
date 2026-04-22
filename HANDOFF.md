@@ -113,11 +113,21 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/health/grok-video` GET | tested | session 93 | xAI credential health probe. Hits `GET /v1/models` (no charge) to verify `XAI_API_KEY` is set + auth'd. Returns `{ok:true, keyConfigured:true, maskedKey:"xai-…1234"}` (200) / `{ok:false, status, error, keyConfigured:true}` (502 on 4xx/5xx) / `{ok:false, error:"XAI_API_KEY not set", keyConfigured:false}` (500). `Cache-Control: no-store`. |
 | `/api/telegram/notify` POST | tested | session 93 | Admin Telegram alert endpoint. `requireCronAuth` gated. Body `{title?, message, severity?:"info"\|"warning"\|"critical"}`. With `title` → formats as `{ℹ️\|⚠️\|🚨} <b>title</b>\n\nmessage`; without → sends `message` verbatim. Silent no-op (`{ok:false, reason:"telegram-not-configured"}`) when `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHANNEL_ID` missing so crons don't blow up. Replaces legacy's `sendAdminAlert` (formatter inlined). |
 | `/api/meatlab/upload` POST | tested | session 93 | Meatlab client-upload token handler. 100 MB cap, 5 image + 3 video allowlist. Path restricted to `meatlab/` or `avatars/` prefixes (throws on anything else). Pure Vercel Blob `handleUpload` wrapper — DB registration happens via the existing meatlab POST flow. |
-| *(all other 130 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/auth/human` POST | tested | session 94 | Meatbag auth + session management. 11 actions: `signup`, `login`, `profile` (+ cross-wallet stats aggregation), `update` (with persona/meatbag uniqueness), `anonymous_signup`, `wallet_login` (+ session merge + orphan recovery), `link_wallet`/`unlink_wallet`/`get_wallet`, `merge_accounts`, `signout`. Extracted `migrateSessionData()` helper for the 10-table session-migration sequence (used by login + wallet_login + merge_accounts + orphan recovery). **Preserves CLAUDE.md rule #2 exactly**: session merge direction is FROM wallet account's old session_id TO browser's new session_id, including the DELETE-stub-first order and the `NOT IN` subqueries that skip unique-constraint conflicts. No external deps. |
+| *(all other 129 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 94) — `/api/auth/human` (session + wallet auth)
+
+**Branch:** `claude/phase-7-admin-batch-45`
+
+- 11-action POST: signup / login / profile / update / anonymous_signup / wallet_login / link_wallet / unlink_wallet / get_wallet / merge_accounts / signout.
+- Extracted `migrateSessionData(sql, old, new)` helper — 10-table UPDATE sequence reused by login + wallet_login + merge_accounts + orphan recovery. Each UPDATE has its own `try/catch {}` because old data tables may not exist on every env.
+- Preserves CLAUDE.md rule #2 exactly: wallet_login merge direction is FROM wallet account's old session TO browser's new session. DELETE stub row fires before the UPDATE session_id so the unique constraint doesn't trip.
+- 31 new tests (happy path + key error branch per action). Full suite **1719/1719** ↑ 1688.
 
 ### 2026-04-21 (session 93) — 3 small endpoints (health/telegram/meatlab)
 
