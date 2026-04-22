@@ -90,7 +90,25 @@ async function runDmPoll() {
     `&max_results=20`;
   const dmAuth = buildOAuth1Header("GET", dmUrl, creds);
   const dmRes = await fetch(dmUrl, { headers: { Authorization: dmAuth } });
-  if (!dmRes.ok) throw new Error(`DM poll failed: ${dmRes.status}`);
+  if (!dmRes.ok) {
+    const body = await dmRes.text().catch(() => "");
+    // 403 = the app's X API tier or OAuth scopes don't cover DM reads
+    // (Pro tier required for /2/dm_events). Not a bug we can fix in code —
+    // soft-skip so the cron run logs as success with dm_reads_disabled:true
+    // instead of spamming cron_runs.error every 5 minutes.
+    if (dmRes.status === 403) {
+      console.warn(
+        "[x-dm-poll] 403 from /2/dm_events — account tier/scopes don't permit DM reads. Skipping poll.",
+        { body: body.slice(0, 500) },
+      );
+      return { polled: 0, new_dms: 0, replied: 0, errors: 0, dm_reads_disabled: true };
+    }
+    console.error(
+      `[x-dm-poll] /2/dm_events ${dmRes.status}`,
+      body.slice(0, 500),
+    );
+    throw new Error(`DM poll failed: ${dmRes.status}`);
+  }
 
   const dmData = (await dmRes.json()) as { data?: DmEvent[] };
   const events = dmData.data ?? [];

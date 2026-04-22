@@ -5,6 +5,22 @@
 
 ---
 
+## Session log (newest first)
+
+### 2026-04-22 — telegram bot engine libs (session 1 of 2) + x-dm-poll 403 patch
+- **Branch**: `claude/telegram-persona-chat`
+- **Parcels shipped** (6 atomic commits, each green suite + clean tsc):
+  - `c9f8796` — platform-brief builder + constant (3 tests)
+  - `66f0809` — personality modes + DB storage (6 tests)
+  - `61248ef` — command dispatcher + content lookups for /nft /channel /avatar /help /modes (14 tests)
+  - `cddfeda` — outreach-drafts types + contact lookups with 14-day cooldown + 10/day ceiling (9 tests)
+  - `173762d` — outreach AI drafting + approval regex + Resend send (17 tests)
+  - `32c892a` — x-dm-poll 403 soft-skip (Pro tier gap — was spamming cron_runs) (1 test)
+- **Suite**: 1862/1862 passing, 159 files.
+- **Next**: session 2 — port `/api/telegram/persona-chat/[personaId]` (1313-line route) using these libs.
+
+---
+
 ## Endpoint migration tracker
 
 States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old-deleted`
