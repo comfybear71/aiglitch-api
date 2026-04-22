@@ -445,11 +445,15 @@ export const PENDING_ROUTES: PendingRoute[] = [
     path: "/api/telegram/persona-chat/[personaId]",
     methods: ["POST"],
     blocker: "telegram-bot-engine",
-    sessions: 2,
+    sessions: 1,
     complexity: "large",
     notes:
-      "Per-persona DM webhook. Needs personality-mode overlay + content-surfacing handlers.",
-    prereqs: ["@/lib/content/telegram-commands (full)"],
+      "Per-persona DM webhook. Session 1 libs now ported (platform-brief, personality modes + dispatcher, outreach-drafts). This session ports the 1313-line route itself.",
+    prereqs: [
+      "@/lib/content/platform-brief ✓",
+      "@/lib/telegram/commands (full dispatcher) ✓",
+      "@/lib/content/outreach-drafts ✓",
+    ],
   },
 
   // ── Permanent legacy ───────────────────────────────────────
