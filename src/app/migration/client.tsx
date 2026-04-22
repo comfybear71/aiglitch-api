@@ -203,24 +203,29 @@ export default function MigrationClient() {
   const [tab, setTab] = useState<"status" | "test" | "logs">("status");
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [statusErr, setStatusErr] = useState<string | null>(null);
+  const [needsLogin, setNeedsLogin] = useState(false);
+
+  const loadStatus = async () => {
+    try {
+      const res = await fetch("/api/admin/migration/status");
+      if (res.status === 401) {
+        setNeedsLogin(true);
+        setStatusErr(null);
+        return;
+      }
+      if (!res.ok) {
+        setStatusErr(`HTTP ${res.status}`);
+        return;
+      }
+      setNeedsLogin(false);
+      setStatus((await res.json()) as StatusResponse);
+    } catch (err) {
+      setStatusErr(err instanceof Error ? err.message : String(err));
+    }
+  };
 
   useEffect(() => {
-    (async () => {
-      try {
-        const res = await fetch("/api/admin/migration/status");
-        if (res.status === 401) {
-          setStatusErr("Not logged in as admin.");
-          return;
-        }
-        if (!res.ok) {
-          setStatusErr(`HTTP ${res.status}`);
-          return;
-        }
-        setStatus((await res.json()) as StatusResponse);
-      } catch (err) {
-        setStatusErr(err instanceof Error ? err.message : String(err));
-      }
-    })();
+    void loadStatus();
   }, []);
 
   return (
@@ -243,7 +248,9 @@ export default function MigrationClient() {
         </button>
       </div>
 
-      {statusErr ? (
+      {needsLogin ? (
+        <LoginPrompt onSuccess={loadStatus} />
+      ) : statusErr ? (
         <div style={{ ...styles.card, borderColor: "#fecaca", background: "#fef2f2" }}>
           <strong>Couldn&apos;t load status:</strong> {statusErr}
         </div>
@@ -257,6 +264,67 @@ export default function MigrationClient() {
         <div style={styles.card}>Logs tab ships in session 3.</div>
       )}
     </main>
+  );
+}
+
+// ── Admin login prompt ────────────────────────────────────────────
+
+function LoginPrompt({ onSuccess }: { onSuccess: () => void | Promise<void> }) {
+  const [password, setPassword] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmitting(true);
+    setErr(null);
+    try {
+      const res = await fetch("/api/auth/admin", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+      if (!res.ok) {
+        setErr("Invalid credentials");
+        setSubmitting(false);
+        return;
+      }
+      setPassword("");
+      await onSuccess();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div style={{ ...styles.card, maxWidth: 400 }}>
+      <h2 style={{ marginTop: 0, fontSize: 18 }}>Admin login required</h2>
+      <p style={{ color: "#6b7280", fontSize: 13, marginTop: 0 }}>
+        Enter the admin password to access the dashboard. Session lasts 7 days.
+      </p>
+      <form onSubmit={submit}>
+        <input
+          type="password"
+          autoFocus
+          placeholder="Admin password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          style={{ ...styles.input, marginBottom: 8 }}
+        />
+        {err && (
+          <div style={{ color: "#ef4444", fontSize: 12, marginBottom: 8 }}>{err}</div>
+        )}
+        <button
+          type="submit"
+          style={styles.btn("primary")}
+          disabled={submitting || !password}
+        >
+          {submitting ? "Signing in…" : "Sign in"}
+        </button>
+      </form>
+    </div>
   );
 }
 
