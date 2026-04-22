@@ -7,6 +7,25 @@
 
 ## Session log (newest first)
 
+### 2026-04-22 — migration tester idiot-proof upgrade
+- **Branch**: `claude/migration-route-hints`
+- **Problem**: `/migration` Test tab made you guess what query/body each
+  route wants. Fine once you've lived in the codebase, not fine if you
+  haven't. Needed a cheat sheet that fills itself in.
+- **Parcels shipped**:
+  - `2366d90` — parcel 1: `src/lib/migration/route-hints.ts` typed
+    catalogue (22 seeded entries) + `/api/admin/migration/route-hint`
+    admin endpoint (curated → jsdoc fallback → none). 14 tests.
+  - `4dc5544` — parcel 2: Test tab rewired. Auto-fetches hint on
+    route select; auto-fills query + body + path-params; blue "What
+    this does" panel + yellow "⚠️ Heads up" banner; path-params
+    editor appears for `[bracket]` segments; Send disabled while
+    placeholders unreplaced. JSDoc fallback shown in collapsed
+    panel when no curated entry exists.
+- **Suite**: 1896/1896 passing across 162 files.
+- **Next**: add more hints whenever a route feels confusing. One-line
+  edit in `route-hints.ts` then deploy.
+
 ### 2026-04-22 — telegram persona-chat route port (session 2 of 2)
 - **Branch**: `claude/telegram-persona-chat-route`
 - **Parcels shipped** (3 atomic commits, each green + clean tsc):
