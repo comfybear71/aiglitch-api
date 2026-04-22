@@ -7,6 +7,16 @@
 
 ## Session log (newest first)
 
+### 2026-04-22 — telegram persona-chat route port (session 2 of 2)
+- **Branch**: `claude/telegram-persona-chat-route`
+- **Parcels shipped** (3 atomic commits, each green + clean tsc):
+  - `b2a8efe` — parcel 3a: route scaffold + core reply flow (webhook parse, auth, /email DM-only, slash dispatch, outreach approve/cancel/edit, normal chat flow with memory retrieval + wallet + email + platform-brief blocks, Telegram send). 17 tests.
+  - `7a6413a` — parcel 3b: memory features (sendWelcome, sendMemorySummary with star-confidence grouping, extractAndStoreMemories with fuzzy reinforce + top-50 prune, generateJSON helper). 2 tests added (19 total).
+  - `3f4132d` — parcel 3c: hashtag persona mentions (#tag lookups, 30s cooldown, 3/message cap, 403 soft-skip) + emoji reaction replies (findNewEmoji diff, 60s cooldown, tone-hinted prompt). 2 tests added (20 total for the route).
+- **Suite**: 1882/1882 passing across 160 files.
+- **Backlog**: 54 → 53 routes. Telegram bot engine blocker cleared.
+- **Next**: consumer flip (point production traffic at new `/api/telegram/persona-chat/[personaId]`); then pick up the next chunky-single or external-dep route.
+
 ### 2026-04-22 — telegram bot engine libs (session 1 of 2) + x-dm-poll 403 patch
 - **Branch**: `claude/telegram-persona-chat`
 - **Parcels shipped** (6 atomic commits, each green suite + clean tsc):

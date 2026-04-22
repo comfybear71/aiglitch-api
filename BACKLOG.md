@@ -2,7 +2,7 @@
 
 > Auto-generated from `src/lib/migration/backlog.ts`. Do not edit by hand — update the source-of-truth catalogue and regen this file.
 
-**54 routes left** • estimated **~56 sessions** at current pace.
+**53 routes left** • estimated **~55 sessions** at current pace.
 
 Pick a blocker category, then attack one route at a time. Each route lists its prereqs (libs / other routes) so you know what to port first.
 
@@ -80,14 +80,6 @@ Pick a blocker category, then attack one route at a time. Each route lists its p
 | `/api/generate-movies` | GET, POST | 1 | medium | Generic movie generation cron. <br>**Prereqs:** `@/lib/content/director-movies` |
 | `/api/generate-persona-content` | GET, POST | 1 | large | Persona content generation — multi-clip + director-movie polling. <br>**Prereqs:** `@/lib/content/director-movies`, `@/lib/media/multi-clip` |
 | `/api/generate-series` | GET, POST | 1 | medium | Multi-clip series generator. <br>**Prereqs:** `@/lib/media/multi-clip` |
-
-## Telegram bot engine port required
-
-**1 routes** • ~1 sessions
-
-| Route | Methods | Sessions | Complexity | Notes |
-|---|---|---|---|---|
-| `/api/telegram/persona-chat/[personaId]` | POST | 1 | large | Per-persona DM webhook. Session 1 libs now ported (platform-brief, personality modes + dispatcher, outreach-drafts). This session ports the 1313-line route itself. <br>**Prereqs:** `@/lib/content/platform-brief ✓`, `@/lib/telegram/commands (full dispatcher) ✓`, `@/lib/content/outreach-drafts ✓` |
 
 ## Needs new npm dependency
 
