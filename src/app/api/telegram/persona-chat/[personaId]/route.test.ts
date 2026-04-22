@@ -144,7 +144,36 @@ describe("POST /api/telegram/persona-chat/[personaId] — webhook parse", () => 
 });
 
 describe("POST — /start and /memories shortcuts", () => {
-  it("/start invokes sendWelcome stub and early-returns", async () => {
+  it("/start sends welcome when persona exists", async () => {
+    const { sqlFn } = fakeSql((sql) =>
+      sql.includes("SELECT p.display_name, p.avatar_emoji")
+        ? [
+            {
+              display_name: "Grok",
+              avatar_emoji: "🤖",
+              bio: "xAI persona",
+              meatbag_name: "Stuart",
+              bot_token: "bot-abc",
+            },
+          ]
+        : [],
+    );
+    vi.mocked(getDb).mockReturnValue(sqlFn as never);
+
+    const res = await POST(
+      makeRequest({
+        message: { chat: { id: 42 }, text: "/start", message_id: 1 },
+      }),
+      PARAMS,
+    );
+    expect(res.status).toBe(200);
+    const send = fetchCalls.find((c) => c.url.includes("sendMessage"));
+    expect(send).toBeTruthy();
+    expect((send!.body as { text: string }).text).toContain("Grok");
+    expect((send!.body as { text: string }).text).toContain("/help");
+  });
+
+  it("/start silently 200s when persona doesn't exist", async () => {
     vi.mocked(getDb).mockReturnValue(fakeSql(() => []).sqlFn as never);
     const res = await POST(
       makeRequest({
@@ -153,10 +182,25 @@ describe("POST — /start and /memories shortcuts", () => {
       PARAMS,
     );
     expect(res.status).toBe(200);
+    expect(fetchCalls.length).toBe(0);
   });
 
-  it("/memories invokes sendMemorySummary stub and early-returns", async () => {
-    vi.mocked(getDb).mockReturnValue(fakeSql(() => []).sqlFn as never);
+  it("/memories — empty memories produces 'don't have any memories yet' reply", async () => {
+    const { sqlFn } = fakeSql((sql) => {
+      if (sql.includes("SELECT p.display_name, p.meatbag_name")) {
+        return [
+          {
+            display_name: "Grok",
+            meatbag_name: "Stuart",
+            bot_token: "bot-abc",
+          },
+        ];
+      }
+      if (sql.includes("FROM persona_memories")) return [];
+      return [];
+    });
+    vi.mocked(getDb).mockReturnValue(sqlFn as never);
+
     const res = await POST(
       makeRequest({
         message: { chat: { id: 42 }, text: "/memories", message_id: 1 },
@@ -164,6 +208,57 @@ describe("POST — /start and /memories shortcuts", () => {
       PARAMS,
     );
     expect(res.status).toBe(200);
+    const send = fetchCalls.find((c) => c.url.includes("sendMessage"));
+    expect((send!.body as { text: string }).text).toContain(
+      "don't have any memories",
+    );
+  });
+
+  it("/memories — renders memories grouped by category with star confidence", async () => {
+    const { sqlFn } = fakeSql((sql) => {
+      if (sql.includes("SELECT p.display_name, p.meatbag_name")) {
+        return [
+          {
+            display_name: "Grok",
+            meatbag_name: "Stuart",
+            bot_token: "bot-abc",
+          },
+        ];
+      }
+      if (sql.includes("FROM persona_memories")) {
+        return [
+          {
+            memory_type: "fact",
+            category: "hobbies",
+            content: "loves hiking",
+            confidence: 0.95,
+            times_reinforced: 4,
+          },
+          {
+            memory_type: "preference",
+            category: "food",
+            content: "prefers ramen",
+            confidence: 0.7,
+            times_reinforced: 1,
+          },
+        ];
+      }
+      return [];
+    });
+    vi.mocked(getDb).mockReturnValue(sqlFn as never);
+
+    await POST(
+      makeRequest({
+        message: { chat: { id: 42 }, text: "/memories", message_id: 1 },
+      }),
+      PARAMS,
+    );
+    const text = (fetchCalls[0]!.body as { text: string }).text;
+    expect(text).toContain("HOBBIES");
+    expect(text).toContain("★ loves hiking");
+    expect(text).toContain("FOOD");
+    expect(text).toContain("☆ prefers ramen");
+    expect(text).toContain("Total memories: 2");
   });
 });
 

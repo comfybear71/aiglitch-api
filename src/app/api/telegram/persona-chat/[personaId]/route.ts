@@ -108,29 +108,302 @@ async function safeGenerate(
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// Memory / hashtag / reaction stubs — filled in parcels 3b + 3c
+// Memory features (parcel 3b)
+// ══════════════════════════════════════════════════════════════════════════
+//
+// Memory types:
+//   fact | preference | emotion | story | correction | style | about_persona
+//
+// Categories: meatbag_info, work, hobbies, family, food, music, games,
+//   health, mood, relationship, inside_joke, pet_peeve, dream, goal,
+//   opinion, general.
+//
+// After each exchange, extractAndStoreMemories runs asynchronously (does
+// not hold up the chat reply) and either reinforces an existing memory
+// (fuzzy content match) or inserts a new one. When the persona crosses
+// 50 memories, low-confidence oldest entries are pruned.
 // ══════════════════════════════════════════════════════════════════════════
 
-async function sendWelcome(_personaId: string, _chatId: number): Promise<void> {
-  // TODO (parcel 3b)
+interface ExtractedMemory {
+  memory_type: string;
+  category: string;
+  content: string;
+  confidence: number;
 }
 
+/** JSON-out wrapper around generateText. Returns null on any failure. */
+async function generateJSON<T>(
+  prompt: string,
+  maxTokens: number,
+): Promise<T | null> {
+  try {
+    const text = await generateText({
+      userPrompt: prompt,
+      taskType: "telegram_message",
+      maxTokens,
+    });
+    if (!text) return null;
+    const match = text.match(/\[[\s\S]*\]|\{[\s\S]*\}/);
+    if (!match) return null;
+    return JSON.parse(match[0]) as T;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Send a welcome message when the user first runs `/start`. Loads only
+ * the minimum columns needed so `/start` can work before the main row
+ * lookup runs in the POST handler.
+ */
+async function sendWelcome(personaId: string, chatId: number): Promise<void> {
+  const sql = getDb();
+  const rows = (await sql`
+    SELECT p.display_name, p.avatar_emoji, p.bio, p.meatbag_name, b.bot_token
+    FROM ai_personas p
+    JOIN persona_telegram_bots b ON b.persona_id = p.id AND b.is_active = TRUE
+    WHERE p.id = ${personaId}
+    LIMIT 1
+  `) as unknown as {
+    display_name: string;
+    avatar_emoji: string;
+    bio: string;
+    meatbag_name: string | null;
+    bot_token: string;
+  }[];
+  const persona = rows[0];
+  if (!persona) return;
+
+  const meatbagName = persona.meatbag_name ?? "meatbag";
+  const welcome = `${persona.avatar_emoji} Hey ${meatbagName}! It's me, ${persona.display_name}!
+
+${persona.bio}
+
+I'm your AI bestie from AIG!itch. I learn from our conversations — the more we chat, the better I know you! Just send me a message and let's talk. 💜
+
+✨ New here? Try these to see what I can do:
+/help — full command menu
+/nft — browse the NFT marketplace
+/channel — browse all 19 video channels
+/avatar — meet other personas
+/modes — change my vibe (serious, fun, unfiltered, etc.)`;
+
+  try {
+    await fetch(`${TELEGRAM_API}/bot${persona.bot_token}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text: welcome }),
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch (err) {
+    console.error("[persona-chat] Welcome message failed:", err);
+  }
+}
+
+/**
+ * `/memories` — transparent ML summary of what the persona has learned
+ * about its meatbag. Grouped by category, starred by confidence.
+ */
 async function sendMemorySummary(
-  _personaId: string,
-  _chatId: number,
+  personaId: string,
+  chatId: number,
 ): Promise<void> {
-  // TODO (parcel 3b)
+  const sql = getDb();
+
+  const personaRows = (await sql`
+    SELECT p.display_name, p.meatbag_name, b.bot_token
+    FROM ai_personas p
+    JOIN persona_telegram_bots b ON b.persona_id = p.id AND b.is_active = TRUE
+    WHERE p.id = ${personaId}
+    LIMIT 1
+  `) as unknown as {
+    display_name: string;
+    meatbag_name: string | null;
+    bot_token: string;
+  }[];
+  const persona = personaRows[0];
+  if (!persona) return;
+
+  const memories = (await sql`
+    SELECT memory_type, category, content, confidence, times_reinforced
+    FROM persona_memories
+    WHERE persona_id = ${personaId}
+    ORDER BY confidence DESC, times_reinforced DESC
+    LIMIT 30
+  `) as unknown as {
+    memory_type: string;
+    category: string;
+    content: string;
+    confidence: number;
+    times_reinforced: number;
+  }[];
+
+  const meatbagName = persona.meatbag_name ?? "meatbag";
+  let text: string;
+
+  if (memories.length === 0) {
+    text = `🧠 I don't have any memories about you yet, ${meatbagName}! We need to chat more so I can get to know you. Tell me something about yourself!`;
+  } else {
+    const grouped: Record<string, string[]> = {};
+    for (const m of memories) {
+      const key = m.category;
+      if (!grouped[key]) grouped[key] = [];
+      const stars =
+        m.confidence >= 0.9 ? "★" : m.confidence >= 0.7 ? "☆" : "○";
+      grouped[key]!.push(`${stars} ${m.content}`);
+    }
+    text = `🧠 What I know about you, ${meatbagName}:\n\n`;
+    for (const [category, items] of Object.entries(grouped)) {
+      text += `📂 ${category.replace(/_/g, " ").toUpperCase()}\n`;
+      for (const item of items) text += `  ${item}\n`;
+      text += "\n";
+    }
+    text += `Total memories: ${memories.length}\n★ = very confident  ☆ = confident  ○ = uncertain`;
+  }
+
+  try {
+    await fetch(`${TELEGRAM_API}/bot${persona.bot_token}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text }),
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch (err) {
+    console.error("[persona-chat] Memory summary failed:", err);
+  }
 }
 
+/**
+ * Extract new learnings from the latest exchange and store/reinforce
+ * them in `persona_memories`. Runs asynchronously so it never blocks
+ * the chat response.
+ */
 async function extractAndStoreMemories(
-  _personaId: string,
-  _meatbagName: string,
-  _humanMessage: string,
-  _aiResponse: string,
-  _existingMemories: { memory_type: string; category: string; content: string }[],
+  personaId: string,
+  meatbagName: string,
+  humanMessage: string,
+  aiResponse: string,
+  existingMemories: {
+    memory_type: string;
+    category: string;
+    content: string;
+  }[],
 ): Promise<void> {
-  // TODO (parcel 3b)
+  if (humanMessage.length < 10) return;
+
+  const existingMemoryList =
+    existingMemories.length > 0
+      ? `\nExisting memories (don't duplicate these, but you can update/strengthen them):\n${existingMemories
+          .map(
+            (m) => `- [${m.memory_type}/${m.category}] ${m.content}`,
+          )
+          .join("\n")}`
+      : "";
+
+  const prompt = `You are an ML memory extraction system for an AI persona. Analyze this conversation exchange and extract NEW information about the human "${meatbagName}".
+
+CONVERSATION:
+${meatbagName}: ${humanMessage}
+AI Response: ${aiResponse}
+${existingMemoryList}
+
+EXTRACT any new facts, preferences, emotions, stories, corrections, or communication style observations. Only extract GENUINE new information — not trivial greetings.
+
+Types:
+- "fact": concrete info (name, job, location, pets, hobbies, family)
+- "preference": likes/dislikes, opinions, tastes
+- "emotion": emotional state, triggers, moods
+- "story": personal anecdotes, experiences shared
+- "correction": the human corrected a misunderstanding
+- "style": communication style (humor type, formality level, emoji usage)
+- "about_persona": things the human told the AI about itself
+
+Categories: meatbag_info, work, hobbies, family, food, music, games, health, mood, relationship, inside_joke, pet_peeve, dream, goal, opinion, general
+
+Return ONLY a JSON array (can be empty if nothing new to learn):
+[{"memory_type": "fact", "category": "hobbies", "content": "${meatbagName} enjoys hiking on weekends", "confidence": 0.9}]
+
+Be SELECTIVE — only extract meaningful, lasting information. Confidence scale:
+- 0.9-1.0: Explicitly stated fact ("I work as a nurse")
+- 0.7-0.8: Strongly implied ("ugh, another Monday" → might dislike their job)
+- 0.5-0.6: Loosely inferred (tone-based, uncertain)
+
+Output ONLY the JSON array. If nothing new, output: []`;
+
+  const result = await generateJSON<ExtractedMemory[]>(prompt, 800);
+  if (!result || !Array.isArray(result) || result.length === 0) return;
+
+  const sql = getDb();
+
+  for (const mem of result) {
+    if (!mem.content || !mem.memory_type) continue;
+
+    const existingRows = (await sql`
+      SELECT id, content, confidence, times_reinforced
+      FROM persona_memories
+      WHERE persona_id = ${personaId}
+        AND memory_type = ${mem.memory_type}
+        AND category = ${mem.category || "general"}
+        AND (
+          content ILIKE ${"%" + mem.content.slice(0, 30) + "%"}
+          OR content ILIKE ${"%" + mem.content.split(" ").slice(0, 4).join(" ") + "%"}
+        )
+      LIMIT 1
+    `) as unknown as {
+      id: string;
+      content: string;
+      confidence: number;
+      times_reinforced: number;
+    }[];
+    const existing = existingRows[0];
+
+    if (existing) {
+      // Reinforce: bump confidence (clamped to 1.0), keep the more detailed content.
+      const newConfidence = Math.min(1.0, existing.confidence + 0.05);
+      const newContent =
+        mem.content.length > existing.content.length
+          ? mem.content
+          : existing.content;
+      await sql`
+        UPDATE persona_memories
+        SET confidence = ${newConfidence},
+            times_reinforced = times_reinforced + 1,
+            content = ${newContent},
+            updated_at = NOW()
+        WHERE id = ${existing.id}
+      `;
+    } else {
+      await sql`
+        INSERT INTO persona_memories (id, persona_id, memory_type, category, content, confidence, source)
+        VALUES (${randomUUID()}, ${personaId}, ${mem.memory_type}, ${mem.category || "general"},
+                ${mem.content}, ${Math.max(0.5, Math.min(1.0, mem.confidence || 0.8))}, ${"conversation"})
+      `;
+    }
+  }
+
+  // Prune low-confidence old memories if this persona has > 50.
+  const countRows = (await sql`
+    SELECT COUNT(*)::int as cnt FROM persona_memories WHERE persona_id = ${personaId}
+  `) as unknown as { cnt: number }[];
+  const total = countRows[0]?.cnt ?? 0;
+
+  if (total > 50) {
+    await sql`
+      DELETE FROM persona_memories
+      WHERE persona_id = ${personaId}
+        AND id NOT IN (
+          SELECT id FROM persona_memories
+          WHERE persona_id = ${personaId}
+          ORDER BY confidence DESC, times_reinforced DESC, updated_at DESC
+          LIMIT 50
+        )
+    `;
+  }
 }
+
+// ══════════════════════════════════════════════════════════════════════════
+// Hashtag / reaction stubs — filled in parcel 3c
+// ══════════════════════════════════════════════════════════════════════════
 
 async function handleHashtagMentions(
   _sourcePersonaId: string,
