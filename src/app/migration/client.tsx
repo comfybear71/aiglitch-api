@@ -56,6 +56,47 @@ interface TestResponse {
   log_id: string | null;
 }
 
+interface LogRow {
+  id: string;
+  method: string;
+  path: string;
+  status: number | null;
+  duration_ms: number | null;
+  request_body: unknown;
+  response_body: string | null;
+  error: string | null;
+  session_id: string | null;
+  created_at: string;
+}
+
+interface LogResponse {
+  logs: LogRow[];
+  paths: string[];
+  pagination: { limit: number; offset: number; returned: number };
+}
+
+interface MetricRow {
+  path: string;
+  methods: string[];
+  total: number;
+  ok: number;
+  errors: number;
+  error_rate: number;
+  p50_ms: number | null;
+  p95_ms: number | null;
+  last_at: string;
+}
+
+interface MetricsResponse {
+  summary: {
+    window: "24h" | "7d" | "all";
+    endpoint_count: number;
+    total_calls: number;
+    total_errors: number;
+  };
+  metrics: MetricRow[];
+}
+
 // ── Styles — inline to match the existing /status page vibe ───────
 
 const styles = {
@@ -200,7 +241,9 @@ const BLOCKER_COLOUR: Record<Blocker, string> = {
 // ── Main component ────────────────────────────────────────────────
 
 export default function MigrationClient() {
-  const [tab, setTab] = useState<"status" | "test" | "logs">("status");
+  const [tab, setTab] = useState<"status" | "test" | "logs" | "metrics">(
+    "status",
+  );
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [statusErr, setStatusErr] = useState<string | null>(null);
   const [needsLogin, setNeedsLogin] = useState(false);
@@ -244,7 +287,13 @@ export default function MigrationClient() {
           Test
         </button>
         <button style={styles.tab(tab === "logs")} onClick={() => setTab("logs")}>
-          Logs (coming soon)
+          Logs
+        </button>
+        <button
+          style={styles.tab(tab === "metrics")}
+          onClick={() => setTab("metrics")}
+        >
+          Metrics
         </button>
       </div>
 
@@ -260,8 +309,10 @@ export default function MigrationClient() {
         <StatusTab status={status} />
       ) : tab === "test" ? (
         <TestTab status={status} />
+      ) : tab === "logs" ? (
+        <LogsTab />
       ) : (
-        <div style={styles.card}>Logs tab ships in session 3.</div>
+        <MetricsTab />
       )}
     </main>
   );
@@ -694,6 +745,393 @@ function TestTab({ status }: { status: StatusResponse }) {
           </pre>
         </div>
       )}
+    </>
+  );
+}
+
+// ── Logs tab ──────────────────────────────────────────────────────
+
+function LogsTab() {
+  const [data, setData] = useState<LogResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [pathFilter, setPathFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"any" | "ok" | "error">("any");
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const load = async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const params = new URLSearchParams();
+      if (pathFilter) params.set("path", pathFilter);
+      if (statusFilter !== "any") params.set("status", statusFilter);
+      params.set("limit", "100");
+      const res = await fetch(`/api/admin/migration/log?${params.toString()}`);
+      if (!res.ok) {
+        setErr(`HTTP ${res.status}`);
+        return;
+      }
+      setData((await res.json()) as LogResponse);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathFilter, statusFilter]);
+
+  const rerun = async (row: LogRow) => {
+    setBusyId(row.id);
+    try {
+      await fetch("/api/admin/migration/test", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          path: row.path,
+          method: row.method,
+          body: row.request_body ?? undefined,
+        }),
+      });
+      await load();
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const clearAll = async () => {
+    if (!confirm("Delete all request-log rows?")) return;
+    await fetch("/api/admin/migration/log", { method: "DELETE" });
+    await load();
+  };
+
+  const lastFailedId = useMemo(() => {
+    if (!data) return null;
+    const failed = data.logs.find(
+      (r) => r.error || (r.status != null && r.status >= 400),
+    );
+    return failed?.id ?? null;
+  }, [data]);
+
+  const rerunLastFailed = async () => {
+    if (!data) return;
+    const failed = data.logs.find(
+      (r) => r.error || (r.status != null && r.status >= 400),
+    );
+    if (failed) await rerun(failed);
+  };
+
+  return (
+    <>
+      <div style={styles.card}>
+        <div style={styles.row}>
+          <div style={{ flex: 2 }}>
+            <label style={styles.label}>Path filter</label>
+            <select
+              style={{ ...styles.select, width: "100%" }}
+              value={pathFilter}
+              onChange={(e) => setPathFilter(e.target.value)}
+            >
+              <option value="">All paths</option>
+              {data?.paths.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div style={{ flex: 1 }}>
+            <label style={styles.label}>Status</label>
+            <select
+              style={{ ...styles.select, width: "100%" }}
+              value={statusFilter}
+              onChange={(e) =>
+                setStatusFilter(e.target.value as "any" | "ok" | "error")
+              }
+            >
+              <option value="any">All</option>
+              <option value="ok">2xx only</option>
+              <option value="error">Errors only</option>
+            </select>
+          </div>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
+            <button style={styles.btn()} onClick={load} disabled={loading}>
+              {loading ? "…" : "Refresh"}
+            </button>
+            <button
+              style={styles.btn()}
+              onClick={rerunLastFailed}
+              disabled={!lastFailedId}
+              title="Re-run the most recent failed request"
+            >
+              Rerun last failed
+            </button>
+            <button
+              style={{ ...styles.btn(), borderColor: "#fecaca", color: "#b91c1c" }}
+              onClick={clearAll}
+            >
+              Clear all
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {err && (
+        <div
+          style={{ ...styles.card, borderColor: "#fecaca", background: "#fef2f2" }}
+        >
+          <strong>Error:</strong> {err}
+        </div>
+      )}
+
+      {data && data.logs.length === 0 ? (
+        <div style={styles.card}>
+          <p style={{ margin: 0, color: "#6b7280" }}>
+            No requests logged yet. Head to the Test tab and fire one.
+          </p>
+        </div>
+      ) : data ? (
+        <div style={styles.card}>
+          <table style={styles.table}>
+            <thead>
+              <tr>
+                <th style={styles.th}>When</th>
+                <th style={styles.th}>Method</th>
+                <th style={styles.th}>Path</th>
+                <th style={styles.th}>Status</th>
+                <th style={styles.th}>Duration</th>
+                <th style={styles.th}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.logs.map((row) => (
+                <>
+                  <tr
+                    key={row.id}
+                    style={{ cursor: "pointer" }}
+                    onClick={() => setExpanded(expanded === row.id ? null : row.id)}
+                  >
+                    <td style={styles.td}>
+                      {new Date(row.created_at).toLocaleString()}
+                    </td>
+                    <td style={styles.td}>{row.method}</td>
+                    <td style={styles.td}>
+                      <code style={styles.code}>{row.path}</code>
+                    </td>
+                    <td style={styles.td}>
+                      <span
+                        style={{
+                          color:
+                            row.error || (row.status != null && row.status >= 400)
+                              ? "#ef4444"
+                              : row.status != null &&
+                                  row.status >= 200 &&
+                                  row.status < 300
+                                ? "#22c55e"
+                                : "#6b7280",
+                          fontWeight: 600,
+                        }}
+                      >
+                        {row.status ?? (row.error ? "ERR" : "—")}
+                      </span>
+                    </td>
+                    <td style={styles.td}>
+                      {row.duration_ms != null ? `${row.duration_ms}ms` : "—"}
+                    </td>
+                    <td style={styles.td}>
+                      <button
+                        style={styles.btn()}
+                        disabled={busyId === row.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void rerun(row);
+                        }}
+                      >
+                        {busyId === row.id ? "…" : "Rerun"}
+                      </button>
+                    </td>
+                  </tr>
+                  {expanded === row.id && (
+                    <tr key={`${row.id}-detail`}>
+                      <td colSpan={6} style={{ ...styles.td, background: "#f9fafb" }}>
+                        <div style={{ display: "flex", gap: 12 }}>
+                          <div style={{ flex: 1 }}>
+                            <label style={styles.label}>Request body</label>
+                            <pre style={{ ...styles.responseBox, maxHeight: 200 }}>
+                              {row.request_body
+                                ? JSON.stringify(row.request_body, null, 2)
+                                : "(empty)"}
+                            </pre>
+                          </div>
+                          <div style={{ flex: 1 }}>
+                            <label style={styles.label}>Response body</label>
+                            <pre style={{ ...styles.responseBox, maxHeight: 200 }}>
+                              {row.error
+                                ? `Error: ${row.error}`
+                                : row.response_body ?? "(empty)"}
+                            </pre>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ fontSize: 12, color: "#6b7280", marginTop: 8 }}>
+            Showing {data.logs.length} rows (cap 100). Filter above to narrow.
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+// ── Metrics tab ───────────────────────────────────────────────────
+
+function MetricsTab() {
+  const [data, setData] = useState<MetricsResponse | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [windowSel, setWindowSel] = useState<"24h" | "7d" | "all">("24h");
+
+  const load = async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const res = await fetch(`/api/admin/migration/metrics?since=${windowSel}`);
+      if (!res.ok) {
+        setErr(`HTTP ${res.status}`);
+        return;
+      }
+      setData((await res.json()) as MetricsResponse);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [windowSel]);
+
+  return (
+    <>
+      <div style={styles.card}>
+        <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
+          <label style={{ ...styles.label, marginBottom: 0 }}>Window:</label>
+          {(["24h", "7d", "all"] as const).map((w) => (
+            <button
+              key={w}
+              style={styles.btn(windowSel === w ? "primary" : "ghost")}
+              onClick={() => setWindowSel(w)}
+            >
+              {w}
+            </button>
+          ))}
+          <div style={{ flex: 1 }} />
+          <button style={styles.btn()} onClick={load} disabled={loading}>
+            {loading ? "…" : "Refresh"}
+          </button>
+        </div>
+        {data && (
+          <div style={{ display: "flex", gap: 24, marginTop: 12, flexWrap: "wrap" }}>
+            <div style={styles.stat}>
+              <span style={styles.statNum}>{data.summary.endpoint_count}</span>
+              <span>endpoints</span>
+            </div>
+            <div style={styles.stat}>
+              <span style={styles.statNum}>{data.summary.total_calls}</span>
+              <span>total calls</span>
+            </div>
+            <div style={styles.stat}>
+              <span style={{ ...styles.statNum, color: data.summary.total_errors > 0 ? "#ef4444" : "#22c55e" }}>
+                {data.summary.total_errors}
+              </span>
+              <span>errors</span>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {err && (
+        <div style={{ ...styles.card, borderColor: "#fecaca", background: "#fef2f2" }}>
+          <strong>Error:</strong> {err}
+        </div>
+      )}
+
+      {data && data.metrics.length === 0 ? (
+        <div style={styles.card}>
+          <p style={{ margin: 0, color: "#6b7280" }}>
+            No metrics yet for this window. Fire some requests from the Test tab.
+          </p>
+        </div>
+      ) : data ? (
+        <div style={styles.card}>
+          <table style={styles.table}>
+            <thead>
+              <tr>
+                <th style={styles.th}>Path</th>
+                <th style={styles.th}>Methods</th>
+                <th style={styles.th}>Total</th>
+                <th style={styles.th}>Errors</th>
+                <th style={styles.th}>Error %</th>
+                <th style={styles.th}>p50</th>
+                <th style={styles.th}>p95</th>
+                <th style={styles.th}>Last call</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.metrics.map((m) => (
+                <tr key={m.path}>
+                  <td style={styles.td}>
+                    <code style={styles.code}>{m.path}</code>
+                  </td>
+                  <td style={styles.td}>{m.methods.join(", ")}</td>
+                  <td style={styles.td}>{m.total}</td>
+                  <td style={styles.td}>
+                    <span style={{ color: m.errors > 0 ? "#ef4444" : "#6b7280" }}>
+                      {m.errors}
+                    </span>
+                  </td>
+                  <td style={styles.td}>
+                    <span
+                      style={{
+                        color:
+                          m.error_rate === 0
+                            ? "#22c55e"
+                            : m.error_rate < 5
+                              ? "#eab308"
+                              : "#ef4444",
+                        fontWeight: 600,
+                      }}
+                    >
+                      {m.error_rate}%
+                    </span>
+                  </td>
+                  <td style={styles.td}>
+                    {m.p50_ms != null ? `${m.p50_ms}ms` : "—"}
+                  </td>
+                  <td style={styles.td}>
+                    {m.p95_ms != null ? `${m.p95_ms}ms` : "—"}
+                  </td>
+                  <td style={styles.td}>
+                    {new Date(m.last_at).toLocaleString()}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
     </>
   );
 }
