@@ -103,11 +103,48 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/admin/blob-upload/upload` POST | tested | session 84 | Client-upload token handler specialized for large premiere/news videos. Unlike `/api/admin/media/upload` (10+ content types + random suffix), this one is locked to 4 video types + `addRandomSuffix:false` so the clean folder path survives for `detectGenreFromPath` to infer genre from `/premiere/<genre>/`. 500 MB cap. JSON + Safari `__json` multipart fallback. |
 | `/api/admin/personas/set-bot-token` POST | tested | session 84 | Single-persona Telegram bot assignment. Mode A (no `bot_token` or empty string): flips `persona_telegram_bots.is_active` to FALSE. Mode B: validates token via Telegram `getMe` (bails BEFORE any DB write on invalid), registers webhook pointed at `{NEXT_PUBLIC_APP_URL}/api/telegram/persona-chat/{id}` with `message + message_reaction` updates (non-fatal if fails), DELETE + INSERT `persona_telegram_bots` row, then `registerTelegramCommands` for the slash-command menu. `bot_token` never in responses. Auto-creates the `persona_telegram_bots` table on first call. Companion to `/api/admin/telegram/re-register-bots` (bulk refresh). |
 | `/api/admin/sponsors/[id]/ads` GET + POST + PUT | tested | session 85 | Per-sponsor ads CRUD + AI prompt generation. GET default lists `sponsored_ads`; `?action=placements` joins `ad_campaigns` (brand-name matched) → `ad_impressions` → `posts` + `channels` for the "where is my brand placed" view (top 100). POST creates a draft row using `SPONSOR_PACKAGES` defaults (duration / glitch_cost / cash_equivalent / follow_ups / platforms / frequency / campaign_days) + caller overrides. PUT handles three modes: `action:"delete"`, `action:"generate"` (calls `buildSponsoredAdPrompt` + `generateText` + defensive JSON-from-text parse → `{video_prompt, caption, x_caption}`, flips status to `pending_review`), or default COALESCE update of status/video_url/post_ids/performance. Publishing (`status="published"`) deducts `glitch_cost` from `sponsors.glitch_balance` + bumps `total_spent`. Replaces legacy's `claude.generateJSON` with a `generateText` + `match(/\{...\}/)` inline parser. |
-| *(all other 140 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/admin/channels/generate-title` GET + POST | tested | session 86 | Channel title-card video generator. Two-phase submit/poll via `submitVideoJob` + `pollVideoJob` (5s / 9:16 / 720p). POST `{channel_id, channel_slug, title, style_prompt?, preview?}` — builds a cinematic title-card prompt that spells the title letter-by-letter and repeats the exact string multiple times to combat xAI's misspelling bias. `preview:true` returns the prompt without submitting. Happy path returns `{phase:"submitted", requestId}`. Sync xAI returns short-circuit through `persistTitleVideo`. GET `?id=&channel_id=&channel_slug=` polls the job; on done downloads video, persists to `channels/{slug}/title-{uuid}.mp4`, and UPDATEs `channels.title_video_url`. Deferred: `injectCampaignPlacement` (ad-campaigns lib), `ensureDbReady`. |
+| *(all other 139 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 86) — `/api/admin/channels/generate-title`
+
+**Branch:** `claude/phase-7-admin-batch-37`
+
+**Done:**
+- New `src/app/api/admin/channels/generate-title/route.ts` — two-phase xAI video generator for channel title-card animations.
+  - POST builds the title prompt with aggressive spelling reinforcement — the title is UPPERCASED, spelled letter-by-letter (`A-I- -N-E-W-S`), and repeated multiple times in the prompt because xAI video gen otherwise misspells the text. `style_prompt` overrides the default glowing-neon style.
+  - `preview:true` short-circuits to return the built prompt with no submit.
+  - Submit goes through `submitVideoJob` (5s / 9:16 / 720p). Sync xAI returns short-circuit to persist-and-done.
+  - GET polls via `pollVideoJob`. On done: download, persist to `channels/{slug}/title-{uuid}.mp4`, UPDATE `channels.title_video_url`. Moderation / expired / failed / pending each route to distinct statuses.
+- 17 new tests: POST auth / env guard / missing-fields / preview mode (verified letter-spelling + default style + no submit) / happy path (verified 5s 9:16 720p + prompt contains title + glowing-neon default) / style_prompt override / sync short-circuit / submit error; GET auth / three-field validation / env guard / pending / moderation / done with channel UPDATE / expired / poll exception / download failure.
+- Suite **1585/1585**, up from 1568.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (1585/1585)
+
+**Design choices:**
+- Extracted `buildTitlePrompt` + `persistTitleVideo` as module-scope helpers so the POST sync-path and GET done-path share them cleanly.
+- Letter-by-letter spelling preserved verbatim from legacy — this is product policy to fight xAI's misspelling bias, not AI infrastructure.
+- Two channel subroutes still pending because they depend on director-movies lib: `generate-content` (needs `generateDirectorScreenplay` + `submitDirectorFilm` + `pickDirector` + `DIRECTORS`) and likely `generate-promo`.
+
+**Deferrals vs. legacy:**
+- `injectCampaignPlacement` — ad-campaigns lib not ported.
+- `ensureDbReady` — schema assumed live.
+
+**Next batch options (pick one):**
+1. `channels/generate-promo` — sibling of `generate-title`, scope to confirm.
+2. `channels/flush` (~225 lines) — channel data cleanup utility; scope to confirm.
+3. `marketing/*` lib — un-defers 8+ routes. Multi-session.
+4. `director-movies` lib — multi-session. Unlocks channels/generate-content + 4 other routes.
+5. `elon-campaign` admin (~711).
+6. Phase 8 greenlight.
+
+---
 
 ### 2026-04-21 (session 85) — `/api/admin/sponsors/[id]/ads`
 
