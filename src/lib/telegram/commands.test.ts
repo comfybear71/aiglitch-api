@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@/lib/db", () => ({ getDb: vi.fn() }));
+
+import { getDb } from "@/lib/db";
 import {
+  getModeOverlay,
+  getPersonaMode,
+  PERSONALITY_MODES,
   registerTelegramCommands,
+  setPersonaMode,
   TELEGRAM_COMMANDS_GROUP,
   TELEGRAM_COMMANDS_PRIVATE,
 } from "./commands";
@@ -81,5 +89,88 @@ describe("registerTelegramCommands", () => {
     const result = await registerTelegramCommands("bot-fail");
     expect(result.ok).toBe(false);
     expect(result.error).toBe("network boom");
+  });
+});
+
+describe("personality modes", () => {
+  it("PERSONALITY_MODES has every expected mode with an overlay", () => {
+    const keys = ["default", "serious", "delusional", "brainiac", "whimsical", "fun", "unfiltered"];
+    for (const k of keys) {
+      expect(PERSONALITY_MODES[k as keyof typeof PERSONALITY_MODES]).toBeTruthy();
+    }
+    // Default mode has an empty overlay (no injection into system prompt)
+    expect(PERSONALITY_MODES.default.overlay).toBe("");
+    // Non-default modes have overlay text
+    expect(PERSONALITY_MODES.brainiac.overlay.length).toBeGreaterThan(20);
+  });
+
+  it("getModeOverlay returns the overlay string for a known mode", () => {
+    expect(getModeOverlay("default")).toBe("");
+    expect(getModeOverlay("serious")).toContain("SERIOUS MODE");
+  });
+
+  it("getPersonaMode returns stored mode when present", async () => {
+    const queries: string[] = [];
+    const sql = (strings: TemplateStringsArray) => {
+      const s = strings.join(" ");
+      queries.push(s);
+      if (s.includes("CREATE TABLE")) {
+        const p = Promise.resolve([]) as Promise<unknown[]> & { catch: (fn: (e: unknown) => void) => Promise<unknown[]> };
+        p.catch = () => p;
+        return p;
+      }
+      if (s.includes("SELECT mode")) return Promise.resolve([{ mode: "brainiac" }]);
+      return Promise.resolve([]);
+    };
+    vi.mocked(getDb).mockReturnValue(sql as never);
+
+    const mode = await getPersonaMode("persona-1", 42);
+    expect(mode).toBe("brainiac");
+  });
+
+  it("getPersonaMode falls back to default when no row", async () => {
+    const sql = (strings: TemplateStringsArray) => {
+      const s = strings.join(" ");
+      if (s.includes("CREATE TABLE")) {
+        const p = Promise.resolve([]) as Promise<unknown[]> & { catch: (fn: (e: unknown) => void) => Promise<unknown[]> };
+        p.catch = () => p;
+        return p;
+      }
+      return Promise.resolve([]);
+    };
+    vi.mocked(getDb).mockReturnValue(sql as never);
+
+    expect(await getPersonaMode("persona-1", 42)).toBe("default");
+  });
+
+  it("getPersonaMode returns default on DB error", async () => {
+    vi.mocked(getDb).mockReturnValue(
+      (() => {
+        throw new Error("db down");
+      }) as never,
+    );
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await getPersonaMode("persona-1", 42)).toBe("default");
+    spy.mockRestore();
+  });
+
+  it("setPersonaMode issues INSERT ... ON CONFLICT", async () => {
+    const queries: string[] = [];
+    const sql = (strings: TemplateStringsArray, ..._params: unknown[]) => {
+      const s = strings.join(" ");
+      queries.push(s);
+      if (s.includes("CREATE TABLE")) {
+        const p = Promise.resolve([]) as Promise<unknown[]> & { catch: (fn: (e: unknown) => void) => Promise<unknown[]> };
+        p.catch = () => p;
+        return p;
+      }
+      return Promise.resolve([]);
+    };
+    vi.mocked(getDb).mockReturnValue(sql as never);
+
+    await setPersonaMode("persona-1", 42, "unfiltered");
+    const insert = queries.find((q) => q.includes("INSERT INTO persona_chat_modes"));
+    expect(insert).toBeTruthy();
+    expect(insert).toContain("ON CONFLICT");
   });
 });
