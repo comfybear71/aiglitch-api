@@ -44,13 +44,15 @@ const ONE_DM = {
   ],
 };
 
-function makeFetch(responses: { ok: boolean; body: unknown }[]) {
+function makeFetch(
+  responses: { ok: boolean; body: unknown; status?: number }[],
+) {
   const queue = [...responses];
   return vi.fn().mockImplementation(() => {
     const next = queue.shift() ?? { ok: true, body: {} };
     return Promise.resolve({
       ok: next.ok,
-      status: next.ok ? 200 : 400,
+      status: next.status ?? (next.ok ? 200 : 400),
       json: () => Promise.resolve(next.body),
       text: () => Promise.resolve(JSON.stringify(next.body)),
     });
@@ -219,5 +221,47 @@ describe("POST /api/x-dm-poll — auth", () => {
   it("401 when no auth provided", async () => {
     const res = await callPOST();
     expect(res.status).toBe(401);
+  });
+});
+
+describe("GET /api/x-dm-poll — 403 soft-skip", () => {
+  it("returns dm_reads_disabled:true instead of throwing on 403", async () => {
+    vi.resetModules();
+    vi.stubGlobal(
+      "fetch",
+      makeFetch([
+        { ok: true, body: ME_RESPONSE },
+        // X returns 403 when the app's tier / scopes don't permit DM reads
+        {
+          ok: false,
+          status: 403,
+          body: { title: "Forbidden", detail: "Not authorized" },
+        },
+      ]),
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { GET } = await import("./route");
+    const { NextRequest } = await import("next/server");
+
+    // CREATE cron_runs, INSERT cron_run, CREATE x_dm_logs, UPDATE cron_run
+    fake.results = [[], [], [], []];
+
+    const res = await GET(
+      new NextRequest("http://localhost/api/x-dm-poll", {
+        headers: new Headers({ authorization: "Bearer test-cron-secret" }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      polled: number;
+      new_dms: number;
+      dm_reads_disabled?: boolean;
+    };
+    expect(body.polled).toBe(0);
+    expect(body.new_dms).toBe(0);
+    expect(body.dm_reads_disabled).toBe(true);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
   });
 });
