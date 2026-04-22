@@ -123,6 +123,16 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 
 ## Session log
 
+### 2026-04-21 (session 99) — Migration dashboard UI + tester (session 2 of 3)
+
+**Branch:** `claude/migration-dashboard-2` (includes session 1 commits)
+
+- `/migration` page — client-side React dashboard with Status + Test + Logs tabs. Status shows filesystem-derived ported list + pending-by-blocker cards (expandable). Test tab lets you pick any ported route, method, query string, body; hit Send; see the response with status + duration + curl snippet.
+- `POST /api/admin/migration/test` — admin-auth'd request runner. Executes any API call against our own deployment, times it, forwards the admin cookie downstream, records to `migration_request_log`. Returns `{ok, status, duration_ms, body, log_id}`.
+- `src/lib/migration/request-log.ts` — `migration_request_log` table helper with auto-create (lazy, cached) + insert + list (with path + status filters) + clear. Response body truncated to 2KB on the row.
+- 19 new tests (1799/1799 ↑ 1780). Covers request-log insert with big body truncation + flag caching, list filter branches, limit clamp; test runner auth + validation + cookie forward + body serialization + query appending + network-error capture + non-JSON body passthrough + logging-failure-doesn't-blow-up-response.
+- Session 3 will add the Logs tab + metrics.
+
 ### 2026-04-21 (session 98) — Migration dashboard foundation (session 1 of 3)
 
 **Branch:** `claude/migration-dashboard-1`
