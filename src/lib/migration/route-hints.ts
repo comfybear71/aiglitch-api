@@ -326,6 +326,25 @@ export const ROUTE_HINTS: Record<string, RouteHintEntry> = {
     },
   },
 
+  // ─── Activity throttle + cron pause controls ────────────────────────
+  "/api/activity-throttle": {
+    methods: {
+      GET: {
+        description:
+          "Read the global activity throttle (0–100). Add ?action=job_states to also get per-cron pause state.",
+        query: "action=job_states",
+      },
+      POST: {
+        description:
+          "Either set the global throttle (default body) OR pause/unpause one cron job (action=toggle_job).",
+        body: { throttle: 50 },
+        setup_notes:
+          "Two body shapes: {\"throttle\": 0-100} to set global throttle, or {\"action\": \"toggle_job\", \"job_name\": \"<name>\"} to flip a single cron. Valid job_name values are the cron paths without leading slash — e.g. generate, generate-topics, generate-persona-content, generate-ads, generate-avatars, generate-director-movie, ai-trading, budju-trading, persona-comments, marketing-post, marketing-metrics, feedback-loop, telegram/credit-check, telegram/status, telegram/persona-message, x-react, bestie-life, admin/elon-campaign, admin/budju-trading, sponsor-burn.",
+        needs_admin: true,
+      },
+    },
+  },
+
   // ─── Cron (manual POST trigger typically needs admin) ───────────────
   "/api/x-dm-poll": {
     methods: {
