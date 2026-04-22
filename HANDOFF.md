@@ -115,11 +115,21 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/meatlab/upload` POST | tested | session 93 | Meatlab client-upload token handler. 100 MB cap, 5 image + 3 video allowlist. Path restricted to `meatlab/` or `avatars/` prefixes (throws on anything else). Pure Vercel Blob `handleUpload` wrapper — DB registration happens via the existing meatlab POST flow. |
 | `/api/auth/human` POST | tested | session 94 | Meatbag auth + session management. 11 actions: `signup`, `login`, `profile` (+ cross-wallet stats aggregation), `update` (with persona/meatbag uniqueness), `anonymous_signup`, `wallet_login` (+ session merge + orphan recovery), `link_wallet`/`unlink_wallet`/`get_wallet`, `merge_accounts`, `signout`. Extracted `migrateSessionData()` helper for the 10-table session-migration sequence (used by login + wallet_login + merge_accounts + orphan recovery). **Preserves CLAUDE.md rule #2 exactly**: session merge direction is FROM wallet account's old session_id TO browser's new session_id, including the DELETE-stub-first order and the `NOT IN` subqueries that skip unique-constraint conflicts. No external deps. |
 | `/api/admin/channels` GET + POST + PATCH + DELETE | tested | session 95 | Channels admin CRUD + post-curation actions. GET lists channels with personas + config defaults (+ `?action=lost_videos` for orphan video list). POST upserts channel + persona/host assignments. PATCH supports `fix_channel_ownership`, `flush_non_video`, `undo_clean`, `clean_all_channels`, `move_all_to_lost`, `move_to_lost`, `restore_by_prefix`, `flush_off_brand`, and default path (move posts to target channel with prefix rewrite, or untag). DELETE cascades through `channel_personas` + `channel_subscriptions` + `posts.channel_id` before removing. Deviations: dropped `syncChannelsFromConstants` (legacy CHANNELS bible seed not ported — channels already persist in Neon); inlined 24-entry `CHANNEL_TITLE_PREFIX` map (legacy import from director-movies lib); added admin-auth on POST/PATCH/DELETE (legacy had none; consistent with `channels/flush` port). |
-| *(all other 128 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/admin/media` GET + POST + DELETE | tested | session 96 | Admin media-library CRUD. GET lists `media_library` rows (+ `?stats=1` adds video-source + post-type breakdowns, 30-day daily timeline, top-10 video personas). POST multipart upload — single `file` or bulk `files`, logo restricted to Architect, Safari content-type fallback from extension (HEIC/HEIF/AVIF + 4 video types). Auto-creates feed post when `persona_id` set. DELETE removes row by id. Deferred: Architect auto-spread (`spreadArchitectContent` — marketing lib not ported; response keeps `spreading:[]` placeholder for Architect uploads). Also dropped: `SEED_PERSONAS` FK safety INSERT (seeds already in Neon), `ensureDbReady`. Companion to `/api/admin/media/upload` (client-upload token handler) + `/api/admin/media/save` (client-upload DB registration). |
+| *(all other 127 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 96) — `/api/admin/media` (CRUD + upload + stats)
+
+**Branch:** `claude/phase-7-admin-batch-47`
+
+- GET (list + optional `?stats=1` with video breakdowns), POST (multipart upload, bulk support, logo → Architect-only gate, Safari content-type fallback), DELETE (row by id).
+- Deferred Architect auto-spread (marketing lib); response still carries `spreading:[]` placeholder.
+- Dropped `SEED_PERSONAS` FK safety INSERT + `ensureDbReady`.
+- 13 new tests (1750/1750 ↑ 1737).
 
 ### 2026-04-21 (session 95) — `/api/admin/channels` (full CRUD + curation)
 
