@@ -110,11 +110,45 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/nft` GET + POST | tested | session 90 | NFT read API (no minting — that moved to marketplace + Phantom flow). GET `?action=collection_stats` returns whole-collection totals, rarity breakdown, 10 most-recent mints, and marketplace revenue split (persona vs. treasury); revenue block try/catch'd so missing `marketplace_revenue` table doesn't 500 the rest. `?action=supply` returns per-product mint counts + `max_per_product:100` for "X remaining" displays. Default (with `session_id`) fetches user's NFTs — joins on `phantom_wallet_address` so wallet-login migrations don't strand NFTs under an old session, and auto-repairs legacy session_ids on match. No session_id → `{nfts:[]}`. POST returns 410 Gone with marketplace redirect (matches legacy exactly). No Solana RPC — all reads from Neon mirror tables. |
 | `/api/hatch/telegram` POST + DELETE | tested | session 91 | Meatbag-facing Telegram bot setup for a hatched persona. POST `{session_id, bot_token}` → resolves session to wallet → wallet to persona (`owner_wallet_address` match, 404 if unhatched) → validates token via Telegram `getMe` (bails before DB writes on invalid) → registers webhook at `{NEXT_PUBLIC_APP_URL}/api/telegram/persona-chat/{persona_id}` with `message+message_reaction` updates (non-fatal if fails) → DELETE + INSERT `persona_telegram_bots` row. DELETE `{session_id}` same resolution, then best-efforts unregisters the webhook and removes the row. `bot_token` never in responses. Falls back to `new URL(request.url).origin` when `NEXT_PUBLIC_APP_URL` isn't set. Counterpart to the admin's `/api/admin/personas/set-bot-token`. |
 | `/api/admin/hatchery` GET + POST + PATCH | tested | session 92 | Streaming persona-hatching pipeline. GET lists recent hatchlings (max 50). POST `{type?, skip_video?}` streams NDJSON per-step progress (generating_being → avatar → video → save_persona → architect_announcement → first_words → glitch_gift → posting_socials → complete). `type` is an optional creative hint, or fully random. Admin-auth OR cron-auth. PATCH retroactively awards GLITCH to hatchlings with zero balance (legacy data repair). AI being generation uses `generateText` + defensive JSON regex parse. Avatar via `generateImageToBlob` (1:1 Pro). Video via `generateVideoToBlob` capped at 24×10s polls so the whole pipeline stays in the 5-min lambda. Avatar + video failures are non-fatal. Awards 1000 GLITCH via `awardPersonaCoins`. Deferred: `spreadPostToSocial` — `posting_socials` step emits `{platforms_posted:[], platforms_failed:[]}` so admin UI keeps rendering. Companion to `/api/admin/hatch-admin`. |
-| *(all other 133 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/health/grok-video` GET | tested | session 93 | xAI credential health probe. Hits `GET /v1/models` (no charge) to verify `XAI_API_KEY` is set + auth'd. Returns `{ok:true, keyConfigured:true, maskedKey:"xai-…1234"}` (200) / `{ok:false, status, error, keyConfigured:true}` (502 on 4xx/5xx) / `{ok:false, error:"XAI_API_KEY not set", keyConfigured:false}` (500). `Cache-Control: no-store`. |
+| `/api/telegram/notify` POST | tested | session 93 | Admin Telegram alert endpoint. `requireCronAuth` gated. Body `{title?, message, severity?:"info"\|"warning"\|"critical"}`. With `title` → formats as `{ℹ️\|⚠️\|🚨} <b>title</b>\n\nmessage`; without → sends `message` verbatim. Silent no-op (`{ok:false, reason:"telegram-not-configured"}`) when `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHANNEL_ID` missing so crons don't blow up. Replaces legacy's `sendAdminAlert` (formatter inlined). |
+| `/api/meatlab/upload` POST | tested | session 93 | Meatlab client-upload token handler. 100 MB cap, 5 image + 3 video allowlist. Path restricted to `meatlab/` or `avatars/` prefixes (throws on anything else). Pure Vercel Blob `handleUpload` wrapper — DB registration happens via the existing meatlab POST flow. |
+| *(all other 130 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 93) — 3 small endpoints (health/telegram/meatlab)
+
+**Branch:** `claude/phase-7-admin-batch-44`
+
+**Done:** Three tiny self-contained routes in one batch.
+- `src/app/api/health/grok-video/route.ts` — xAI credential health probe via `GET /v1/models` (free, no video gen). Returns status-tiered response (200 ok + masked key / 502 xAI error / 500 missing key). `no-store` cache.
+- `src/app/api/telegram/notify/route.ts` — admin alert endpoint. Cron-auth gated. Title + severity → emoji-prefixed HTML-bold formatting; plain message → verbatim. Silent no-op when Telegram env vars missing.
+- `src/app/api/meatlab/upload/route.ts` — meatlab client-upload token handler. 100 MB cap, `meatlab/` + `avatars/` path allowlist.
+- 18 new tests (6 + 8 + 4). Covers: key missing / valid / 401 / non-401 xAI error / fetch exception / short-key masking; cron-auth failure / missing message / telegram-not-configured no-op / plain message / titled message with severity emoji variants / send exception 500; path validation (meatlab accepted / avatars accepted / rejected path / handleUpload error).
+- Suite **1688/1688**, up from 1670.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (1688/1688)
+
+**Design choices:**
+- `health/grok-video` inlines the xAI models check — legacy's `checkGrokVideoAuth` helper isn't in the ported `@/lib/ai/xai`. Key masking matches legacy format (`xai-…last4`) and handles short keys with `xai-****`.
+- `telegram/notify` inlines the `sendAdminAlert` formatter (severity emoji + `<b>title</b>\n\ndetails`). Port of legacy's helper keeps the contract identical but saves us from porting the rest of the larger legacy telegram lib.
+- `meatlab/upload` has no auth check — matches legacy exactly. Meatlab uploads are user-initiated from the public meatlab page; the path prefix restriction is the security boundary.
+
+**Deferrals vs. legacy:**
+- None.
+
+**Next batch options (pick one):**
+1. `marketing/*` lib — 3036 lines. Multi-session.
+2. `director-movies` lib — 1626 lines. Multi-session.
+3. `elon-campaign` admin (~711).
+4. Phase 8 greenlight.
+
+---
 
 ### 2026-04-21 (session 92) — `/api/admin/hatchery` (streaming birth pipeline)
 
