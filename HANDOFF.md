@@ -105,11 +105,46 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/admin/sponsors/[id]/ads` GET + POST + PUT | tested | session 85 | Per-sponsor ads CRUD + AI prompt generation. GET default lists `sponsored_ads`; `?action=placements` joins `ad_campaigns` (brand-name matched) → `ad_impressions` → `posts` + `channels` for the "where is my brand placed" view (top 100). POST creates a draft row using `SPONSOR_PACKAGES` defaults (duration / glitch_cost / cash_equivalent / follow_ups / platforms / frequency / campaign_days) + caller overrides. PUT handles three modes: `action:"delete"`, `action:"generate"` (calls `buildSponsoredAdPrompt` + `generateText` + defensive JSON-from-text parse → `{video_prompt, caption, x_caption}`, flips status to `pending_review`), or default COALESCE update of status/video_url/post_ids/performance. Publishing (`status="published"`) deducts `glitch_cost` from `sponsors.glitch_balance` + bumps `total_spent`. Replaces legacy's `claude.generateJSON` with a `generateText` + `match(/\{...\}/)` inline parser. |
 | `/api/admin/channels/generate-title` GET + POST | tested | session 86 | Channel title-card video generator. Two-phase submit/poll via `submitVideoJob` + `pollVideoJob` (5s / 9:16 / 720p). POST `{channel_id, channel_slug, title, style_prompt?, preview?}` — builds a cinematic title-card prompt that spells the title letter-by-letter and repeats the exact string multiple times to combat xAI's misspelling bias. `preview:true` returns the prompt without submitting. Happy path returns `{phase:"submitted", requestId}`. Sync xAI returns short-circuit through `persistTitleVideo`. GET `?id=&channel_id=&channel_slug=` polls the job; on done downloads video, persists to `channels/{slug}/title-{uuid}.mp4`, and UPDATEs `channels.title_video_url`. Deferred: `injectCampaignPlacement` (ad-campaigns lib), `ensureDbReady`. |
 | `/api/admin/channels/generate-promo` GET + POST + PUT | tested | session 87 | Channel promo-clip generator. Three-handler flow. POST `{channel_id, channel_slug, custom_prompt?, preview?}` submits one 10s 9:16 720p clip via `submitVideoJob`; 9 per-channel default scenes baked in (from legacy); `preview:true` returns the built prompt. Sync xAI URL short-circuits inline. GET `?id=REQUEST_ID` polls via `pollVideoJob`; on done downloads + persists to `channels/clips/{uuid}.mp4` (falls back to Grok URL if download fails). PUT `{channel_id, channel_slug, clip_urls}` downloads the confirmed clip, persists to `channels/{slug}/promo-{uuid}.mp4`, UPDATEs `channels.banner_url`, creates a promo post attributed to The Architect (`glitch-000`, channels are Architect-only) with `AIGlitchTV,AIGlitch` hashtags. Deferred: ad-campaigns `injectCampaignPlacement` + `logImpressions` + `ensureDbReady`. |
-| *(all other 138 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/admin/channels/flush` GET + DELETE + POST | tested | session 88 | AI-driven channel content curation. GET lists channel posts for admin review (flags `broken:true` on video-posts-with-no-media_url). DELETE `{post_ids, delete_post?}` either permanently deletes rows or untags (`channel_id=NULL`). POST `{channel_id, dry_run?}` runs AI classification in batches of 20 against the channel's `content_rules/genre/description`, untags irrelevant posts + auto-flags broken/placeholder video posts. `dry_run` returns the classification without writing. **Deviation from legacy**: this port adds `isAdminAuthenticated` to all three handlers — legacy had NO auth check but the route is under `/api/admin/*` and mutates the DB (including `DELETE FROM posts`). Legacy `claude.generateJSON` replaced with `generateText` + defensive `\[…\]` regex parse so malformed model output short-circuits to "nothing flagged" instead of 500-ing. |
+| *(all other 137 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 88) — `/api/admin/channels/flush`
+
+**Branch:** `claude/phase-7-admin-batch-39`
+
+**Done:**
+- New `src/app/api/admin/channels/flush/route.ts` — AI-driven channel content curation, three handlers:
+  - GET: paginated channel post list with persona join. Tags each post `broken:true` when it's a video with no `media_url`.
+  - DELETE: bulk `{post_ids[], delete_post?}` — default path `UPDATE posts SET channel_id = NULL` to untag; `delete_post:true` runs `DELETE FROM posts`. Response reports `action: "deleted" | "untagged"`.
+  - POST: AI classifier pass. Batches the channel's top-level posts in groups of 20, prompts the model against the channel's `content_rules/genre/description`, collects `irrelevant` ids. Also auto-flags broken/placeholder posts (video with no URL, or any post missing `media_url`). `dry_run:true` returns the classification without writing.
+- Used `classifyBatch` helper — `generateText` + `\[…\]` regex extract + `JSON.parse`. Malformed model output (e.g. "sorry, I can't help with that") short-circuits to empty array instead of a 500.
+- 18 new tests across the three handlers: auth 401 on each, ID validation, 404 on missing channel, GET happy path with broken flag + limit cap at 100, DELETE untag vs delete_post branches, POST empty channel early return, AI-flagged irrelevant untag, broken video auto-flag regardless of AI, dry_run skips UPDATE, AI non-JSON response → 0 flagged, string `content_rules` JSON parse.
+- Suite **1625/1625**, up from 1607.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (1625/1625)
+
+**Design choices:**
+- **Added admin auth** on all three handlers even though legacy had none. The route is under `/api/admin/*`, can DELETE rows, and there's no way this was an intentional "public" endpoint. Documented on the route header so the deviation is auditable.
+- `classifyBatch` returns `[]` on any parse failure — the route then falls through to the auto-flag-broken step. Without that, a single bad model response would kill the whole flush even though the broken-video cleanup should still run.
+- Used `Set<string>` for `irrelevantIds` so the AI-flagged and auto-flagged lists merge without duplicates.
+- `relevant` count in the response computes from `relevantIds.filter(id => !irrelevantIds.has(id))` — legacy's loop accumulated `relevantIds` before the broken-post sweep, so a post flagged later would have still been counted as relevant. Fixing that quietly since it's a bug-fix, not a behaviour change anyone relied on.
+
+**Deferrals vs. legacy:**
+- None. Legacy had no ad-campaigns deps here.
+
+**Next batch options (pick one):**
+1. `marketing/*` lib (3036 lines / 9 files) — un-defers 8+ routes. Multi-session.
+2. `director-movies` lib (1626 lines) — multi-session. Unlocks `channels/generate-content` + 4 other routes.
+3. `elon-campaign` admin (~711).
+4. Phase 8 greenlight.
+
+---
 
 ### 2026-04-21 (session 87) — `/api/admin/channels/generate-promo`
 
