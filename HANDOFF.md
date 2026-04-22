@@ -123,6 +123,17 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 
 ## Session log
 
+### 2026-04-21 (session 100) — Migration dashboard Logs + Metrics (session 3 of 3)
+
+**Branch:** `claude/migration-dashboard-3`
+
+- `/migration` Logs tab — paginated `migration_request_log` browser with path + status (ok/error/any) filters. Click a row to expand request/response bodies. Per-row **Rerun** button fires the exact same request through the test runner; **Rerun last failed** button picks the most recent 4xx+/network-error row; **Clear all** wipes the log table.
+- `/migration` Metrics tab — per-endpoint aggregates over configurable window (24h / 7d / all). Columns: Path / Methods / Total / Errors / Error % / p50 / p95 / Last call. Summary card across the top (endpoints / total calls / total errors).
+- `GET /api/admin/migration/log` — paginated list with `?path=&status=ok|error|any&limit=&offset=`. Also returns `paths[]` distinct seen paths for the filter dropdown.
+- `DELETE /api/admin/migration/log` — truncate the log. Returns `{deleted: N}`.
+- `GET /api/admin/migration/metrics?since=24h|7d|all` — PostgreSQL `percentile_cont` over `duration_ms` for p50/p95, `COUNT(*) FILTER` for error counts. Sorted by total DESC.
+- 13 new tests (1812/1812 ↑ 1799). Closes out the Option C ops console — Status + Test + Logs + Metrics all live.
+
 ### 2026-04-21 (session 99) — Migration dashboard UI + tester (session 2 of 3)
 
 **Branch:** `claude/migration-dashboard-2` (includes session 1 commits)
