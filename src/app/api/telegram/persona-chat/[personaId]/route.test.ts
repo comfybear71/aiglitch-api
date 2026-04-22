@@ -581,18 +581,49 @@ describe("POST — keyword-triggered intent drafting", () => {
 });
 
 describe("POST — message_reaction branch", () => {
-  it("routes message_reaction to stub and returns 200 without loading persona", async () => {
+  it("returns 200 immediately for message_reaction updates (fire-and-forget)", async () => {
+    // handleMessageReaction runs async — provide a sql mock so its catch path
+    // doesn't throw unhandled (which would pollute the test runner).
+    vi.mocked(getDb).mockReturnValue(
+      fakeSql(() => []).sqlFn as never,
+    );
     const res = await POST(
       makeRequest({
         message_reaction: {
           chat: { id: 42 },
           message_id: 99,
+          old_reaction: [],
           new_reaction: [{ type: "emoji", emoji: "❤️" }],
         },
       }),
       PARAMS,
     );
     expect(res.status).toBe(200);
-    expect(fetchCalls.length).toBe(0);
+  });
+});
+
+describe("hashtag mentions (integration via main chat flow)", () => {
+  it("does not look up personas when message has no hashtags", async () => {
+    const { sqlFn, queries } = fakeSql((sql) => {
+      if (sql.includes("SELECT p.id, p.username, p.display_name, p.personality, p.bio,\n           p.avatar_emoji, b.bot_token")) {
+        // This is the hashtag lookup — should NOT run when no hashtags present.
+        return [];
+      }
+      if (sql.includes("SELECT p.id, p.username")) return [PERSONA_ROW];
+      return [];
+    });
+    vi.mocked(getDb).mockReturnValue(sqlFn as never);
+    vi.mocked(generateText).mockResolvedValue("hey");
+
+    await POST(
+      makeRequest({
+        message: { chat: { id: 42 }, text: "plain message", message_id: 1 },
+      }),
+      PARAMS,
+    );
+    // CREATE TABLE persona_hashtag_cooldowns should not have run — no #tags.
+    expect(
+      queries.some((q) => q.includes("CREATE TABLE IF NOT EXISTS persona_hashtag_cooldowns")),
+    ).toBe(false);
   });
 });

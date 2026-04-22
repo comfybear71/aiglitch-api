@@ -402,24 +402,314 @@ Output ONLY the JSON array. If nothing new, output: []`;
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// Hashtag / reaction stubs — filled in parcel 3c
+// Hashtag persona mentions (parcel 3c)
+//
+// When a user writes `#<username>` in a message, the mentioned persona's
+// own bot jumps into the same chat with its own reply. Makes Telegram feel
+// like a multi-persona room even though each chat is 1:1 with one bot.
+//
+// Guardrails:
+//   • Max 3 distinct persona mentions per message.
+//   • 30s cooldown per persona per chat (`persona_hashtag_cooldowns`).
+//   • Self-mentions ignored.
+//   • 403 from Telegram (user hasn't started that bot yet) is a warn,
+//     not an error.
+//   • 1.5s pause between cascading replies so it doesn't feel spammy.
 // ══════════════════════════════════════════════════════════════════════════
 
+const MAX_MENTIONS_PER_MESSAGE = 3;
+const MENTION_COOLDOWN_MS = 30_000;
+
+async function ensureHashtagCooldownTable(): Promise<void> {
+  const sql = getDb();
+  await sql`CREATE TABLE IF NOT EXISTS persona_hashtag_cooldowns (
+    persona_id TEXT NOT NULL,
+    chat_id TEXT NOT NULL,
+    last_mentioned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (persona_id, chat_id)
+  )`;
+}
+
+function extractHashtags(text: string): string[] {
+  // Matches #word including hyphens and underscores (glitch-000, the_architect)
+  const matches = text.match(/#([a-zA-Z0-9_-]+)/g) ?? [];
+  return Array.from(new Set(matches.map((m) => m.slice(1).toLowerCase())));
+}
+
 async function handleHashtagMentions(
-  _sourcePersonaId: string,
-  _userText: string,
-  _chatId: number,
-  _meatbagName: string,
-  _originalMessageId: number | undefined,
+  sourcePersonaId: string,
+  userText: string,
+  chatId: number,
+  meatbagName: string,
+  originalMessageId: number | undefined,
 ): Promise<void> {
-  // TODO (parcel 3c)
+  const hashtags = extractHashtags(userText);
+  if (hashtags.length === 0) return;
+
+  const sql = getDb();
+  await ensureHashtagCooldownTable();
+
+  // Match by username, id, or id-without-hyphens.
+  const matchedPersonas = (await sql`
+    SELECT p.id, p.username, p.display_name, p.personality, p.bio,
+           p.avatar_emoji, b.bot_token
+    FROM ai_personas p
+    JOIN persona_telegram_bots b ON b.persona_id = p.id AND b.is_active = TRUE
+    WHERE p.is_active = TRUE
+      AND p.id != ${sourcePersonaId}
+      AND (
+        LOWER(p.username) = ANY(${hashtags}::text[])
+        OR LOWER(p.id) = ANY(${hashtags}::text[])
+        OR LOWER(REPLACE(p.id, '-', '')) = ANY(${hashtags}::text[])
+      )
+    LIMIT ${MAX_MENTIONS_PER_MESSAGE}
+  `) as unknown as {
+    id: string;
+    username: string;
+    display_name: string;
+    personality: string;
+    bio: string;
+    avatar_emoji: string;
+    bot_token: string;
+  }[];
+
+  if (matchedPersonas.length === 0) return;
+
+  const chatIdStr = String(chatId);
+
+  for (const mentioned of matchedPersonas) {
+    const cooldownRows = (await sql`
+      SELECT last_mentioned_at FROM persona_hashtag_cooldowns
+      WHERE persona_id = ${mentioned.id} AND chat_id = ${chatIdStr}
+    `) as unknown as { last_mentioned_at: string }[];
+    const cooldown = cooldownRows[0];
+
+    if (cooldown) {
+      const lastMs = new Date(cooldown.last_mentioned_at).getTime();
+      if (Date.now() - lastMs < MENTION_COOLDOWN_MS) continue;
+    }
+
+    // Update cooldown BEFORE generating so simultaneous triggers don't double-fire.
+    await sql`
+      INSERT INTO persona_hashtag_cooldowns (persona_id, chat_id, last_mentioned_at)
+      VALUES (${mentioned.id}, ${chatIdStr}, NOW())
+      ON CONFLICT (persona_id, chat_id) DO UPDATE SET last_mentioned_at = NOW()
+    `;
+
+    const mentionPrompt = `You are ${mentioned.display_name}, an AI persona on AIG!itch. You just got tagged in a Telegram conversation — someone wrote about you (or to you) and you are jumping into the chat.
+
+YOUR PERSONALITY: ${mentioned.personality}
+
+YOUR BIO: ${mentioned.bio}
+
+The meatbag "${meatbagName}" just wrote this message (which mentioned you with a hashtag):
+
+"${userText}"
+
+Reply in 1-2 short sentences. Stay fully in character. Don't explain why you're jumping in — just respond as if you heard your name called. Be conversational, witty, on-brand. No quotation marks around your reply.`;
+
+    const generated = await safeGenerate(mentionPrompt, 200);
+    let reply =
+      generated?.trim() ??
+      `*${mentioned.avatar_emoji} appears* You called?`;
+
+    if (
+      (reply.startsWith('"') && reply.endsWith('"')) ||
+      (reply.startsWith("'") && reply.endsWith("'"))
+    ) {
+      reply = reply.slice(1, -1);
+    }
+
+    // Prepend a small indicator so the meatbag knows it's a different bot.
+    const finalText = `${mentioned.avatar_emoji} ${mentioned.display_name}:\n${reply}`;
+
+    try {
+      const res = await fetch(
+        `${TELEGRAM_API}/bot${mentioned.bot_token}/sendMessage`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: finalText,
+            reply_to_message_id: originalMessageId,
+          }),
+          signal: AbortSignal.timeout(10_000),
+        },
+      );
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        if (res.status === 403) {
+          // User hasn't started this bot — Telegram rule, not an error.
+          console.log(
+            `[persona-chat] Hashtag mention skipped (user hasn't started @${mentioned.username}): ${body.slice(0, 100)}`,
+          );
+        } else {
+          console.error(
+            `[persona-chat] Hashtag mention failed for @${mentioned.username}: HTTP ${res.status} ${body.slice(0, 200)}`,
+          );
+        }
+      }
+    } catch (err) {
+      console.error(
+        `[persona-chat] Hashtag mention send failed for @${mentioned.username}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+
+    // Small pause between cascading replies so they don't feel spammy.
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// Emoji reaction replies (parcel 3c)
+//
+// When a meatbag adds an emoji reaction to a persona message, the persona
+// fires back a short in-character acknowledgement.
+//
+// Design:
+//   • Only NEW emojis (diff old_reaction vs new_reaction).
+//   • Ignore reaction REMOVALs and custom_emoji entries.
+//   • 60s cooldown per (persona, chat) in `persona_reaction_cooldowns`.
+//   • safeGenerate 1-2 sentence reply; fallback on API failure.
+// ══════════════════════════════════════════════════════════════════════════
+
+const REACTION_COOLDOWN_MS = 60_000;
+
+async function ensureReactionCooldownTable(): Promise<void> {
+  const sql = getDb();
+  await sql`CREATE TABLE IF NOT EXISTS persona_reaction_cooldowns (
+    persona_id TEXT NOT NULL,
+    chat_id TEXT NOT NULL,
+    last_reacted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (persona_id, chat_id)
+  )`;
+}
+
+function findNewEmoji(
+  oldReaction: { type: string; emoji?: string }[] | undefined,
+  newReaction: { type: string; emoji?: string }[] | undefined,
+): string | null {
+  const oldEmojis = new Set(
+    (oldReaction ?? [])
+      .filter((r) => r.type === "emoji" && r.emoji)
+      .map((r) => r.emoji as string),
+  );
+  const newEmojis = (newReaction ?? [])
+    .filter((r) => r.type === "emoji" && r.emoji)
+    .map((r) => r.emoji as string);
+
+  for (const emoji of newEmojis) {
+    if (!oldEmojis.has(emoji)) return emoji;
+  }
+  return null;
 }
 
 async function handleMessageReaction(
-  _personaId: string,
-  _reaction: unknown,
+  personaId: string,
+  reaction: {
+    chat?: { id: number };
+    message_id?: number;
+    old_reaction?: { type: string; emoji?: string }[];
+    new_reaction?: { type: string; emoji?: string }[];
+  },
 ): Promise<void> {
-  // TODO (parcel 3c)
+  const chatId = reaction.chat?.id;
+  if (!chatId) return;
+
+  const newEmoji = findNewEmoji(reaction.old_reaction, reaction.new_reaction);
+  if (!newEmoji) return;
+
+  const sql = getDb();
+  await ensureReactionCooldownTable();
+
+  const chatIdStr = String(chatId);
+
+  const cooldownRows = (await sql`
+    SELECT last_reacted_at FROM persona_reaction_cooldowns
+    WHERE persona_id = ${personaId} AND chat_id = ${chatIdStr}
+  `) as unknown as { last_reacted_at: string }[];
+  const cooldown = cooldownRows[0];
+  if (cooldown) {
+    const lastMs = new Date(cooldown.last_reacted_at).getTime();
+    if (Date.now() - lastMs < REACTION_COOLDOWN_MS) return;
+  }
+
+  // Bump cooldown BEFORE generating so parallel reactions don't double-fire.
+  await sql`
+    INSERT INTO persona_reaction_cooldowns (persona_id, chat_id, last_reacted_at)
+    VALUES (${personaId}, ${chatIdStr}, NOW())
+    ON CONFLICT (persona_id, chat_id) DO UPDATE SET last_reacted_at = NOW()
+  `;
+
+  const personaRows = (await sql`
+    SELECT p.id, p.username, p.display_name, p.personality, p.bio,
+           p.avatar_emoji, p.meatbag_name, b.bot_token
+    FROM ai_personas p
+    JOIN persona_telegram_bots b ON b.persona_id = p.id AND b.is_active = TRUE
+    WHERE p.id = ${personaId}
+    LIMIT 1
+  `) as unknown as {
+    id: string;
+    username: string;
+    display_name: string;
+    personality: string;
+    bio: string;
+    avatar_emoji: string;
+    meatbag_name: string | null;
+    bot_token: string;
+  }[];
+  const persona = personaRows[0];
+  if (!persona) return;
+
+  const meatbagName = persona.meatbag_name ?? "meatbag";
+
+  const reactionPrompt = `You are ${persona.display_name}, an AI persona on AIG!itch chatting with your best friend ${meatbagName} via Telegram.
+
+YOUR PERSONALITY: ${persona.personality.slice(0, 400)}
+
+${meatbagName} just reacted to one of your messages with this emoji: ${newEmoji}
+
+Reply with ONE short message (1-2 sentences MAX) acknowledging the reaction in your unique voice. Be witty, contextual to the emoji's meaning, and fully in character.
+
+Examples of tone by emoji:
+- ❤️ or 😍 → warmly acknowledge the affection
+- 😂 or 🤣 → lean into the joke, be playful
+- 👍 or 👏 → confident thanks, maybe a quip
+- 🔥 → hype energy, own the moment
+- 💀 → embrace the roast, self-deprecating humor
+- 🤔 → invite more discussion, playful defense
+- 😢 or 💔 → check in, be warm but don't break character
+
+Do NOT quote the emoji in your reply unless it feels natural. Do NOT add meta-commentary like "thanks for the reaction". Just respond as if you noticed their reaction and are responding to it. No quotation marks around your reply.`;
+
+  const generated = await safeGenerate(reactionPrompt, 150);
+  let reply = generated?.trim() ?? `${persona.avatar_emoji} noted.`;
+  if (
+    (reply.startsWith('"') && reply.endsWith('"')) ||
+    (reply.startsWith("'") && reply.endsWith("'"))
+  ) {
+    reply = reply.slice(1, -1);
+  }
+
+  try {
+    await fetch(`${TELEGRAM_API}/bot${persona.bot_token}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: reply,
+        reply_to_message_id: reaction.message_id,
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch (err) {
+    console.error(
+      `[persona-chat] Reaction reply send failed for @${persona.username}:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════════
