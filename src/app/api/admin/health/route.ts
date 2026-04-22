@@ -18,6 +18,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { isAdminAuthenticated } from "@/lib/admin-auth";
 import { getDb } from "@/lib/db";
+import { getUpstashCredentials } from "@/lib/upstash-env";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -72,11 +73,10 @@ export async function GET(request: NextRequest) {
     }),
 
     pingService(async () => {
-      const url = process.env.UPSTASH_REDIS_REST_URL;
-      const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-      if (!url || !token) throw new Error("Not configured");
-      const res = await fetch(`${url}/ping`, {
-        headers: { Authorization: `Bearer ${token}` },
+      const creds = getUpstashCredentials();
+      if (!creds) throw new Error("Not configured");
+      const res = await fetch(`${creds.url}/ping`, {
+        headers: { Authorization: `Bearer ${creds.token}` },
         signal: AbortSignal.timeout(REDIS_TIMEOUT_MS),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);

@@ -1,5 +1,6 @@
 import { neon } from "@neondatabase/serverless";
 import { Redis } from "@upstash/redis";
+import { getUpstashCredentials } from "@/lib/upstash-env";
 
 export type CheckResult = {
   ok: boolean;
@@ -51,11 +52,11 @@ export async function checkDatabase(): Promise<CheckResult> {
 }
 
 export async function checkRedis(): Promise<CheckResult> {
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) {
+  const creds = getUpstashCredentials();
+  if (!creds) {
     return { ok: true, latency_ms: 0, optional: true, skipped: true };
   }
+  const { url, token } = creds;
   try {
     const redis = new Redis({ url, token });
     const { ms, result } = await timed(async () => redis.ping());

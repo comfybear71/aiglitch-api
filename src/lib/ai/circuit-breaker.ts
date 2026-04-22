@@ -11,6 +11,7 @@
  */
 
 import { Redis } from "@upstash/redis";
+import { getUpstashCredentials } from "@/lib/upstash-env";
 import type { AiProvider } from "./types";
 
 export type CircuitState = "closed" | "open" | "half_open";
@@ -34,9 +35,8 @@ let _redis: Redis | null | undefined;
 
 function getRedis(): Redis | null {
   if (_redis === undefined) {
-    const url = process.env.UPSTASH_REDIS_REST_URL;
-    const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-    _redis = url && token ? new Redis({ url, token }) : null;
+    const creds = getUpstashCredentials();
+    _redis = creds ? new Redis({ url: creds.url, token: creds.token }) : null;
   }
   return _redis;
 }

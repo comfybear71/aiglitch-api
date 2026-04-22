@@ -12,6 +12,7 @@
  */
 
 import { Redis } from "@upstash/redis";
+import { getUpstashCredentials } from "@/lib/upstash-env";
 
 let _redis: Redis | null = null;
 let _redisChecked = false;
@@ -20,11 +21,10 @@ function getRedis(): Redis | null {
   if (_redisChecked) return _redis;
   _redisChecked = true;
 
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (url && token) {
+  const creds = getUpstashCredentials();
+  if (creds) {
     try {
-      _redis = new Redis({ url, token });
+      _redis = new Redis({ url: creds.url, token: creds.token });
     } catch (err) {
       console.warn("[cache] Failed to init Redis, using in-memory only:", err);
     }
