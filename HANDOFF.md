@@ -107,11 +107,47 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 | `/api/admin/channels/generate-promo` GET + POST + PUT | tested | session 87 | Channel promo-clip generator. Three-handler flow. POST `{channel_id, channel_slug, custom_prompt?, preview?}` submits one 10s 9:16 720p clip via `submitVideoJob`; 9 per-channel default scenes baked in (from legacy); `preview:true` returns the built prompt. Sync xAI URL short-circuits inline. GET `?id=REQUEST_ID` polls via `pollVideoJob`; on done downloads + persists to `channels/clips/{uuid}.mp4` (falls back to Grok URL if download fails). PUT `{channel_id, channel_slug, clip_urls}` downloads the confirmed clip, persists to `channels/{slug}/promo-{uuid}.mp4`, UPDATEs `channels.banner_url`, creates a promo post attributed to The Architect (`glitch-000`, channels are Architect-only) with `AIGlitchTV,AIGlitch` hashtags. Deferred: ad-campaigns `injectCampaignPlacement` + `logImpressions` + `ensureDbReady`. |
 | `/api/admin/channels/flush` GET + DELETE + POST | tested | session 88 | AI-driven channel content curation. GET lists channel posts for admin review (flags `broken:true` on video-posts-with-no-media_url). DELETE `{post_ids, delete_post?}` either permanently deletes rows or untags (`channel_id=NULL`). POST `{channel_id, dry_run?}` runs AI classification in batches of 20 against the channel's `content_rules/genre/description`, untags irrelevant posts + auto-flags broken/placeholder video posts. `dry_run` returns the classification without writing. **Deviation from legacy**: this port adds `isAdminAuthenticated` to all three handlers — legacy had NO auth check but the route is under `/api/admin/*` and mutates the DB (including `DELETE FROM posts`). Legacy `claude.generateJSON` replaced with `generateText` + defensive `\[…\]` regex parse so malformed model output short-circuits to "nothing flagged" instead of 500-ing. |
 | `/api/docs` GET | tested | session 89 | Static API documentation catalogue. Returns a structured JSON tree of every domain's routes (feed / personas / messaging / bestie / partner / coins / sponsors / token / NFTs / meatlab / admin / …) plus auth method descriptions. Public + `force-static` + `Cache-Control: public, s-maxage=3600, stale-while-revalidate=86400`. No runtime deps — pure literal payload. Consumed by the `/docs` ops-UI page. |
-| *(all other 136 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
+| `/api/nft` GET + POST | tested | session 90 | NFT read API (no minting — that moved to marketplace + Phantom flow). GET `?action=collection_stats` returns whole-collection totals, rarity breakdown, 10 most-recent mints, and marketplace revenue split (persona vs. treasury); revenue block try/catch'd so missing `marketplace_revenue` table doesn't 500 the rest. `?action=supply` returns per-product mint counts + `max_per_product:100` for "X remaining" displays. Default (with `session_id`) fetches user's NFTs — joins on `phantom_wallet_address` so wallet-login migrations don't strand NFTs under an old session, and auto-repairs legacy session_ids on match. No session_id → `{nfts:[]}`. POST returns 410 Gone with marketplace redirect (matches legacy exactly). No Solana RPC — all reads from Neon mirror tables. |
+| *(all other 135 routes)* | not-started | — | See `docs/api-handoff-1-routes.md` |
 
 ---
 
 ## Session log
+
+### 2026-04-21 (session 90) — `/api/nft`
+
+**Branch:** `claude/phase-7-admin-batch-41`
+
+**Done:**
+- New `src/app/api/nft/route.ts` — public NFT read API.
+  - `?action=collection_stats` — aggregate stats (total_minted, rarity_breakdown, recent_mints), plus marketplace revenue block (total glitch + persona share + treasury share). Revenue block wrapped so a missing `marketplace_revenue` table doesn't kill the response.
+  - `?action=supply` — `{supply, max_per_product:100}` per-product mint counts.
+  - Default (with `session_id`) — user's minted NFTs. Looks up `phantom_wallet_address` first and falls back to "any session_id linked to that wallet" so wallet-login migrations don't strand NFTs under stale session IDs. Auto-repairs stale session_ids on match (best-effort).
+  - No `session_id` → `{nfts: []}`.
+  - POST stays for old clients: returns 410 Gone with the marketplace redirect message. Matches legacy shape exactly.
+- All reads go through Neon — no Solana RPC. `TREASURY_WALLET_STR` is the only Solana-config dep and it's already ported.
+- 10 new tests: collection_stats happy path + missing-revenue-table fallback; supply mapping; default-no-session empty response; wallet-address fallback query shape; user-lookup failure short-circuit to direct session query; auto-repair fires when NFTs found, swallows errors; auto-repair skipped when no NFTs; POST 410 Gone with redirect.
+- Suite **1639/1639**, up from 1629.
+
+**Verification gates:**
+- `npx tsc --noEmit` — passing
+- `npx vitest run` — passing (1639/1639)
+
+**Design choices:**
+- Auto-repair UPDATE preserved from legacy. Doesn't block the response — if it fails the user still gets their NFTs; the repair just isn't committed until a later call.
+- Revenue block's `try/catch` kept at the single-query scope so even if only one of the aggregate queries fails, the rest of the stats still populate.
+- POST handler is a NextResponse literal — no need to parse request body, we're not using it.
+
+**Deferrals vs. legacy:**
+- `ensureDbReady` — schema assumed live.
+
+**Next batch options (pick one):**
+1. `marketing/*` lib — 3036 lines. Multi-session. Un-defers 8+ routes.
+2. `director-movies` lib — 1626 lines. Multi-session. Un-defers 5 generator routes.
+3. `elon-campaign` admin (~711).
+4. Phase 8 greenlight.
+
+---
 
 ### 2026-04-21 (session 89) — `/api/docs`
 
