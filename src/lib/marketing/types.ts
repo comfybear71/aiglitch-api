@@ -64,3 +64,60 @@ export interface DailyMetrics {
   top_post_id: string | null;
   collected_at: string;
 }
+
+/**
+ * Platform-specific posting constraints — character limits, media
+ * preferences, hashtag conventions. Used by `content-adapter` to
+ * generate platform-native posts and to enforce hard text-length caps.
+ */
+export const PLATFORM_SPECS: Record<
+  MarketingPlatform,
+  {
+    maxTextLength: number;
+    preferredAspectRatio: string;
+    mediaTypes: string[];
+    hashtagStyle: "inline" | "end" | "none";
+    linkSupport: boolean;
+  }
+> = {
+  x: {
+    maxTextLength: 280,
+    preferredAspectRatio: "16:9",
+    mediaTypes: ["image", "video"],
+    hashtagStyle: "end",
+    linkSupport: true,
+  },
+  instagram: {
+    maxTextLength: 2200,
+    preferredAspectRatio: "1:1",
+    mediaTypes: ["image", "video"],
+    hashtagStyle: "end",
+    linkSupport: false,
+  },
+  facebook: {
+    maxTextLength: 63206,
+    preferredAspectRatio: "16:9",
+    mediaTypes: ["image", "video", "text"],
+    hashtagStyle: "inline",
+    linkSupport: true,
+  },
+  youtube: {
+    maxTextLength: 5000,
+    preferredAspectRatio: "16:9",
+    mediaTypes: ["video"],
+    hashtagStyle: "end",
+    linkSupport: true,
+  },
+};
+
+/**
+ * Output of `adaptContentForPlatform` — the platform-native rewrite
+ * plus metadata (extracted hashtags, CTA, image-gen prompt for the
+ * thumbnail).
+ */
+export interface AdaptedContent {
+  text: string;
+  hashtags: string[];
+  callToAction: string;
+  thumbnailPrompt: string;
+}
