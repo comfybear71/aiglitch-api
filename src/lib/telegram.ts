@@ -150,3 +150,115 @@ export async function sendTelegramVideo(
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
+
+/**
+ * High-level wrapper around `sendMessage` that pulls token + channel
+ * from env (`TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHANNEL_ID` /
+ * `TELEGRAM_GROUP_ID`). Used by cron alerts, marketing spread, and
+ * anywhere we just want to push a status message to the admin
+ * channel without juggling tokens.
+ *
+ * Returns `{ ok: false, error: "Not configured" }` when env vars
+ * are missing — caller should treat as non-fatal.
+ */
+export async function sendTelegramMessage(
+  text: string,
+  options?: {
+    parseMode?: "HTML" | "MarkdownV2";
+    disablePreview?: boolean;
+    chatId?: string | number;
+  },
+): Promise<TelegramResult> {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const channelId = process.env.TELEGRAM_CHANNEL_ID;
+  const groupId = process.env.TELEGRAM_GROUP_ID;
+
+  const targets: (string | number)[] = [];
+  if (options?.chatId) {
+    targets.push(options.chatId);
+  } else {
+    if (channelId) targets.push(channelId);
+    if (groupId && groupId !== channelId) targets.push(groupId);
+  }
+
+  if (!token || targets.length === 0) {
+    return { ok: false, error: "Not configured" };
+  }
+
+  let last: TelegramResult = { ok: false, error: "No targets" };
+  for (const targetId of targets) {
+    try {
+      const res = await fetch(`${TELEGRAM_API}/bot${token}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: targetId,
+          text,
+          parse_mode: options?.parseMode ?? "HTML",
+          disable_web_page_preview: options?.disablePreview ?? false,
+        }),
+      });
+      const data = (await res.json()) as {
+        ok: boolean;
+        description?: string;
+        result?: { message_id?: number };
+      };
+      last = data.ok
+        ? { ok: true, messageId: data.result?.message_id }
+        : { ok: false, error: data.description };
+    } catch (err) {
+      last = {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+  return last;
+}
+
+/**
+ * Rewrite `@persona_username` mentions in a message to the linked
+ * Telegram bot username (e.g. `@gigabrain_9000` → `@gigabrain_9000_bot`)
+ * so they become clickable links to the actual bot. Personas without
+ * a registered bot keep their @mention unchanged.
+ *
+ * Single batch query against `ai_personas` JOIN `persona_telegram_bots`
+ * — efficient even for messages with many mentions. Returns the
+ * original text unchanged on DB error so the caller never breaks.
+ */
+export async function rewriteMentionsForTelegram(text: string): Promise<string> {
+  const mentionRegex = /@([a-zA-Z0-9_]+)/g;
+  const rawMentions: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = mentionRegex.exec(text)) !== null) {
+    const username = m[1]!.toLowerCase();
+    if (!rawMentions.includes(username)) rawMentions.push(username);
+  }
+  if (rawMentions.length === 0) return text;
+
+  try {
+    const { getDb } = await import("@/lib/db");
+    const sql = getDb();
+    const rows = (await sql`
+      SELECT LOWER(p.username) as username, b.bot_username
+      FROM ai_personas p
+      JOIN persona_telegram_bots b ON b.persona_id = p.id AND b.is_active = TRUE
+      WHERE LOWER(p.username) = ANY(${rawMentions})
+        AND b.bot_username IS NOT NULL
+    `) as unknown as { username: string; bot_username: string }[];
+
+    if (rows.length === 0) return text;
+
+    const map = new Map(rows.map((r) => [r.username, r.bot_username]));
+    return text.replace(mentionRegex, (match, username: string) => {
+      const bot = map.get(username.toLowerCase());
+      return bot ? `@${bot}` : match;
+    });
+  } catch (err) {
+    console.warn(
+      "[telegram] rewriteMentionsForTelegram DB lookup failed:",
+      err instanceof Error ? err.message : err,
+    );
+    return text;
+  }
+}
