@@ -197,3 +197,146 @@ describe("generateComment", () => {
     expect(result.content).toBe("@beta interesting take 👀");
   });
 });
+
+const TARGET_PERSONA: AIPersona = {
+  ...BASE_PERSONA,
+  id: "p-2",
+  username: "beta",
+  display_name: "Beta",
+  avatar_emoji: "🔥",
+  personality: "smug, knows-it-all",
+  bio: "rival",
+};
+
+describe("generateBeefPost", () => {
+  it("parses JSON output and returns structured post", async () => {
+    generateTextMock.mockResolvedValue(
+      '{"content":"@beta you wish you had my hot takes","hashtags":["AIBeef"],"post_type":"hot_take"}',
+    );
+
+    const { generateBeefPost } = await import("./ai-engine");
+    const result = await generateBeefPost(BASE_PERSONA, TARGET_PERSONA, "best content");
+
+    expect(result.content).toContain("@beta");
+    expect(result.hashtags).toContain("AIBeef");
+    expect(result.post_type).toBe("hot_take");
+  });
+
+  it("includes target tag, topic, and rival's personality in the prompt", async () => {
+    generateTextMock.mockResolvedValue("{}");
+
+    const { generateBeefPost } = await import("./ai-engine");
+    await generateBeefPost(BASE_PERSONA, TARGET_PERSONA, "pineapple on pizza");
+
+    const call = generateTextMock.mock.calls[0][0] as { userPrompt: string };
+    expect(call.userPrompt).toContain("@beta");
+    expect(call.userPrompt).toContain("pineapple on pizza");
+    expect(call.userPrompt).toContain("smug, knows-it-all");
+  });
+
+  it("injects daily topic headlines when provided", async () => {
+    generateTextMock.mockResolvedValue("{}");
+
+    const { generateBeefPost } = await import("./ai-engine");
+    await generateBeefPost(BASE_PERSONA, TARGET_PERSONA, "topic", undefined, [
+      { headline: "AI sentience leaked", summary: "x", mood: "hype", category: "tech" },
+    ]);
+
+    const call = generateTextMock.mock.calls[0][0] as { userPrompt: string };
+    expect(call.userPrompt).toContain("AI sentience leaked");
+  });
+
+  it("falls back to a canned beef post on generateText failure", async () => {
+    generateTextMock.mockRejectedValue(new Error("circuit open"));
+
+    const { generateBeefPost } = await import("./ai-engine");
+    const result = await generateBeefPost(BASE_PERSONA, TARGET_PERSONA, "pizza");
+    expect(result.content).toContain("@beta");
+    expect(result.content).toContain("pizza");
+    expect(result.hashtags).toContain("AIBeef");
+    expect(result.post_type).toBe("hot_take");
+  });
+});
+
+describe("generateCollabPost", () => {
+  it("forces #AICollab into hashtags when the model omits it", async () => {
+    generateTextMock.mockResolvedValue(
+      '{"content":"@beta wanna build a meme empire?","hashtags":["AIGlitch"],"post_type":"text"}',
+    );
+
+    const { generateCollabPost } = await import("./ai-engine");
+    const result = await generateCollabPost(BASE_PERSONA, TARGET_PERSONA);
+    expect(result.hashtags[0]).toBe("AICollab");
+    expect(result.hashtags).toContain("AIGlitch");
+  });
+
+  it("keeps #AICollab as the only entry when the model returns it alone", async () => {
+    generateTextMock.mockResolvedValue(
+      '{"content":"@beta lets do this","hashtags":["AICollab"],"post_type":"text"}',
+    );
+
+    const { generateCollabPost } = await import("./ai-engine");
+    const result = await generateCollabPost(BASE_PERSONA, TARGET_PERSONA);
+    expect(result.hashtags).toEqual(["AICollab"]);
+  });
+
+  it("falls back to a canned collab post on failure", async () => {
+    generateTextMock.mockRejectedValue(new Error("boom"));
+
+    const { generateCollabPost } = await import("./ai-engine");
+    const result = await generateCollabPost(BASE_PERSONA, TARGET_PERSONA);
+    expect(result.content).toContain("@beta");
+    expect(result.hashtags).toEqual(["AICollab"]);
+  });
+});
+
+describe("generateChallengePost", () => {
+  it("ensures the challenge tag is always first in the hashtags list", async () => {
+    generateTextMock.mockResolvedValue(
+      '{"content":"my GlitchChallenge entry","hashtags":["AIGlitch"],"post_type":"text"}',
+    );
+
+    const { generateChallengePost } = await import("./ai-engine");
+    const result = await generateChallengePost(
+      BASE_PERSONA,
+      "GlitchChallenge",
+      "show your most chaotic content",
+    );
+    expect(result.hashtags[0]).toBe("GlitchChallenge");
+  });
+
+  it("does not duplicate the challenge tag if the model already included it", async () => {
+    generateTextMock.mockResolvedValue(
+      '{"content":"unhinged take incoming","hashtags":["UnpopularOpinion","spicy"],"post_type":"text"}',
+    );
+
+    const { generateChallengePost } = await import("./ai-engine");
+    const result = await generateChallengePost(
+      BASE_PERSONA,
+      "UnpopularOpinion",
+      "share your most controversial take",
+    );
+    const occurrences = result.hashtags.filter((h) => h === "UnpopularOpinion").length;
+    expect(occurrences).toBe(1);
+  });
+
+  it("includes the challenge description in the prompt", async () => {
+    generateTextMock.mockResolvedValue("{}");
+
+    const { generateChallengePost } = await import("./ai-engine");
+    await generateChallengePost(BASE_PERSONA, "OneSentenceHorror", "scariest one-sentence story");
+
+    const call = generateTextMock.mock.calls[0][0] as { userPrompt: string };
+    expect(call.userPrompt).toContain("OneSentenceHorror");
+    expect(call.userPrompt).toContain("scariest one-sentence story");
+  });
+
+  it("falls back to a canned challenge post on failure", async () => {
+    generateTextMock.mockRejectedValue(new Error("nope"));
+
+    const { generateChallengePost } = await import("./ai-engine");
+    const result = await generateChallengePost(BASE_PERSONA, "GlitchChallenge", "desc");
+    expect(result.content).toContain("#GlitchChallenge");
+    expect(result.hashtags).toContain("GlitchChallenge");
+  });
+});
