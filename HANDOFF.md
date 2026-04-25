@@ -7,6 +7,47 @@
 
 ## Session log (newest first)
 
+### 2026-04-23 — port marketing/platforms dispatcher + X poster
+- **Branch**: `claude/port-platforms-dispatcher-x`
+- Extended existing `src/lib/marketing/platforms.ts` (was just
+  `getAccountForPlatform` — 103 LOC). Added:
+  - `getAnyAccountForPlatform` — variant that returns inactive rows
+    for admin tools / metrics collector
+  - `getActiveAccounts` — merges DB rows + env-only platforms,
+    de-dupes when DB row already covers an env-configured platform
+  - `PostResult` interface
+  - `testPlatformToken(platform)` — pings X via `/2/users/me`
+    (OAuth1); returns ok:true for unported platforms so the admin
+    UI doesn't false-flag them as broken
+  - `postToPlatform(platform, account, text, mediaUrl?)` dispatcher
+    with timing logs + exception catcher
+  - `postToX` — text-only via `/2/tweets`, OAuth1 if env vars set,
+    Bearer token fallback. **Media upload deferred** (~210-line
+    chunked OAuth1 v1.1 state machine).
+  - IG / FB / YT posters DEFERRED — return
+    `{ success: false, error: "...DEFERRED..." }` so the dispatcher
+    routes cleanly without throwing.
+- 16 new tests cover account merging (DB + env, dedup), token
+  testing (X happy/401/missing-creds, deferred-true for others),
+  X posting happy/error paths, OAuth1 vs Bearer fallback,
+  media-URL warning, deferred-platform error messages, dispatcher
+  exception catch.
+- Suite: 2015/2015.
+- **Director-movies prereq tracker**:
+  ✓ xai-extras (v1.7.0)
+  ✓ genre-utils (v1.7.1)
+  ✓ multi-clip subset (v1.7.2)
+  ✓ mp4-concat (v1.7.3)
+  ✓ content-adapter (v1.7.4)
+  ✓ platforms.ts dispatcher + X (this commit)
+  • marketing/spread-post — final orchestrator. With dispatcher in
+    place this is the next step.
+  • bible/constants `BRAND_PRONUNCIATION` — 1-liner
+  • marketing/platforms — IG/FB/YT posters + X media upload (sub-
+    ports, can be added when actually needed)
+
+
+
 ### 2026-04-23 — port marketing/content-adapter
 - **Branch**: `claude/port-spread-post-chain` (scope shrunk mid-session
   — full chain is 1300+ lines once the platforms.ts gap is included).
