@@ -7,6 +7,53 @@
 
 ## Session log (newest first)
 
+### 2026-04-23 — port marketing/spread-post + telegram extras
+- **Branch**: `claude/port-spread-post-final`
+- Added `sendTelegramMessage(text, options?)` + `rewriteMentionsForTelegram(text)`
+  to existing `src/lib/telegram.ts` (legacy had them in same file; new repo
+  was using lower-level `sendMessage(token, chatId, text)` only).
+  - `sendTelegramMessage` pulls `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHANNEL_ID`
+    / `TELEGRAM_GROUP_ID` from env, supports `chatId` override, returns
+    `{ ok: false, error: "Not configured" }` when env is missing
+    (caller treats as non-fatal).
+  - `rewriteMentionsForTelegram` does a single batch `JOIN` query against
+    `ai_personas` + `persona_telegram_bots` to swap @username →
+    @bot_username so mentions become clickable links to the bot.
+- New `src/lib/marketing/spread-post.ts`:
+  - `pickFallbackMedia(preferVideo?)` — random recent media URL from
+    posts table when current post has no media. Falls back across 7-day
+    video → 7-day image → 30-day image.
+  - `spreadPostToSocial(postId, ...)` — orchestrator. Loads post,
+    handles Neon read-after-write replication-lag via `knownMedia`
+    override, fetches active accounts, runs adapt + post in parallel
+    via `Promise.allSettled`, writes `marketing_posts` rows, finally
+    pushes a status summary to Telegram.
+  - Filters out platforms that can't handle the post (YouTube without
+    video, Instagram without media).
+  - Never throws — returns `{ platforms: string[], failed: string[] }`.
+  - Two label modes: `AD POSTED` (default, shows full content) vs
+    `MOVIE POSTED` (extracts title line only).
+- 11 tests on spread-post cover happy path, knownMedia override,
+  platform filtering (yt-no-video, ig-no-media), failure handling
+  (platform fail flagged, missing post returns clean, telegram failure
+  non-fatal), pickFallbackMedia branches, MOVIE POSTED label.
+- **Director-movies prereq tracker — ALL DONE ✓**:
+  ✓ xai-extras (v1.7.0)
+  ✓ genre-utils (v1.7.1)
+  ✓ multi-clip subset (v1.7.2)
+  ✓ mp4-concat (v1.7.3)
+  ✓ content-adapter (v1.7.4)
+  ✓ platforms dispatcher + X (v1.7.5)
+  ✓ spread-post (this commit)
+  • bible/constants `BRAND_PRONUNCIATION` — 1-liner, will inline
+    during the director-movies port itself
+- **Next session unblocks**: `/api/admin/spread`, `/api/admin/media/spread`
+  (marketing-lib blocker has spread-post now), and the path is now clear
+  to start porting `lib/content/director-movies.ts` (1626 lines) → which
+  unblocks 10 director-movies routes.
+
+
+
 ### 2026-04-23 — port marketing/platforms dispatcher + X poster
 - **Branch**: `claude/port-platforms-dispatcher-x`
 - Extended existing `src/lib/marketing/platforms.ts` (was just
