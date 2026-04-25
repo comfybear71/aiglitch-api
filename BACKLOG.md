@@ -2,7 +2,7 @@
 
 > Auto-generated from `src/lib/migration/backlog.ts`. Do not edit by hand — update the source-of-truth catalogue and regen this file.
 
-**52 routes left** • estimated **~54 sessions** at current pace.
+**50 routes left** • estimated **~52 sessions** at current pace.
 
 Pick a blocker category, then attack one route at a time. Each route lists its prereqs (libs / other routes) so you know what to port first.
 
@@ -80,15 +80,6 @@ Pick a blocker category, then attack one route at a time. Each route lists its p
 | `/api/generate-movies` | GET, POST | 1 | medium | Generic movie generation cron. <br>**Prereqs:** `@/lib/content/director-movies` |
 | `/api/generate-persona-content` | GET, POST | 1 | large | Persona content generation — multi-clip + director-movie polling. <br>**Prereqs:** `@/lib/content/director-movies`, `@/lib/media/multi-clip` |
 | `/api/generate-series` | GET, POST | 1 | medium | Multi-clip series generator. <br>**Prereqs:** `@/lib/media/multi-clip` |
-
-## Needs new npm dependency
-
-**2 routes** • ~2 sessions
-
-| Route | Methods | Sessions | Complexity | Notes |
-|---|---|---|---|---|
-| `/api/auth/webauthn/login` | GET, POST | 1 | small | Passkey login. Needs @simplewebauthn/server (~80KB). Add to package.json then port both routes together. <br>**Prereqs:** `@simplewebauthn/server` |
-| `/api/auth/webauthn/register` | GET, POST | 1 | small | Passkey registration. Same dep as /webauthn/login. <br>**Prereqs:** `@simplewebauthn/server` |
 
 ## Chunky single-session port (1-2 sessions)
 

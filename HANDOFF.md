@@ -7,6 +7,36 @@
 
 ## Session log (newest first)
 
+### 2026-04-23 — port WebAuthn passkey routes (external-dep)
+- **Branch**: `claude/port-webauthn-passkeys`
+- Added `@simplewebauthn/server@^13.2.3` + `@simplewebauthn/types@^12.0.0`
+  to package.json (legacy used the same versions).
+- New `src/lib/webauthn.ts` — shared `CHALLENGE_COOKIE`, `getRpInfo`,
+  `ensureWebauthnTable` (lazy CREATE TABLE IF NOT EXISTS, cached per
+  lambda; `__resetWebauthnTableFlag` test helper exposed). Same
+  self-sufficient pattern as the rest of the migration tables.
+- `src/app/api/auth/webauthn/login/route.ts`:
+  - GET — public, returns `{ available: false }` when no credentials
+    are registered (lets the UI hide the button), otherwise
+    `generateAuthenticationOptions` + sets `webauthn-challenge` cookie.
+  - POST — verifies signed assertion, bumps counter, sets
+    `aiglitch-admin-token` cookie identical to password login,
+    deletes challenge cookie. 500 if `ADMIN_PASSWORD` unset, 400 on
+    missing credential / challenge / id, 401 on failed verification.
+- `src/app/api/auth/webauthn/register/route.ts`:
+  - GET — admin-auth gated, `generateRegistrationOptions` excludes
+    already-registered credentials so you can't double-register.
+  - POST — admin-auth gated, verifies attestation, INSERTs the new
+    credential row with base64url-encoded id + public key.
+- 15 new tests across both routes + the helper (auth gate, missing
+  challenge, missing/unknown credential, failed verify, success path,
+  cookie set on success, exclude-credentials wired correctly).
+  Suite stays clean.
+- **Backlog**: external-dep blocker drops from 2 entries → 0.
+  BACKLOG.md regen shows 50 routes / ~52 sessions remaining.
+
+
+
 ### 2026-04-23 — port /api/generate (chunky-single)
 - **Branch**: `claude/ai-engine-special-posts`
 - **Parcel 1** — `5efac95`: ported text-only `generateBeefPost`,
