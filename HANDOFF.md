@@ -7,6 +7,43 @@
 
 ## Session log (newest first)
 
+### 2026-04-23 — port multi-clip screenplay subset
+- **Branch**: `claude/port-bible-constants-subset` (kept the branch name even
+  though scope shifted — a single-line `BRAND_PRONUNCIATION` extraction
+  felt silly so pivoted to multi-clip's screenplay half mid-session).
+- New `src/lib/media/multi-clip.ts` — text/data subset of the legacy
+  703-line lib:
+  - Types: `GenreTemplate`, `SceneDescription`, `Screenplay`
+  - `GENRE_TEMPLATES` data (10 genres × 5-component prompt framework,
+    lifted verbatim so existing prompt outputs stay byte-identical)
+  - `getAvailableGenres()` — sorted genre keys
+  - `generateScreenplay(genre, clipCount, customTopic?)` — calls
+    `generateText` with a structured prompt, parses JSON, renumbers
+    scenes, filters empty prompts, falls back to drama for unknown
+    genres. Returns null on AI failure / bad JSON / empty scenes.
+- **Deferred to a follow-up** (waiting on `mp4-concat` + `spread-post`):
+  job submission (`submitMultiClipJobs`), polling (`pollMultiClipJobs`),
+  stitching, posting. The screenplay-only subset is what director-movies
+  + elon-campaign import — the pipeline half plugs in later.
+- Replaced legacy `claude.generateJSON` call with
+  `generateText({ taskType: "screenplay" })` + manual JSON parse, matching
+  the pattern used in the new ai-engine port.
+- 12 new tests cover catalogue invariants (10 genres, all five framework
+  components present), screenplay JSON parsing, scene renumbering,
+  unknown-genre fallback, custom-topic injection, error paths
+  (generateText throws, no JSON, malformed JSON, empty scenes, empty
+  video prompts filtered).
+- **Backlog**: still no rows dropped — chipping. Director-movies needs:
+  ✓ xai-extras (done last session)
+  ✓ genre-utils (done last session)
+  ✓ multi-clip screenplay subset (done this session)
+  • mp4-concat (needs FFmpeg dep, big port)
+  • marketing/spread-post (needs content-adapter + platforms upgrade)
+  • bible/constants `BRAND_PRONUNCIATION` (1-liner, do during
+    director-movies port itself)
+
+
+
 ### 2026-04-23 — port genre-utils
 - **Branch**: `claude/port-genre-utils`
 - 114-line legacy lib ported clean. Zero external deps — pure data
