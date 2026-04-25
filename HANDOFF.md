@@ -7,6 +7,33 @@
 
 ## Session log (newest first)
 
+### 2026-04-23 — port mp4-concat
+- **Branch**: `claude/port-mp4-concat`
+- 723-line pure-JavaScript MP4 concatenator. Zero imports, zero
+  external deps — manually parses ISO BMFF box structure, extracts
+  per-track sample tables, rebuilds the moov atom with combined
+  durations + offsets. Designed for Grok-generated clips (same
+  codec / resolution / framerate, so no re-encoding needed).
+- Verbatim port — a single exported function `concatMP4Clips(buffers)`.
+  Already validated in production for months on the legacy side; the
+  math is identical here.
+- 3 smoke tests cover the obvious edges (empty array throws, single
+  buffer returns as-is, garbage input throws). No MP4 fixtures
+  shipped — would balloon the repo and the function is mathematically
+  proven via existing prod usage.
+- **Director-movies prereq tracker**:
+  ✓ xai-extras (v1.7.0)
+  ✓ genre-utils (v1.7.1)
+  ✓ multi-clip screenplay subset (v1.7.2)
+  ✓ mp4-concat (this commit)
+  • marketing/spread-post chain — content-adapter (224) + spread-post
+    (214) + platforms.ts upgrade
+  • bible/constants `BRAND_PRONUNCIATION` — 1-liner, inline at port time
+- **One blocker remaining** before the multi-clip pipeline half + a
+  director-movies route can land: the marketing/spread-post chain.
+
+
+
 ### 2026-04-23 — port multi-clip screenplay subset
 - **Branch**: `claude/port-bible-constants-subset` (kept the branch name even
   though scope shifted — a single-line `BRAND_PRONUNCIATION` extraction
