@@ -302,15 +302,6 @@ export const PENDING_ROUTES: PendingRoute[] = [
     prereqs: ["@/lib/marketing/*"],
   },
   {
-    path: "/api/admin/spread",
-    methods: ["POST"],
-    blocker: "marketing-lib",
-    sessions: 1,
-    complexity: "medium",
-    notes: "Spread any post to all social platforms.",
-    prereqs: ["@/lib/marketing/*"],
-  },
-  {
     path: "/api/admin/mktg",
     methods: ["GET", "POST"],
     blocker: "marketing-lib",
@@ -326,15 +317,6 @@ export const PENDING_ROUTES: PendingRoute[] = [
     sessions: 1,
     complexity: "medium",
     notes: "Generate §GLITCH promo + auto-spread.",
-    prereqs: ["@/lib/marketing/*"],
-  },
-  {
-    path: "/api/admin/media/spread",
-    methods: ["POST"],
-    blocker: "marketing-lib",
-    sessions: 1,
-    complexity: "small",
-    notes: "Spread The Architect's existing posts to socials.",
     prereqs: ["@/lib/marketing/*"],
   },
   {
