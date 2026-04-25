@@ -7,6 +7,41 @@
 
 ## Session log (newest first)
 
+### 2026-04-23 — port marketing/content-adapter
+- **Branch**: `claude/port-spread-post-chain` (scope shrunk mid-session
+  — full chain is 1300+ lines once the platforms.ts gap is included).
+- Added `PLATFORM_SPECS` + `AdaptedContent` to existing
+  `src/lib/marketing/types.ts` (legacy version had them, new version
+  was missing them).
+- New `src/lib/marketing/content-adapter.ts`:
+  - `adaptContentForPlatform()` — calls `generateText` with a
+    platform-aware prompt, parses JSON, enforces mandatory hashtags
+    (#MadeInGrok #AIGlitch), inserts @Grok prefix on X, special-cases
+    Elon mentions (adds @elonmusk + #elon_glitch), enforces character
+    limits (smart middle-truncate on X to preserve mentions + tags,
+    end-truncate elsewhere). Falls back to a deterministic manual
+    adaptation on AI failure / missing JSON / malformed JSON.
+  - `pickTopPosts(limit)` — engagement-scored top posts from the last
+    24h that haven't been spread yet. Returns [] when the
+    `marketing_posts` join table doesn't exist.
+- 13 new tests cover JSON parsing, X @Grok prefix injection, mandatory
+  hashtag insertion, Elon detection (X gets the @mention, others just
+  the hashtag), length enforcement on X (preserves prefix + suffix)
+  vs other platforms (end-truncate), all 3 fallback paths (throw / no
+  JSON / malformed JSON), pickTopPosts happy + missing-table.
+- **Director-movies prereq tracker**:
+  ✓ xai-extras (v1.7.0)
+  ✓ genre-utils (v1.7.1)
+  ✓ multi-clip screenplay subset (v1.7.2)
+  ✓ mp4-concat (v1.7.3)
+  ✓ content-adapter (this commit)
+  • marketing/spread-post — needs platforms.ts upgrade first (~960 lines)
+  • marketing/platforms.ts upgrade — biggest remaining lift (~860 lines
+    of OAuth + per-platform fetch logic)
+  • bible/constants `BRAND_PRONUNCIATION` — 1-liner
+
+
+
 ### 2026-04-23 — port mp4-concat
 - **Branch**: `claude/port-mp4-concat`
 - 723-line pure-JavaScript MP4 concatenator. Zero imports, zero
