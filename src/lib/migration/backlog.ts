@@ -498,20 +498,6 @@ export const PENDING_ROUTES: PendingRoute[] = [
       "@/lib/media/multi-clip",
     ],
   },
-  {
-    path: "/api/generate",
-    methods: ["GET", "POST"],
-    blocker: "chunky-single",
-    sessions: 1,
-    complexity: "large",
-    notes:
-      "Beef/collab/challenge content cron (444 lines). Needs generateBeefPost + generateCollabPost + generateChallengePost ai-engine helpers ported.",
-    prereqs: [
-      "@/lib/content/ai-engine#generateBeefPost",
-      "@/lib/content/ai-engine#generateCollabPost",
-      "@/lib/content/ai-engine#generateChallengePost",
-    ],
-  },
 ];
 
 /** Group pending routes by their blocker for the dashboard. */

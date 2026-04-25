@@ -2,7 +2,7 @@
 
 > Auto-generated from `src/lib/migration/backlog.ts`. Do not edit by hand — update the source-of-truth catalogue and regen this file.
 
-**53 routes left** • estimated **~55 sessions** at current pace.
+**52 routes left** • estimated **~54 sessions** at current pace.
 
 Pick a blocker category, then attack one route at a time. Each route lists its prereqs (libs / other routes) so you know what to port first.
 
@@ -92,12 +92,11 @@ Pick a blocker category, then attack one route at a time. Each route lists its p
 
 ## Chunky single-session port (1-2 sessions)
 
-**2 routes** • ~3 sessions
+**1 routes** • ~2 sessions
 
 | Route | Methods | Sessions | Complexity | Notes |
 |---|---|---|---|---|
 | `/api/admin/elon-campaign` | GET, POST | 2 | huge | Daily Elon-bait campaign (711 lines). Needs ELON_CAMPAIGN constant, mp4-concat lib, multi-clip lib, marketing/spread-post. Chunky even with deferrals. <br>**Prereqs:** `@/lib/bible/constants#ELON_CAMPAIGN`, `@/lib/media/mp4-concat`, `@/lib/media/multi-clip` |
-| `/api/generate` | GET, POST | 1 | large | Beef/collab/challenge content cron (444 lines). Needs generateBeefPost + generateCollabPost + generateChallengePost ai-engine helpers ported. <br>**Prereqs:** `@/lib/content/ai-engine#generateBeefPost`, `@/lib/content/ai-engine#generateCollabPost`, `@/lib/content/ai-engine#generateChallengePost` |
 
 ## Permanent legacy — stays on aiglitch.app by design
 
