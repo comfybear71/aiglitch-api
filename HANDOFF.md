@@ -7,6 +7,28 @@
 
 ## Session log (newest first)
 
+### 2026-04-23 — port genre-utils
+- **Branch**: `claude/port-genre-utils`
+- 114-line legacy lib ported clean. Zero external deps — pure data
+  + pure functions. Single source of truth for genre name → blob
+  folder → hashtag mapping.
+- Exports: `ALL_GENRES` (readonly tuple), `GenreName` type,
+  `GENRE_LABELS`, `getGenreBlobFolder`, `getGenreFolderName`,
+  `detectGenreFromPath`, `getAllBlobFolders`, `capitalizeGenre`,
+  `getGenreHashtag`.
+- Preserves the `cooking_channel` → `cooking_show` legacy quirk so
+  existing blob URLs keep resolving.
+- 15 tests cover catalogue invariants, folder lookups, the legacy
+  quirk, fallback for unknown genres, case-insensitive path
+  detection, hashtag formatting, CamelCase capitalization.
+- Tightened `detectGenreFromPath` return type from `string | null` to
+  `GenreName | null` since the result is always a known genre.
+- **Backlog**: no rows dropped — chipping away at director-movies
+  prereqs. Routes start dropping when multi-clip + bible/constants
+  subset + spread-post chain land.
+
+
+
 ### 2026-04-23 — port xAI extras (Grok long-form text + video jobs)
 - **Branch**: `claude/port-xai-lib`
 - Strategic prereq port — unblocks future director-movies, elon-campaign,
