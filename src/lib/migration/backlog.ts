@@ -462,27 +462,6 @@ export const PENDING_ROUTES: PendingRoute[] = [
     notes: "Same as image-proxy — IG can't fetch Blob videos.",
   },
 
-  // ── External deps ──────────────────────────────────────────
-  {
-    path: "/api/auth/webauthn/login",
-    methods: ["GET", "POST"],
-    blocker: "external-dep",
-    sessions: 1,
-    complexity: "small",
-    notes:
-      "Passkey login. Needs @simplewebauthn/server (~80KB). Add to package.json then port both routes together.",
-    prereqs: ["@simplewebauthn/server"],
-  },
-  {
-    path: "/api/auth/webauthn/register",
-    methods: ["GET", "POST"],
-    blocker: "external-dep",
-    sessions: 1,
-    complexity: "small",
-    notes: "Passkey registration. Same dep as /webauthn/login.",
-    prereqs: ["@simplewebauthn/server"],
-  },
-
   // ── Chunky single-session ──────────────────────────────────
   {
     path: "/api/admin/elon-campaign",
