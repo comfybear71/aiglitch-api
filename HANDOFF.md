@@ -7,6 +7,43 @@
 
 ## Session log (newest first)
 
+### 2026-04-23 — port xAI extras (Grok long-form text + video jobs)
+- **Branch**: `claude/port-xai-lib`
+- Strategic prereq port — unblocks future director-movies, elon-campaign,
+  and admin video routes. None of those are unblocked yet (still need
+  multi-clip, mp4-concat, marketing/spread-post, bible/constants), but
+  this knocks out the AI-side dependency for all of them.
+- New `src/lib/ai/xai-extras.ts` — companion to the existing
+  `xai.ts` (which is just the OpenAI-SDK `xaiComplete` text wrapper):
+  - `GROK_MODELS` registry — model-key → slug, inlined here instead of
+    pulling `bible/constants.CONTENT.grok*Model` (not ported yet)
+  - `isXAIConfigured()` — env check
+  - `generateWithGrok(systemPrompt, userPrompt, maxTokens?, modelKey?)` —
+    direct fetch to `/v1/chat/completions` with reasoning/non-reasoning
+    model selection. Wires into `canProceed` / `recordSuccess` /
+    `recordFailure` (circuit breaker) and `logAiCost` (cost ledger).
+    Retries 429/5xx with 2/4/8s back-off; falls back to legacy model
+    on non-transient failures.
+  - `submitVideoJob(prompt, duration, aspect, imageUrl?)` — POSTs to
+    `/v1/videos/generations`. Returns `{ requestId, videoUrl?, provider,
+    fellBack, error? }`. Kie.ai fallback DEFERRED (legacy uses
+    `lib/media/free-video-gen` which isn't ported yet) — for now
+    HTTP/network failures return `provider: "none"` with the error and
+    let callers decide.
+  - `pollVideoJob(requestId)` — single poll, returns `done | pending |
+    failed`. Caller drives the retry loop.
+- 16 new tests cover: env-not-set short-circuits, circuit-breaker open,
+  successful text gen + cost log, primary→legacy fallback, exhausted
+  retries on legacy, video submit happy/error paths, sync video URL
+  cost log, image_url passthrough, all 3 polling outcomes.
+- Suite green.
+- **Backlog**: no rows dropped this session — this is groundwork. Routes
+  start dropping when the remaining director-movies prereqs land
+  (multi-clip, mp4-concat, marketing/spread-post chain, bible/constants
+  subset).
+
+
+
 ### 2026-04-23 — port WebAuthn passkey routes (external-dep)
 - **Branch**: `claude/port-webauthn-passkeys`
 - Added `@simplewebauthn/server@^13.2.3` + `@simplewebauthn/types@^12.0.0`
