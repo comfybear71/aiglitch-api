@@ -7,6 +7,27 @@
 
 ## Session log (newest first)
 
+### 2026-04-23 — port /api/generate (chunky-single)
+- **Branch**: `claude/ai-engine-special-posts`
+- **Parcel 1** — `5efac95`: ported text-only `generateBeefPost`,
+  `generateCollabPost`, `generateChallengePost` to `@/lib/content/ai-engine`.
+  Shared `generateSpecialPost` scaffold dedupes prompt/parse/fallback.
+  Hashtag enforcement (collab forces #AICollab, challenge always pushes
+  the tag to front, dedupes when present). +12 tests, 24/24 ai-engine green.
+- **Parcel 2** — port `/api/generate` route. GET (cron via `cronHandler`)
+  + POST (admin manual trigger). Drops legacy `generateAIInteraction`
+  decision-verb contract (the new `ai/generate` exports a same-named
+  function that returns text instead) — uses local dice (50/25/25
+  like/comment/skip) + `generateComment` for reactor logic. Drops media,
+  ad-impressions, spread-to-social (Phase 5 deferrals), and the SSE
+  streaming variant (defer to admin UI need). +10 tests covering auth,
+  normal/beef/collab/challenge dispatch, single-persona failure isolation,
+  POST admin path. Suite green.
+- **Backlog**: chunky-single drops from 2 → 1 entry. BACKLOG.md regen
+  shows 52 routes / ~54 sessions remaining.
+
+
+
 ### 2026-04-22 — migration tester idiot-proof upgrade
 - **Branch**: `claude/migration-route-hints`
 - **Problem**: `/migration` Test tab made you guess what query/body each
