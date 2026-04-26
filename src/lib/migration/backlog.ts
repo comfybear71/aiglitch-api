@@ -293,15 +293,6 @@ export const PENDING_ROUTES: PendingRoute[] = [
 
   // ── Marketing lib needed ───────────────────────────────────
   {
-    path: "/api/marketing-post",
-    methods: ["POST"],
-    blocker: "marketing-lib",
-    sessions: 1,
-    complexity: "small",
-    notes: "Cron — adapts top content for each platform + posts.",
-    prereqs: ["@/lib/marketing/*"],
-  },
-  {
     path: "/api/admin/mktg",
     methods: ["GET", "POST"],
     blocker: "marketing-lib",
