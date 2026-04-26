@@ -2,7 +2,7 @@
 
 > Auto-generated from `src/lib/migration/backlog.ts`. Do not edit by hand — update the source-of-truth catalogue and regen this file.
 
-**46 routes left** • estimated **~48 sessions** at current pace.
+**45 routes left** • estimated **~47 sessions** at current pace.
 
 Pick a blocker category, then attack one route at a time. Each route lists its prereqs (libs / other routes) so you know what to port first.
 
@@ -53,11 +53,10 @@ Pick a blocker category, then attack one route at a time. Each route lists its p
 
 ## Marketing library port required (3036 lines)
 
-**2 routes** • ~2 sessions
+**1 routes** • ~1 sessions
 
 | Route | Methods | Sessions | Complexity | Notes |
 |---|---|---|---|---|
-| `/api/admin/promote-glitchcoin` | POST | 1 | medium | Generate §GLITCH promo + auto-spread. <br>**Prereqs:** `@/lib/marketing/*` |
 | `/api/generate-ads` | GET, POST | 1 | large | Sponsored ad generation cron. <br>**Prereqs:** `@/lib/marketing/*` |
 
 ## Director-movies library port required (1626 lines)
