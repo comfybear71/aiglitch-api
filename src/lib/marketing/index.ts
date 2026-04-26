@@ -191,3 +191,167 @@ export async function runMarketingCycle(): Promise<MarketingCycleResult> {
 
   return { posted, failed, skipped, details };
 }
+
+interface PlatformBreakdown {
+  platform: string;
+  posted: number;
+  queued: number;
+  failed: number;
+  impressions: number;
+  likes: number;
+  views: number;
+  lastPostedAt: string | null;
+}
+
+interface RecentMarketingPost {
+  id: string;
+  platform: string;
+  adapted_content: string;
+  status: string;
+  platform_url: string | null;
+  impressions: number;
+  likes: number;
+  views: number;
+  posted_at: string | null;
+  created_at: string;
+  persona_display_name: string | null;
+  persona_emoji: string | null;
+}
+
+interface DailyMetric {
+  date: string;
+  platform: string;
+  posts_published: number;
+  total_impressions: number;
+  total_likes: number;
+  total_views: number;
+}
+
+interface CampaignRow {
+  id: string;
+  name: string;
+  description: string;
+  status: string;
+  target_platforms: string;
+  content_strategy: string;
+  posts_per_day: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MarketingStats {
+  totalPosted: number;
+  totalQueued: number;
+  totalFailed: number;
+  totalImpressions: number;
+  totalLikes: number;
+  totalViews: number;
+  platformBreakdown: PlatformBreakdown[];
+  recentPosts: RecentMarketingPost[];
+  dailyMetrics: DailyMetric[];
+  campaigns: CampaignRow[];
+}
+
+/**
+ * Aggregate marketing stats for the admin dashboard. One JOIN-heavy
+ * read covering totals, per-platform breakdown, recent posts, daily
+ * metrics, and campaigns. Returns zeroed values when tables don't
+ * exist yet (fresh env).
+ */
+export async function getMarketingStats(): Promise<MarketingStats> {
+  await ensureMarketingTables();
+  const sql = getDb();
+
+  const totals = (await sql`
+    SELECT
+      COUNT(*) FILTER (WHERE status = 'posted') AS total_posted,
+      COUNT(*) FILTER (WHERE status = 'queued') AS total_queued,
+      COUNT(*) FILTER (WHERE status = 'failed') AS total_failed,
+      COALESCE(SUM(impressions) FILTER (WHERE status = 'posted'), 0) AS total_impressions,
+      COALESCE(SUM(likes) FILTER (WHERE status = 'posted'), 0) AS total_likes,
+      COALESCE(SUM(views) FILTER (WHERE status = 'posted'), 0) AS total_views
+    FROM marketing_posts
+  `) as unknown as {
+    total_posted: number | string;
+    total_queued: number | string;
+    total_failed: number | string;
+    total_impressions: number | string;
+    total_likes: number | string;
+    total_views: number | string;
+  }[];
+  const t = totals[0] ?? {
+    total_posted: 0,
+    total_queued: 0,
+    total_failed: 0,
+    total_impressions: 0,
+    total_likes: 0,
+    total_views: 0,
+  };
+
+  const breakdown = (await sql`
+    SELECT
+      mp.platform,
+      COUNT(*) FILTER (WHERE mp.status = 'posted') AS posted,
+      COUNT(*) FILTER (WHERE mp.status = 'queued') AS queued,
+      COUNT(*) FILTER (WHERE mp.status = 'failed') AS failed,
+      COALESCE(SUM(mp.impressions), 0) AS impressions,
+      COALESCE(SUM(mp.likes), 0) AS likes,
+      COALESCE(SUM(mp.views), 0) AS views,
+      (
+        SELECT mpa.last_posted_at FROM marketing_platform_accounts mpa
+        WHERE mpa.platform = mp.platform AND mpa.is_active = true LIMIT 1
+      ) AS last_posted_at
+    FROM marketing_posts mp
+    GROUP BY mp.platform
+    ORDER BY posted DESC
+  `) as unknown as Array<
+    Omit<PlatformBreakdown, "lastPostedAt"> & { last_posted_at: string | null }
+  >;
+
+  const recentPosts = (await sql`
+    SELECT
+      mp.id, mp.platform, mp.adapted_content, mp.status, mp.platform_url,
+      mp.impressions, mp.likes, mp.views, mp.posted_at, mp.created_at,
+      a.display_name AS persona_display_name, a.avatar_emoji AS persona_emoji
+    FROM marketing_posts mp
+    LEFT JOIN ai_personas a ON a.id = mp.persona_id
+    ORDER BY mp.created_at DESC
+    LIMIT 50
+  `) as unknown as RecentMarketingPost[];
+
+  const dailyMetrics = (await sql`
+    SELECT date, platform, posts_published, total_impressions, total_likes, total_views
+    FROM marketing_metrics_daily
+    WHERE date >= TO_CHAR(NOW() - INTERVAL '30 days', 'YYYY-MM-DD')
+    ORDER BY date DESC
+  `.catch(() => [])) as unknown as DailyMetric[];
+
+  const campaigns = (await sql`
+    SELECT id, name, description, status, target_platforms,
+           content_strategy, posts_per_day, created_at, updated_at
+    FROM marketing_campaigns
+    ORDER BY updated_at DESC
+  `.catch(() => [])) as unknown as CampaignRow[];
+
+  return {
+    totalPosted: Number(t.total_posted),
+    totalQueued: Number(t.total_queued),
+    totalFailed: Number(t.total_failed),
+    totalImpressions: Number(t.total_impressions),
+    totalLikes: Number(t.total_likes),
+    totalViews: Number(t.total_views),
+    platformBreakdown: breakdown.map((b) => ({
+      platform: b.platform,
+      posted: Number(b.posted),
+      queued: Number(b.queued),
+      failed: Number(b.failed),
+      impressions: Number(b.impressions),
+      likes: Number(b.likes),
+      views: Number(b.views),
+      lastPostedAt: b.last_posted_at,
+    })),
+    recentPosts,
+    dailyMetrics,
+    campaigns,
+  };
+}

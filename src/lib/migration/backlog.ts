@@ -293,15 +293,6 @@ export const PENDING_ROUTES: PendingRoute[] = [
 
   // ── Marketing lib needed ───────────────────────────────────
   {
-    path: "/api/admin/mktg",
-    methods: ["GET", "POST"],
-    blocker: "marketing-lib",
-    sessions: 1,
-    complexity: "large",
-    notes: "Marketing dashboard + platform credentials management.",
-    prereqs: ["@/lib/marketing/*"],
-  },
-  {
     path: "/api/admin/promote-glitchcoin",
     methods: ["POST"],
     blocker: "marketing-lib",
