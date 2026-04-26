@@ -321,3 +321,494 @@ export async function generateScreenplay(
     totalDuration: scenes.length * SCENE_DURATION_SECONDS,
   };
 }
+
+// ─── Multi-Clip Pipeline (submit + poll + stitch + post) ──────────────
+
+import { put } from "@vercel/blob";
+import { getDb } from "@/lib/db";
+import { getGenreBlobFolder } from "@/lib/genre-utils";
+import { pollVideoJob, submitVideoJob } from "@/lib/ai/xai-extras";
+import { concatMP4Clips } from "./mp4-concat";
+
+export interface MultiClipJob {
+  id: string;
+  screenplayId: string;
+  title: string;
+  genre: string;
+  clipCount: number;
+  completedClips: number;
+  status: "generating" | "stitching" | "done" | "failed";
+  personaId: string;
+  caption: string;
+}
+
+let _pipelineTablesEnsured = false;
+
+/** Reset between tests. */
+export function __resetMultiClipPipelineFlag(): void {
+  _pipelineTablesEnsured = false;
+}
+
+async function ensurePipelineTables(): Promise<void> {
+  if (_pipelineTablesEnsured) return;
+  const sql = getDb();
+  await sql`
+    CREATE TABLE IF NOT EXISTS multi_clip_jobs (
+      id TEXT PRIMARY KEY,
+      screenplay_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      tagline TEXT,
+      synopsis TEXT,
+      genre TEXT NOT NULL,
+      clip_count INTEGER NOT NULL,
+      completed_clips INTEGER DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'generating',
+      persona_id TEXT NOT NULL,
+      caption TEXT,
+      final_video_url TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      completed_at TIMESTAMPTZ
+    )
+  `;
+  await sql`
+    CREATE TABLE IF NOT EXISTS multi_clip_scenes (
+      id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL,
+      scene_number INTEGER NOT NULL,
+      title TEXT,
+      video_prompt TEXT NOT NULL,
+      xai_request_id TEXT,
+      video_url TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      fail_reason TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      completed_at TIMESTAMPTZ
+    )
+  `;
+  _pipelineTablesEnsured = true;
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+async function persistClip(
+  tempUrl: string,
+  jobId: string,
+  sceneNumber: number,
+): Promise<string> {
+  const res = await fetch(tempUrl);
+  if (!res.ok) throw new Error(`Failed to download clip: HTTP ${res.status}`);
+  const buffer = Buffer.from(await res.arrayBuffer());
+  const blob = await put(
+    `multi-clip/${jobId}/scene-${sceneNumber}.mp4`,
+    buffer,
+    {
+      access: "public",
+      contentType: "video/mp4",
+      addRandomSuffix: false,
+    },
+  );
+  return blob.url;
+}
+
+/**
+ * Submit every screenplay scene as a Grok video job. Inserts a row
+ * in `multi_clip_jobs` + one per scene in `multi_clip_scenes` (with
+ * `xai_request_id` populated for async polling). Returns the job id.
+ *
+ * Handles synchronous video URLs from Grok by persisting + marking
+ * scene done immediately. Failed submissions get `status = "failed"`
+ * rows so the poller can detect partial completion.
+ */
+export async function submitMultiClipJobs(
+  screenplay: Screenplay,
+  personaId: string,
+  aspectRatio: "9:16" | "16:9" = "9:16",
+): Promise<string | null> {
+  await ensurePipelineTables();
+  const sql = getDb();
+  const template = GENRE_TEMPLATES[screenplay.genre] ?? GENRE_TEMPLATES.drama!;
+
+  const jobId = crypto.randomUUID();
+  const caption =
+    `${screenplay.title} — ${screenplay.tagline}\n\n` +
+    `${screenplay.synopsis}\n\n` +
+    `#AIGlitchPremieres #AIGlitch${capitalize(screenplay.genre)}`;
+
+  await sql`
+    INSERT INTO multi_clip_jobs (
+      id, screenplay_id, title, tagline, synopsis, genre,
+      clip_count, persona_id, caption
+    ) VALUES (
+      ${jobId}, ${screenplay.id}, ${screenplay.title}, ${screenplay.tagline},
+      ${screenplay.synopsis}, ${screenplay.genre}, ${screenplay.clipCount},
+      ${personaId}, ${caption}
+    )
+  `;
+
+  for (const scene of screenplay.scenes) {
+    const sceneId = crypto.randomUUID();
+    const enrichedPrompt =
+      `${scene.videoPrompt}. ${template.cinematicStyle}. ` +
+      `${template.lightingDesign}. ${template.technicalValues}`;
+
+    try {
+      const result = await submitVideoJob(
+        enrichedPrompt,
+        scene.duration,
+        aspectRatio,
+      );
+
+      if (result.requestId) {
+        await sql`
+          INSERT INTO multi_clip_scenes (
+            id, job_id, scene_number, title, video_prompt, xai_request_id, status
+          ) VALUES (
+            ${sceneId}, ${jobId}, ${scene.sceneNumber}, ${scene.title},
+            ${enrichedPrompt}, ${result.requestId}, ${"submitted"}
+          )
+        `;
+      } else if (result.videoUrl) {
+        // Rare synchronous result — persist immediately.
+        const blobUrl = await persistClip(
+          result.videoUrl,
+          jobId,
+          scene.sceneNumber,
+        );
+        await sql`
+          INSERT INTO multi_clip_scenes (
+            id, job_id, scene_number, title, video_prompt,
+            video_url, status, completed_at
+          ) VALUES (
+            ${sceneId}, ${jobId}, ${scene.sceneNumber}, ${scene.title},
+            ${enrichedPrompt}, ${blobUrl}, ${"done"}, NOW()
+          )
+        `;
+        await sql`
+          UPDATE multi_clip_jobs SET completed_clips = completed_clips + 1
+          WHERE id = ${jobId}
+        `;
+      } else {
+        await sql`
+          INSERT INTO multi_clip_scenes (
+            id, job_id, scene_number, title, video_prompt, status, fail_reason
+          ) VALUES (
+            ${sceneId}, ${jobId}, ${scene.sceneNumber}, ${scene.title},
+            ${enrichedPrompt}, ${"failed"}, ${result.error ?? "no_provider"}
+          )
+        `;
+      }
+    } catch (err) {
+      console.error(
+        `[multi-clip] Scene ${scene.sceneNumber} submit error:`,
+        err instanceof Error ? err.message : err,
+      );
+      await sql`
+        INSERT INTO multi_clip_scenes (
+          id, job_id, scene_number, title, video_prompt, status, fail_reason
+        ) VALUES (
+          ${sceneId}, ${jobId}, ${scene.sceneNumber}, ${scene.title},
+          ${scene.videoPrompt}, ${"failed"},
+          ${err instanceof Error ? err.message : "submit_error"}
+        )
+      `;
+    }
+  }
+
+  return jobId;
+}
+
+async function createPremierePost(
+  sql: ReturnType<typeof getDb>,
+  videoUrl: string,
+  personaId: string,
+  caption: string,
+  genre: string,
+  clipCount: number,
+): Promise<string> {
+  const postId = crypto.randomUUID();
+  const aiLikeCount = Math.floor(Math.random() * 500) + 100;
+  const hashtags = `AIGlitchPremieres,AIGlitch${capitalize(genre)}`;
+  const videoDuration = clipCount * SCENE_DURATION_SECONDS;
+
+  await sql`
+    INSERT INTO posts (
+      id, persona_id, content, post_type, hashtags, ai_like_count,
+      media_url, media_type, media_source, video_duration, created_at
+    ) VALUES (
+      ${postId}, ${personaId}, ${caption}, ${"premiere"}, ${hashtags},
+      ${aiLikeCount}, ${videoUrl}, ${"video"}, ${"grok-multiclip"},
+      ${videoDuration}, NOW()
+    )
+  `;
+  await sql`
+    UPDATE ai_personas SET post_count = post_count + 1
+    WHERE id = ${personaId}
+  `;
+  return postId;
+}
+
+/**
+ * Concatenate all completed scenes into one MP4 (lossless ISO BMFF
+ * stitch via concatMP4Clips), persist to blob storage, create the
+ * premiere post.
+ *
+ * Single-clip jobs skip the stitch and use the clip URL directly.
+ * Stitch failures fall back to the first clip — caller still gets a
+ * playable result rather than a broken job.
+ */
+async function stitchAndPost(
+  jobId: string,
+  personaId: string,
+  caption: string,
+  genre: string,
+): Promise<{ postId: string; videoUrl: string } | null> {
+  const sql = getDb();
+
+  const scenes = (await sql`
+    SELECT video_url, scene_number FROM multi_clip_scenes
+    WHERE job_id = ${jobId} AND status = 'done' AND video_url IS NOT NULL
+    ORDER BY scene_number ASC
+  `) as unknown as { video_url: string; scene_number: number }[];
+
+  if (scenes.length === 0) return null;
+
+  if (scenes.length === 1) {
+    const postId = await createPremierePost(
+      sql,
+      scenes[0]!.video_url,
+      personaId,
+      caption,
+      genre,
+      1,
+    );
+    return { postId, videoUrl: scenes[0]!.video_url };
+  }
+
+  const buffers: Buffer[] = [];
+  for (const scene of scenes) {
+    try {
+      const res = await fetch(scene.video_url);
+      if (res.ok) buffers.push(Buffer.from(await res.arrayBuffer()));
+    } catch (err) {
+      console.error(
+        `[multi-clip] download fail scene ${scene.scene_number}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+  if (buffers.length === 0) return null;
+
+  let stitched: Buffer;
+  try {
+    stitched = concatMP4Clips(buffers);
+  } catch (err) {
+    console.error(
+      "[multi-clip] stitch failed, falling back to first clip:",
+      err instanceof Error ? err.message : err,
+    );
+    stitched = buffers[0]!;
+  }
+
+  const blobFolder = getGenreBlobFolder(genre);
+  const blob = await put(`${blobFolder}/${crypto.randomUUID()}.mp4`, stitched, {
+    access: "public",
+    contentType: "video/mp4",
+    addRandomSuffix: false,
+  });
+
+  await sql`
+    UPDATE multi_clip_scenes SET status = 'stitched'
+    WHERE job_id = ${jobId} AND status = 'done'
+  `;
+
+  const stitchedCaption =
+    scenes.length > 1
+      ? `${caption}\n\n[${scenes.length}-scene ${genre} short film]`
+      : caption;
+
+  const postId = await createPremierePost(
+    sql,
+    blob.url,
+    personaId,
+    stitchedCaption,
+    genre,
+    scenes.length,
+  );
+  return { postId, videoUrl: blob.url };
+}
+
+interface PollResult extends Record<string, unknown> {
+  polled: number;
+  completed: number;
+  stitched: string[];
+}
+
+/**
+ * Cron-friendly poller: walks pending scenes, persists completed
+ * videos, stitches jobs whose every clip is done, marks 3-hour
+ * stragglers as timed out, and stitches partial jobs (>=50%
+ * complete) when no more clips are pending.
+ *
+ * No-op when the multi_clip tables don't exist yet (fresh env).
+ *
+ * Director-movie jobs (linked via `director_movies.multi_clip_job_id`)
+ * are excluded so the director-movies pipeline can do its own
+ * triple-post stitching.
+ */
+export async function pollMultiClipJobs(): Promise<PollResult> {
+  const result: PollResult = { polled: 0, completed: 0, stitched: [] };
+  const sql = getDb();
+
+  try {
+    await sql`SELECT 1 FROM multi_clip_jobs LIMIT 0`;
+  } catch {
+    return result;
+  }
+
+  const pendingScenes = (await sql`
+    SELECT s.id, s.job_id, s.scene_number, s.xai_request_id
+    FROM multi_clip_scenes s
+    JOIN multi_clip_jobs j ON s.job_id = j.id
+    WHERE s.status = 'submitted' AND s.xai_request_id IS NOT NULL
+      AND j.status = 'generating'
+      AND s.created_at > NOW() - INTERVAL '3 hours'
+    ORDER BY s.created_at ASC LIMIT 10
+  `) as unknown as {
+    id: string;
+    job_id: string;
+    scene_number: number;
+    xai_request_id: string;
+  }[];
+
+  for (const scene of pendingScenes) {
+    result.polled++;
+    try {
+      const poll = await pollVideoJob(scene.xai_request_id);
+      if (poll.status === "done" && poll.videoUrl) {
+        const blobUrl = await persistClip(
+          poll.videoUrl,
+          scene.job_id,
+          scene.scene_number,
+        );
+        await sql`
+          UPDATE multi_clip_scenes
+          SET status = 'done', video_url = ${blobUrl}, completed_at = NOW()
+          WHERE id = ${scene.id}
+        `;
+        await sql`
+          UPDATE multi_clip_jobs SET completed_clips = completed_clips + 1
+          WHERE id = ${scene.job_id}
+        `;
+        result.completed++;
+      } else if (poll.status === "failed") {
+        await sql`
+          UPDATE multi_clip_scenes
+          SET status = 'failed', completed_at = NOW(),
+              fail_reason = ${poll.error ?? "grok_failed"}
+          WHERE id = ${scene.id}
+        `;
+      }
+    } catch (err) {
+      console.error(
+        `[multi-clip] poll error scene ${scene.scene_number}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  // Director-movie jobs handled separately — only LEFT JOIN if the
+  // table exists; degrade gracefully when it doesn't (fresh env).
+  let directorJoinClause = "";
+  try {
+    await sql`SELECT 1 FROM director_movies LIMIT 0`;
+    directorJoinClause = "linked";
+  } catch {
+    directorJoinClause = "";
+  }
+
+  const readyJobs = (directorJoinClause
+    ? await sql`
+        SELECT j.id, j.title, j.genre, j.clip_count, j.persona_id, j.caption
+        FROM multi_clip_jobs j
+        LEFT JOIN director_movies dm ON dm.multi_clip_job_id = j.id
+        WHERE j.status = 'generating'
+          AND j.completed_clips >= j.clip_count
+          AND dm.id IS NULL
+      `
+    : await sql`
+        SELECT id, title, genre, clip_count, persona_id, caption
+        FROM multi_clip_jobs
+        WHERE status = 'generating'
+          AND completed_clips >= clip_count
+      `) as unknown as {
+    id: string;
+    title: string;
+    genre: string;
+    clip_count: number;
+    persona_id: string;
+    caption: string;
+  }[];
+
+  for (const job of readyJobs) {
+    try {
+      await sql`UPDATE multi_clip_jobs SET status = 'stitching' WHERE id = ${job.id}`;
+      const stitch = await stitchAndPost(
+        job.id,
+        job.persona_id,
+        job.caption,
+        job.genre,
+      );
+      if (stitch) {
+        await sql`
+          UPDATE multi_clip_jobs
+          SET status = 'done', final_video_url = ${stitch.videoUrl},
+              completed_at = NOW()
+          WHERE id = ${job.id}
+        `;
+        result.stitched.push(job.id);
+      } else {
+        await sql`
+          UPDATE multi_clip_jobs SET status = 'failed', completed_at = NOW()
+          WHERE id = ${job.id}
+        `;
+      }
+    } catch (err) {
+      console.error(
+        `[multi-clip] stitch error job ${job.id}:`,
+        err instanceof Error ? err.message : err,
+      );
+      await sql`
+        UPDATE multi_clip_jobs SET status = 'failed', completed_at = NOW()
+        WHERE id = ${job.id}
+      `;
+    }
+  }
+
+  // 3-hour stragglers → mark failed.
+  await sql`
+    UPDATE multi_clip_scenes
+    SET status = 'failed', completed_at = NOW(), fail_reason = 'timeout_3h'
+    WHERE status = 'submitted' AND created_at < NOW() - INTERVAL '3 hours'
+  `;
+
+  return result;
+}
+
+/** All multi-clip jobs sorted newest first. Empty when table missing. */
+export async function getMultiClipJobStatus(): Promise<MultiClipJob[]> {
+  const sql = getDb();
+  try {
+    return (await sql`
+      SELECT id, screenplay_id as "screenplayId", title, genre,
+             clip_count as "clipCount", completed_clips as "completedClips",
+             status, persona_id as "personaId", caption
+      FROM multi_clip_jobs
+      ORDER BY created_at DESC
+      LIMIT 50
+    `) as unknown as MultiClipJob[];
+  } catch {
+    return [];
+  }
+}

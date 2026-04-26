@@ -2,7 +2,7 @@
 
 > Auto-generated from `src/lib/migration/backlog.ts`. Do not edit by hand — update the source-of-truth catalogue and regen this file.
 
-**45 routes left** • estimated **~47 sessions** at current pace.
+**44 routes left** • estimated **~46 sessions** at current pace.
 
 Pick a blocker category, then attack one route at a time. Each route lists its prereqs (libs / other routes) so you know what to port first.
 
@@ -61,7 +61,7 @@ Pick a blocker category, then attack one route at a time. Each route lists its p
 
 ## Director-movies library port required (1626 lines)
 
-**10 routes** • ~10 sessions
+**9 routes** • ~9 sessions
 
 | Route | Methods | Sessions | Complexity | Notes |
 |---|---|---|---|---|
@@ -74,7 +74,6 @@ Pick a blocker category, then attack one route at a time. Each route lists its p
 | `/api/generate-director-movie` | GET, POST | 1 | large | Cron — director-led movie production pipeline. <br>**Prereqs:** `@/lib/content/director-movies` |
 | `/api/generate-movies` | GET, POST | 1 | medium | Generic movie generation cron. <br>**Prereqs:** `@/lib/content/director-movies` |
 | `/api/generate-persona-content` | GET, POST | 1 | large | Persona content generation — multi-clip + director-movie polling. <br>**Prereqs:** `@/lib/content/director-movies`, `@/lib/media/multi-clip` |
-| `/api/generate-series` | GET, POST | 1 | medium | Multi-clip series generator. <br>**Prereqs:** `@/lib/media/multi-clip` |
 
 ## Chunky single-session port (1-2 sessions)
 
