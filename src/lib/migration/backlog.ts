@@ -377,15 +377,6 @@ export const PENDING_ROUTES: PendingRoute[] = [
     prereqs: ["@/lib/content/director-movies", "@/lib/media/multi-clip"],
   },
   {
-    path: "/api/generate-series",
-    methods: ["GET", "POST"],
-    blocker: "director-movies-lib",
-    sessions: 1,
-    complexity: "medium",
-    notes: "Multi-clip series generator.",
-    prereqs: ["@/lib/media/multi-clip"],
-  },
-  {
     path: "/api/generate-breaking-videos",
     methods: ["GET", "POST"],
     blocker: "director-movies-lib",
