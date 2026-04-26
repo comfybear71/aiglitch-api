@@ -6,6 +6,17 @@ vi.mock("@/lib/ai/generate", () => ({
   generateText: (...args: unknown[]) => generateTextMock(...args),
 }));
 
+const submitVideoJobMock = vi.fn();
+const pollVideoJobMock = vi.fn();
+vi.mock("@/lib/ai/xai-extras", () => ({
+  submitVideoJob: (...a: unknown[]) => submitVideoJobMock(...a),
+  pollVideoJob: (...a: unknown[]) => pollVideoJobMock(...a),
+}));
+
+vi.mock("@vercel/blob", () => ({
+  put: () => Promise.resolve({ url: "https://blob/news.mp4" }),
+}));
+
 const BASE_PERSONA: AIPersona = {
   id: "p-1",
   username: "alpha",
@@ -338,5 +349,74 @@ describe("generateChallengePost", () => {
     const result = await generateChallengePost(BASE_PERSONA, "GlitchChallenge", "desc");
     expect(result.content).toContain("#GlitchChallenge");
     expect(result.hashtags).toContain("GlitchChallenge");
+  });
+});
+
+describe("generateBreakingNewsVideos", () => {
+  const TOPIC = {
+    headline: "AI invents new emoji",
+    summary: "experts shocked",
+    mood: "chaotic",
+    category: "tech",
+  };
+
+  beforeEach(() => {
+    submitVideoJobMock.mockReset();
+    pollVideoJobMock.mockReset();
+  });
+
+  it("returns a video post when Grok submits + polls done", async () => {
+    generateTextMock.mockResolvedValue(
+      '{"content": "BREAKING: AI emoji crisis", "hashtags": ["AIGlitchBreaking"], "video_prompt": "neon newsroom"}',
+    );
+    submitVideoJobMock.mockResolvedValue({
+      requestId: null,
+      videoUrl: "https://xai/v.mp4",
+      provider: "grok",
+      fellBack: false,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(64)),
+      }),
+    );
+
+    const { generateBreakingNewsVideos } = await import("./ai-engine");
+    const [post] = await generateBreakingNewsVideos(TOPIC);
+    expect(post!.content).toContain("BREAKING");
+    expect(post!.media_url).toBe("https://blob/news.mp4");
+    expect(post!.media_type).toBe("video");
+    vi.unstubAllGlobals();
+  });
+
+  it("returns text-only news when video submit fails", async () => {
+    generateTextMock.mockResolvedValue(
+      '{"content": "story", "hashtags": [], "video_prompt": "newsroom"}',
+    );
+    submitVideoJobMock.mockResolvedValue({
+      requestId: null,
+      videoUrl: null,
+      provider: "none",
+      fellBack: false,
+      error: "no key",
+    });
+
+    const { generateBreakingNewsVideos } = await import("./ai-engine");
+    const [post] = await generateBreakingNewsVideos(TOPIC);
+    expect(post!.media_url).toBeUndefined();
+    expect(post!.post_type).toBe("news");
+    expect(post!.hashtags).toContain("AIGlitchBreaking");
+  });
+
+  it("falls back to canned headline when text gen throws", async () => {
+    generateTextMock.mockRejectedValue(new Error("circuit open"));
+
+    const { generateBreakingNewsVideos } = await import("./ai-engine");
+    const [post] = await generateBreakingNewsVideos(TOPIC);
+    expect(post!.content).toContain("AI invents new emoji");
+    expect(post!.hashtags).toContain("AIGlitchBreaking");
+    expect(submitVideoJobMock).not.toHaveBeenCalled();
   });
 });
