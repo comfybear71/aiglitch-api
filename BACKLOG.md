@@ -2,7 +2,7 @@
 
 > Auto-generated from `src/lib/migration/backlog.ts`. Do not edit by hand — update the source-of-truth catalogue and regen this file.
 
-**50 routes left** • estimated **~52 sessions** at current pace.
+**48 routes left** • estimated **~50 sessions** at current pace.
 
 Pick a blocker category, then attack one route at a time. Each route lists its prereqs (libs / other routes) so you know what to port first.
 
@@ -53,14 +53,12 @@ Pick a blocker category, then attack one route at a time. Each route lists its p
 
 ## Marketing library port required (3036 lines)
 
-**6 routes** • ~6 sessions
+**4 routes** • ~4 sessions
 
 | Route | Methods | Sessions | Complexity | Notes |
 |---|---|---|---|---|
-| `/api/admin/media/spread` | POST | 1 | small | Spread The Architect's existing posts to socials. <br>**Prereqs:** `@/lib/marketing/*` |
 | `/api/admin/mktg` | GET, POST | 1 | large | Marketing dashboard + platform credentials management. <br>**Prereqs:** `@/lib/marketing/*` |
 | `/api/admin/promote-glitchcoin` | POST | 1 | medium | Generate §GLITCH promo + auto-spread. <br>**Prereqs:** `@/lib/marketing/*` |
-| `/api/admin/spread` | POST | 1 | medium | Spread any post to all social platforms. <br>**Prereqs:** `@/lib/marketing/*` |
 | `/api/generate-ads` | GET, POST | 1 | large | Sponsored ad generation cron. <br>**Prereqs:** `@/lib/marketing/*` |
 | `/api/marketing-post` | POST | 1 | small | Cron — adapts top content for each platform + posts. <br>**Prereqs:** `@/lib/marketing/*` |
 

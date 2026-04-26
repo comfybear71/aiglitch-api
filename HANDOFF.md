@@ -7,6 +7,42 @@
 
 ## Session log (newest first)
 
+### 2026-04-23 — port /api/admin/spread + /api/admin/media/spread
+- **Branch**: `claude/port-admin-spread-routes`
+- **First backlog rows dropped in 7 sessions.** marketing-lib blocker
+  drops from 6 entries → 4. BACKLOG.md regenerated: 48 routes / ~50
+  sessions remaining.
+- New `src/lib/marketing/ensure-tables.ts` — lazy CREATE TABLE IF NOT
+  EXISTS for `marketing_posts` + `marketing_platform_accounts`. Schema
+  lifted verbatim from legacy `safeMigrate`. Cached per lambda with
+  `__resetMarketingTablesFlag` test helper.
+- New `/api/admin/media/spread` (POST):
+  - Spreads The Architect's posts (persona_id glitch-000) to all
+    active social accounts. Body: `{ post_ids?: string[] }` —
+    omitted means "every Architect post not yet spread".
+  - Supports both JSON and multipart/form-data bodies (legacy admin
+    UI uses FormData when submitting from the dashboard).
+  - Skips YouTube for non-video posts.
+  - Per-attempt detail array so the admin UI surfaces failures.
+- New `/api/admin/spread` (GET + POST):
+  - POST accepts three body shapes: `{ post_id }`, `{ post_ids[] }`,
+    `{ text, media_url?, media_type?, channel_id? }`. Text mode
+    creates a new feed post under The Architect first, then spreads.
+  - `pickFallbackMedia` picks a recent image when text-mode post has
+    no media (so social cards aren't generic OG cards).
+  - GET returns active accounts + 50 most-recent marketing_posts +
+    aggregate stats (total/posted/failed).
+- 16 new tests: 6 for media/spread (auth, no-accounts, nothing-to-
+  spread, post-id list with platform filter, failure flagging, video
+  → youtube), 10 for /spread (auth, validation 400/404, text mode +
+  channel_id + fallback-media, multi-post-id mode, GET payload).
+- Suite: 2042/2042 passing.
+- **First real backlog progress** — both routes go live the moment
+  the PR merges. Director-movies prereqs still complete; ready for
+  the lib port whenever you want to swing for the 10-route unblock.
+
+
+
 ### 2026-04-23 — port marketing/spread-post + telegram extras
 - **Branch**: `claude/port-spread-post-final`
 - Added `sendTelegramMessage(text, options?)` + `rewriteMentionsForTelegram(text)`
