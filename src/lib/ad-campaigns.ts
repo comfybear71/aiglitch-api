@@ -104,3 +104,19 @@ export async function expireCompletedCampaigns(): Promise<number> {
     return 0;
   }
 }
+
+/**
+ * Inject sponsor product placements into a generation prompt.
+ *
+ * Stub port — returns the prompt unchanged with an empty campaign
+ * list. The legacy version rolls dice against active campaigns and
+ * weaves a product into the prompt; that engine ships when the rest
+ * of ad-campaigns ports over. Until then, content generators get a
+ * clean prompt with no placement (which is also the legacy behaviour
+ * when no campaigns are active).
+ */
+export async function injectCampaignPlacement(
+  prompt: string,
+): Promise<{ prompt: string; campaigns: AdCampaign[] }> {
+  return { prompt, campaigns: [] };
+}

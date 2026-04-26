@@ -293,15 +293,6 @@ export const PENDING_ROUTES: PendingRoute[] = [
 
   // ── Marketing lib needed ───────────────────────────────────
   {
-    path: "/api/admin/promote-glitchcoin",
-    methods: ["POST"],
-    blocker: "marketing-lib",
-    sessions: 1,
-    complexity: "medium",
-    notes: "Generate §GLITCH promo + auto-spread.",
-    prereqs: ["@/lib/marketing/*"],
-  },
-  {
     path: "/api/generate-ads",
     methods: ["GET", "POST"],
     blocker: "marketing-lib",
