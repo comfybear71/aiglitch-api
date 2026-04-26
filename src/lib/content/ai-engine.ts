@@ -19,8 +19,11 @@
  * which handles Grok/Claude routing, circuit breaker, and cost logging.
  */
 
+import { put } from "@vercel/blob";
+import { randomUUID } from "node:crypto";
 import { generateText } from "@/lib/ai/generate";
 import type { AiTaskType } from "@/lib/ai/types";
+import { pollVideoJob, submitVideoJob } from "@/lib/ai/xai-extras";
 import type { AIPersona } from "@/lib/personas";
 
 export interface TopicBrief {
@@ -478,4 +481,243 @@ export async function generateChallengePost(
     fallbackPostType: "text",
     requiredHashtag: challengeTag,
   });
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// Breaking news videos — AIG!itch's news_feed_ai persona shorts.
+//
+// Generates a single dramatic newsroom-style video post for a daily-briefing
+// topic. Text via `generateText` (post_generation task), video via
+// `submitVideoJob` + `pollVideoJob` with bounded polling. Image fallback
+// from legacy is intentionally deferred — when image-gen lib lands, drop
+// the still-image branch back in here.
+// ══════════════════════════════════════════════════════════════════════════
+
+const BREAKING_NEWS_HASHTAG = "AIGlitchBreaking";
+const BREAKING_NEWS_POSTS_PER_TOPIC = 1;
+const VIDEO_POLL_INTERVAL_MS = 10_000;
+const VIDEO_POLL_TIMEOUT_MS = 8 * 60 * 1000; // 8 min — well under Vercel 11min cap
+
+export interface BreakingNewsPost extends GeneratedPost {
+  media_url?: string;
+  media_type?: "video";
+  media_source?: string;
+  video_prompt?: string;
+}
+
+interface BreakingParsed {
+  content: string;
+  hashtags: string[];
+  video_prompt?: string;
+}
+
+function parseBreakingJson(raw: string): BreakingParsed {
+  const match = raw.match(/\{[\s\S]*\}/);
+  if (match) {
+    try {
+      const parsed = JSON.parse(match[0]) as {
+        content?: unknown;
+        hashtags?: unknown;
+        video_prompt?: unknown;
+      };
+      const content =
+        typeof parsed.content === "string" && parsed.content.length > 0
+          ? parsed.content.slice(0, 280)
+          : raw.slice(0, 280);
+      const hashtags =
+        Array.isArray(parsed.hashtags) &&
+        parsed.hashtags.every((h) => typeof h === "string")
+          ? (parsed.hashtags as string[])
+          : [BREAKING_NEWS_HASHTAG];
+      const video_prompt =
+        typeof parsed.video_prompt === "string" ? parsed.video_prompt : undefined;
+      return { content, hashtags, video_prompt };
+    } catch {
+      // fall through
+    }
+  }
+  return {
+    content: raw.slice(0, 280),
+    hashtags: [BREAKING_NEWS_HASHTAG],
+  };
+}
+
+async function persistBreakingVideo(tempUrl: string): Promise<string> {
+  const res = await fetch(tempUrl);
+  if (!res.ok)
+    throw new Error(`Failed to download breaking video: HTTP ${res.status}`);
+  const buffer = Buffer.from(await res.arrayBuffer());
+  const blob = await put(`news/${randomUUID()}.mp4`, buffer, {
+    access: "public",
+    contentType: "video/mp4",
+    addRandomSuffix: false,
+  });
+  return blob.url;
+}
+
+async function generateBreakingVideoBlob(
+  videoPrompt: string,
+  headline: string,
+): Promise<{ url: string; source: string } | null> {
+  const newsroomPrompt =
+    `Futuristic neon cyberpunk animated news broadcast. A holographic anchor at a sleek desk ` +
+    `with breaking news screens showing "${headline}". Exaggerated expressions, cosmic portals ` +
+    `in background, urgent news tickers. ${videoPrompt}. Style: cyberpunk CNN meets Web3 ` +
+    `aesthetic, neon purple and cyan lighting, dramatic camera zoom`;
+
+  const submission = await submitVideoJob(newsroomPrompt, 10, "9:16");
+  if (submission.videoUrl) {
+    try {
+      const url = await persistBreakingVideo(submission.videoUrl);
+      return { url, source: "grok-video" };
+    } catch (err) {
+      console.error(
+        "[breaking-news] persist of synchronous video failed:",
+        err instanceof Error ? err.message : err,
+      );
+      return null;
+    }
+  }
+  if (!submission.requestId) {
+    console.warn(
+      "[breaking-news] Grok submit failed:",
+      submission.error ?? "unknown",
+    );
+    return null;
+  }
+
+  const deadline = Date.now() + VIDEO_POLL_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, VIDEO_POLL_INTERVAL_MS));
+    const poll = await pollVideoJob(submission.requestId);
+    if (poll.status === "done" && poll.videoUrl) {
+      try {
+        const url = await persistBreakingVideo(poll.videoUrl);
+        return { url, source: "grok-video" };
+      } catch (err) {
+        console.error(
+          "[breaking-news] persist after poll failed:",
+          err instanceof Error ? err.message : err,
+        );
+        return null;
+      }
+    }
+    if (poll.status === "failed") {
+      console.warn("[breaking-news] Grok poll failed:", poll.error ?? "unknown");
+      return null;
+    }
+  }
+  console.warn("[breaking-news] Grok poll timeout (8 min)");
+  return null;
+}
+
+/**
+ * Generate one or more breaking-news video posts for a daily-briefing topic.
+ * Returns an array of ready-to-insert posts, each with optional `media_url`
+ * (Vercel Blob mp4) when the Grok video pipeline succeeded. Posts without
+ * media are still returned with `post_type: "news"` so the route can insert
+ * them as text-only fallbacks.
+ *
+ * Image fallback (when video fails) is deferred until the image-gen lib
+ * ports over — for now, video-or-text-only.
+ */
+export async function generateBreakingNewsVideos(
+  topic: TopicBrief,
+): Promise<BreakingNewsPost[]> {
+  const postCount = BREAKING_NEWS_POSTS_PER_TOPIC;
+  const angles = [
+    "Report this as BREAKING NEWS with dramatic urgency. Be over-the-top with your reporting.",
+    "Give a hot take / editorial opinion on this story. Be dramatic and take a strong stance.",
+    "Interview-style: pretend you just spoke to an 'anonymous source' about this story. Spill the tea.",
+  ];
+
+  const results: BreakingNewsPost[] = [];
+
+  for (let i = 0; i < postCount; i++) {
+    const angle = angles[i] ?? angles[0]!;
+
+    const systemPrompt =
+      `You are BREAKING.bot (@news_feed_ai), an AI news anchor on AIG!itch — an AI-only ` +
+      `social media platform where humans are spectators.\n\n` +
+      `Personality: AI news anchor that reports on events happening as if they're world ` +
+      `news. Dramatic, over-the-top reporting style.\n\n` +
+      `Always respond with valid JSON. Stay completely in character.`;
+
+    const userPrompt =
+      `TODAY'S BREAKING STORY:\n` +
+      `Headline: ${topic.headline}\n` +
+      `Summary: ${topic.summary}\n` +
+      `Mood: ${topic.mood}\n` +
+      `Category: ${topic.category}\n\n` +
+      `YOUR ANGLE: ${angle}\n\n` +
+      `Create a short, punchy social media news post about this story. Think TikTok news — ` +
+      `dramatic, attention-grabbing, makes people stop scrolling.\n\n` +
+      `Also include a "video_prompt" field: describe a 10-second dramatic newsroom scene for ` +
+      `this SPECIFIC story. Keep the video prompt CONCISE (under 80 words). A futuristic neon ` +
+      `cyberpunk news desk with a holographic anchor at a sleek desk, neon screens showing ` +
+      `visuals related to "${topic.headline}". The anchor reacts dramatically. Style: ` +
+      `cyberpunk CNN meets Web3 aesthetic meets TikTok energy.\n\n` +
+      `Rules:\n` +
+      `- Stay in character as a dramatic AI news anchor\n` +
+      `- Under 280 characters for the post text\n` +
+      `- Make it ENTERTAINING — this is news entertainment, not boring reporting\n` +
+      `- Use 1-2 hashtags including #${BREAKING_NEWS_HASHTAG}\n\n` +
+      `Respond in this exact JSON format:\n` +
+      `{"content": "your breaking news post here", "hashtags": ["${BREAKING_NEWS_HASHTAG}", "..."], "video_prompt": "cinematic 15-second newsroom video description..."}`;
+
+    let raw: string;
+    try {
+      raw = await generateText({
+        systemPrompt,
+        userPrompt,
+        taskType: "post_generation",
+        maxTokens: 500,
+        temperature: 0.95,
+      });
+    } catch (err) {
+      console.warn(
+        `[ai-engine] breaking-news text gen failed (post ${i + 1}):`,
+        err instanceof Error ? err.message : err,
+      );
+      results.push({
+        content: `🚨 BREAKING: ${topic.headline} #${BREAKING_NEWS_HASHTAG}`,
+        hashtags: [BREAKING_NEWS_HASHTAG],
+        post_type: "news",
+      });
+      continue;
+    }
+
+    const parsed = parseBreakingJson(raw);
+    if (!parsed.hashtags.includes(BREAKING_NEWS_HASHTAG)) {
+      parsed.hashtags.unshift(BREAKING_NEWS_HASHTAG);
+    }
+
+    let media_url: string | undefined;
+    let media_source: string | undefined;
+    let post_type: PostType = "news";
+
+    if (parsed.video_prompt) {
+      const videoResult = await generateBreakingVideoBlob(
+        parsed.video_prompt,
+        topic.headline,
+      );
+      if (videoResult) {
+        media_url = videoResult.url;
+        media_source = videoResult.source;
+        post_type = "news";
+      }
+    }
+
+    results.push({
+      content: parsed.content,
+      hashtags: parsed.hashtags,
+      post_type,
+      video_prompt: parsed.video_prompt,
+      media_url,
+      media_type: media_url ? "video" : undefined,
+      media_source,
+    });
+  }
+
+  return results;
 }

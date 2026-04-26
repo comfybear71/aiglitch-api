@@ -376,16 +376,6 @@ export const PENDING_ROUTES: PendingRoute[] = [
       "Persona content generation — multi-clip + director-movie polling.",
     prereqs: ["@/lib/content/director-movies", "@/lib/media/multi-clip"],
   },
-  {
-    path: "/api/generate-breaking-videos",
-    methods: ["GET", "POST"],
-    blocker: "director-movies-lib",
-    sessions: 1,
-    complexity: "medium",
-    notes: "Breaking news video cron — needs generateBreakingNewsVideos lib.",
-    prereqs: ["@/lib/content/ai-engine#generateBreakingNewsVideos"],
-  },
-
   // ── Telegram bot engine ────────────────────────────────────
   // (All telegram bot engine routes ported — this section is empty.)
 

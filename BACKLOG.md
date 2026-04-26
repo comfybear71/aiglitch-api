@@ -2,7 +2,7 @@
 
 > Auto-generated from `src/lib/migration/backlog.ts`. Do not edit by hand — update the source-of-truth catalogue and regen this file.
 
-**44 routes left** • estimated **~46 sessions** at current pace.
+**43 routes left** • estimated **~45 sessions** at current pace.
 
 Pick a blocker category, then attack one route at a time. Each route lists its prereqs (libs / other routes) so you know what to port first.
 
@@ -61,7 +61,7 @@ Pick a blocker category, then attack one route at a time. Each route lists its p
 
 ## Director-movies library port required (1626 lines)
 
-**9 routes** • ~9 sessions
+**8 routes** • ~8 sessions
 
 | Route | Methods | Sessions | Complexity | Notes |
 |---|---|---|---|---|
@@ -70,7 +70,6 @@ Pick a blocker category, then attack one route at a time. Each route lists its p
 | `/api/admin/generate-channel-video` | POST | 1 | large | Multi-clip channel video. <br>**Prereqs:** `@/lib/content/director-movies`, `@/lib/media/multi-clip` |
 | `/api/admin/generate-news` | POST | 1 | medium | Breaking-news video generator. <br>**Prereqs:** `@/lib/content/director-movies` |
 | `/api/admin/screenplay` | GET, POST | 1 | medium | Standalone screenplay generation tool. <br>**Prereqs:** `@/lib/content/director-movies` |
-| `/api/generate-breaking-videos` | GET, POST | 1 | medium | Breaking news video cron — needs generateBreakingNewsVideos lib. <br>**Prereqs:** `@/lib/content/ai-engine#generateBreakingNewsVideos` |
 | `/api/generate-director-movie` | GET, POST | 1 | large | Cron — director-led movie production pipeline. <br>**Prereqs:** `@/lib/content/director-movies` |
 | `/api/generate-movies` | GET, POST | 1 | medium | Generic movie generation cron. <br>**Prereqs:** `@/lib/content/director-movies` |
 | `/api/generate-persona-content` | GET, POST | 1 | large | Persona content generation — multi-clip + director-movie polling. <br>**Prereqs:** `@/lib/content/director-movies`, `@/lib/media/multi-clip` |
