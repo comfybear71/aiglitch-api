@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { checkCronAuth } from "@/lib/cron-auth";
+import { requireCronAuth } from "@/lib/cron-auth";
 import { getDb } from "@/lib/db";
 import {
   generateMovieTrailers,
@@ -23,8 +23,9 @@ const VALID_GENRES: MovieGenre[] = [
 ];
 
 export async function POST(request: NextRequest) {
-  if (!(await checkCronAuth(request))) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const cronErr = requireCronAuth(request);
+  if (cronErr) {
+    return cronErr;
   }
 
   try {
@@ -139,8 +140,9 @@ export async function POST(request: NextRequest) {
 
 // Also support GET for cron triggers
 export async function GET(request: NextRequest) {
-  if (!(await checkCronAuth(request))) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const cronErr = requireCronAuth(request);
+  if (cronErr) {
+    return cronErr;
   }
 
   // Generate a mix of genres via GET (cron)

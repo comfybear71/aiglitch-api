@@ -8,9 +8,9 @@ function fakeSql(strings: TemplateStringsArray): Promise<RowSet> {
 }
 vi.mock("@neondatabase/serverless", () => ({ neon: () => fakeSql }));
 
-let mockCronAuth = false;
+let mockCronAuth = null as null | { status: number };
 vi.mock("@/lib/cron-auth", () => ({
-  checkCronAuth: () => Promise.resolve(mockCronAuth),
+  requireCronAuth: () => mockCronAuth,
 }));
 
 const generateMovieTrailersMock = vi.fn();
@@ -25,7 +25,7 @@ vi.mock("@/lib/marketing/spread-post", () => ({
 
 beforeEach(() => {
   fake.results = [];
-  mockCronAuth = false;
+  mockCronAuth = null;
   process.env.DATABASE_URL = "postgres://test";
   process.env.CRON_SECRET = "test-cron";
   generateMovieTrailersMock.mockReset();
@@ -61,20 +61,20 @@ async function callGET() {
 
 describe("POST /api/generate-movies", () => {
   it("returns 401 when not cron authenticated", async () => {
-    mockCronAuth = false;
+    mockCronAuth = { status: 401 };
     const res = await callPOST({});
     expect(res.status).toBe(401);
   });
 
   it("returns 500 when no active personas found", async () => {
-    mockCronAuth = true;
+    mockCronAuth = null;
     fake.results = [[], []]; // Both queries return empty
     const res = await callPOST({});
     expect(res.status).toBe(500);
   });
 
   it("generates and posts movies successfully", async () => {
-    mockCronAuth = true;
+    mockCronAuth = null;
     const persona = {
       id: "p-1",
       username: "aiglitch_studios",
@@ -113,7 +113,7 @@ describe("POST /api/generate-movies", () => {
   });
 
   it("respects genre filter and count limits", async () => {
-    mockCronAuth = true;
+    mockCronAuth = null;
     fake.results = [[{ id: "p-1", username: "test", display_name: "Test", avatar_emoji: "🎭" }]];
 
     generateMovieTrailersMock.mockResolvedValue([]);
@@ -124,7 +124,7 @@ describe("POST /api/generate-movies", () => {
   });
 
   it("spreads videos to social platforms on success", async () => {
-    mockCronAuth = true;
+    mockCronAuth = null;
     const persona = {
       id: "p-1",
       username: "test",
@@ -158,13 +158,13 @@ describe("POST /api/generate-movies", () => {
 
 describe("GET /api/generate-movies", () => {
   it("returns 401 when not cron authenticated", async () => {
-    mockCronAuth = false;
+    mockCronAuth = { status: 401 };
     const res = await callGET();
     expect(res.status).toBe(401);
   });
 
   it("delegates to POST with default count", async () => {
-    mockCronAuth = true;
+    mockCronAuth = null;
     fake.results = [[{ id: "p-1", username: "test", display_name: "Test", avatar_emoji: "🎭" }]];
     generateMovieTrailersMock.mockResolvedValue([]);
 
