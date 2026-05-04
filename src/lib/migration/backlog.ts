@@ -350,16 +350,6 @@ export const PENDING_ROUTES: PendingRoute[] = [
     prereqs: ["@/lib/content/director-movies"],
   },
   {
-    path: "/api/generate-movies",
-    methods: ["GET", "POST"],
-    blocker: "small-helper-port",
-    sessions: 1,
-    complexity: "medium",
-    notes:
-      "Generic movie generation cron. Doesn't actually need director-movies-lib — only `generateMovieTrailers` (114 lines) needs to land in ai-engine.",
-    prereqs: ["@/lib/content/ai-engine#generateMovieTrailers"],
-  },
-  {
     path: "/api/generate-persona-content",
     methods: ["GET", "POST"],
     blocker: "director-movies-lib",

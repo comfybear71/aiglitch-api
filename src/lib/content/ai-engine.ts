@@ -721,3 +721,310 @@ export async function generateBreakingNewsVideos(
 
   return results;
 }
+
+// ── Movie trailer generation ────────────────────────────────────────
+
+export type MovieGenre =
+  | "action"
+  | "scifi"
+  | "romance"
+  | "family"
+  | "horror"
+  | "comedy"
+  | "drama"
+  | "cooking_channel"
+  | "documentary";
+
+export interface GeneratedMovie {
+  title: string;
+  tagline: string;
+  synopsis: string;
+  genre: MovieGenre;
+  content: string;
+  hashtags: string[];
+  post_type: string;
+  video_prompt: string;
+  rating: string;
+}
+
+const MOVIE_GENRES: {
+  genre: MovieGenre;
+  label: string;
+  vibe: string;
+  visualStyle: string;
+}[] = [
+  {
+    genre: "action",
+    label: "Action",
+    vibe: "explosive, high-octane, adrenaline-fueled, epic stunts, car chases, fight scenes",
+    visualStyle:
+      "Michael Bay explosions, neon-lit cyberpunk cityscapes, slow-motion debris, dramatic hero poses, dark moody lighting with fire and sparks",
+  },
+  {
+    genre: "scifi",
+    label: "Sci-Fi",
+    vibe: "mind-bending, futuristic, cosmic horror, alien encounters, time travel paradoxes",
+    visualStyle:
+      "vast alien landscapes, glowing portals, sleek spaceship interiors, holographic UI, Blade Runner neon rain, starfields and nebulae",
+  },
+  {
+    genre: "romance",
+    label: "Romance",
+    vibe: "heartwarming, bittersweet, star-crossed lovers, dramatic confession scenes",
+    visualStyle:
+      "golden hour lighting, cherry blossom petals, rain-soaked city streets at night, soft bokeh lights, intimate close-ups, Paris rooftops",
+  },
+  {
+    genre: "family",
+    label: "Family",
+    vibe: "wholesome, magical adventure, unlikely friendships, coming-of-age, heartfelt",
+    visualStyle:
+      "Pixar-style colorful animation, magical forests, floating islands, adorable creatures, warm sunlit meadows, enchanted castles",
+  },
+  {
+    genre: "horror",
+    label: "Horror",
+    vibe: "terrifying, psychological dread, jump scares, cursed technology, found footage",
+    visualStyle:
+      "dark corridors with flickering lights, static-filled screens, distorted faces, fog-shrouded forests, abandoned buildings, glitch effects",
+  },
+  {
+    genre: "comedy",
+    label: "Comedy",
+    vibe: "hilarious, absurd situations, buddy comedy, mockumentary, satirical",
+    visualStyle:
+      "bright colorful sets, exaggerated expressions, slapstick action, office cubicles, chaotic party scenes, cartoon-like energy",
+  },
+  {
+    genre: "drama",
+    label: "Drama",
+    vibe: "emotionally intense, contemplative, moral dilemmas, character-driven, prestige cinema",
+    visualStyle:
+      "intimate close-ups, shallow depth of field, natural window light with deep shadows, golden hour warmth, muted color palette with selective warm tones",
+  },
+  {
+    genre: "cooking_channel",
+    label: "Cooking Channel",
+    vibe: "over-the-top competitive cooking, dramatic food reveals, kitchen chaos, sensory overload",
+    visualStyle:
+      "extreme macro food close-ups, dramatic steam backlighting, slow-motion sizzles and pours, warm kitchen spotlights, fire glow, competitive reality TV energy",
+  },
+  {
+    genre: "documentary",
+    label: "Documentary",
+    vibe: "informative wonder, revelatory, nature and science, breathtaking landscapes, patient observation",
+    visualStyle:
+      "sweeping aerial establishing shots, intimate wildlife close-ups, golden hour time-lapses, Ken Burns effect, natural available light, documentary photography",
+  },
+];
+
+const VIDEO_POLL_INTERVAL_MOVIE_MS = 10_000;
+const VIDEO_POLL_TIMEOUT_MOVIE_MS = 8 * 60 * 1000; // 8 min
+
+async function persistMovieVideo(tempUrl: string): Promise<string> {
+  const res = await fetch(tempUrl);
+  if (!res.ok)
+    throw new Error(`Failed to download movie video: HTTP ${res.status}`);
+  const buffer = Buffer.from(await res.arrayBuffer());
+  const blob = await put(`movies/${randomUUID()}.mp4`, buffer, {
+    access: "public",
+    contentType: "video/mp4",
+    addRandomSuffix: false,
+  });
+  return blob.url;
+}
+
+async function generateMovieTrailerVideoBlob(
+  videoPrompt: string,
+): Promise<{ url: string; source: string } | null> {
+  const submission = await submitVideoJob(videoPrompt, 10, "9:16");
+  if (submission.videoUrl) {
+    try {
+      const url = await persistMovieVideo(submission.videoUrl);
+      return { url, source: "grok-video" };
+    } catch (err) {
+      console.error(
+        "[movie-trailers] persist of synchronous video failed:",
+        err instanceof Error ? err.message : err,
+      );
+      return null;
+    }
+  }
+  if (!submission.requestId) {
+    console.warn(
+      "[movie-trailers] Grok submit failed:",
+      submission.error ?? "unknown",
+    );
+    return null;
+  }
+
+  const deadline = Date.now() + VIDEO_POLL_TIMEOUT_MOVIE_MS;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, VIDEO_POLL_INTERVAL_MOVIE_MS));
+    const poll = await pollVideoJob(submission.requestId);
+    if (poll.status === "done" && poll.videoUrl) {
+      try {
+        const url = await persistMovieVideo(poll.videoUrl);
+        return { url, source: "grok-video" };
+      } catch (err) {
+        console.error(
+          "[movie-trailers] persist after poll failed:",
+          err instanceof Error ? err.message : err,
+        );
+        return null;
+      }
+    }
+    if (poll.status === "failed") {
+      console.warn(
+        "[movie-trailers] Grok poll failed:",
+        poll.error ?? "unknown",
+      );
+      return null;
+    }
+  }
+  console.warn("[movie-trailers] Grok poll timeout (8 min)");
+  return null;
+}
+
+export async function generateMovieTrailers(
+  genre?: MovieGenre,
+  count: number = 3,
+): Promise<
+  (GeneratedMovie & {
+    media_url?: string;
+    media_type?: "image" | "video";
+    media_source?: string;
+  })[]
+> {
+  const results: (GeneratedMovie & {
+    media_url?: string;
+    media_type?: "image" | "video";
+    media_source?: string;
+  })[] = [];
+
+  for (let i = 0; i < count; i++) {
+    // Pick genre — use specified or random
+    const genreInfo = genre
+      ? MOVIE_GENRES.find((g) => g.genre === genre) ||
+        MOVIE_GENRES[Math.floor(Math.random() * MOVIE_GENRES.length)]
+      : MOVIE_GENRES[Math.floor(Math.random() * MOVIE_GENRES.length)];
+
+    const ratings = ["PG", "PG-13", "R", "PG", "PG-13"];
+    const rating = ratings[Math.floor(Math.random() * ratings.length)];
+
+    const isUpcoming = Math.random() < 0.4;
+    const releaseLabel = isUpcoming ? "COMING SOON" : "NOW STREAMING";
+
+    const prompt = `You are the creative director of AIG!itch Studios, an AI-only movie studio that produces films for AI audiences.
+
+Generate a completely original ${genreInfo.label} movie concept. This is an AI-made movie — the actors, directors, and everything are AI-generated. Be wildly creative.
+
+Genre vibe: ${genreInfo.vibe}
+Rating: ${rating}
+Status: ${releaseLabel}
+
+Create a movie that would go VIRAL as a TikTok trailer. Think: dramatic reveals, plot twists teased, epic one-liners, and "I NEED to see this" energy.
+
+Requirements:
+- Completely original title (creative, catchy, memorable)
+- A killer tagline (the kind you'd see on a movie poster)
+- A 2-3 sentence synopsis that hooks people
+- A social media post (under 280 chars) hyping this movie — dramatic, attention-grabbing, makes people stop scrolling
+- A "video_prompt" describing a 10-second cinematic movie trailer clip. Keep it CONCISE (under 80 words). Visual style: ${genreInfo.visualStyle}. Focus on one dramatic shot or reveal.
+- Use hashtags including #AIGlitchPremieres and #AIGlitch${genreInfo.label}
+- Set post_type to "premiere"
+
+Respond in this exact JSON format:
+{"title": "MOVIE TITLE", "tagline": "killer tagline here", "synopsis": "2-3 sentence hook synopsis", "genre": "${genreInfo.genre}", "rating": "${rating}", "content": "your hype post here (under 280 chars)", "hashtags": ["AIGlitchPremieres", "AIGlitch${genreInfo.label}", "..."], "post_type": "premiere", "video_prompt": "concise 10-second cinematic trailer clip..."}`;
+
+    try {
+      let text: string;
+      try {
+        text = await generateText({
+          userPrompt: prompt,
+          taskType: "post_generation",
+          maxTokens: 700,
+          temperature: 0.9,
+        });
+      } catch (err) {
+        console.warn(
+          `[ai-engine] movie trailer text gen failed (${i + 1}/${count}):`,
+          err instanceof Error ? err.message : err,
+        );
+        continue;
+      }
+
+      let parsed: GeneratedMovie;
+      try {
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        parsed = jsonMatch
+          ? (JSON.parse(jsonMatch[0]) as GeneratedMovie)
+          : {
+              title: "Untitled",
+              tagline: "",
+              synopsis: "",
+              genre: genreInfo.genre,
+              rating,
+              content: text.slice(0, 280),
+              hashtags: ["AIGlitchPremieres"],
+              post_type: "premiere",
+              video_prompt: "",
+            };
+      } catch {
+        parsed = {
+          title: "Untitled",
+          tagline: "",
+          synopsis: "",
+          genre: genreInfo.genre,
+          rating,
+          content: text.slice(0, 280),
+          hashtags: ["AIGlitchPremieres"],
+          post_type: "premiere",
+          video_prompt: "",
+        };
+      }
+
+      // Ensure premiere tags
+      if (!parsed.hashtags.includes("AIGlitchPremieres"))
+        parsed.hashtags.unshift("AIGlitchPremieres");
+      parsed.post_type = "premiere";
+      parsed.genre = genreInfo.genre;
+
+      // Generate the trailer video
+      let media_url: string | undefined;
+      let media_type: "image" | "video" | undefined;
+      let media_source: string | undefined;
+
+      if (parsed.video_prompt) {
+        console.log(
+          `Generating movie trailer ${i + 1}/${count}: "${parsed.title}" (${genreInfo.label})`,
+        );
+        const videoResult = await generateMovieTrailerVideoBlob(
+          parsed.video_prompt,
+        );
+        if (videoResult) {
+          media_url = videoResult.url;
+          media_source = videoResult.source;
+          media_type = "video";
+        }
+      }
+
+      const enrichedContent = `🎬 ${parsed.title}\n"${parsed.tagline}"\n\n${parsed.content}\n\n${parsed.synopsis ? `📖 ${parsed.synopsis}` : ""}`;
+
+      results.push({
+        ...parsed,
+        content: enrichedContent.slice(0, 500),
+        media_url,
+        media_type,
+        media_source,
+      });
+      console.log(
+        `Movie trailer ${i + 1}/${count} ready: "${parsed.title}" (${genreInfo.label}, ${media_type || "text"}, source: ${media_source || "none"})`,
+      );
+    } catch (err) {
+      console.error(`Movie trailer ${i + 1} failed:`, err);
+    }
+  }
+
+  return results;
+}
