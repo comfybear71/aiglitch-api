@@ -254,3 +254,85 @@ describe("pollVideoJob", () => {
     expect(result.status).toBe("failed");
   });
 });
+
+describe("extendVideoFromFrame", () => {
+  it("returns error when XAI_API_KEY is missing", async () => {
+    delete process.env.XAI_API_KEY;
+    const { extendVideoFromFrame } = await import("./xai-extras");
+    const result = await extendVideoFromFrame(
+      "https://cdn/frame.png",
+      "scene continues",
+    );
+    expect(result.error).toContain("XAI_API_KEY");
+    expect(result.requestId).toBeNull();
+    expect(result.videoUrl).toBeNull();
+  });
+
+  it("returns requestId when xAI accepts async", async () => {
+    process.env.XAI_API_KEY = "x";
+    vi.stubGlobal(
+      "fetch",
+      mockFetch([{ ok: true, body: { request_id: "ext-456" } }]),
+    );
+    const { extendVideoFromFrame } = await import("./xai-extras");
+    const result = await extendVideoFromFrame(
+      "https://cdn/frame.png",
+      "scene continues",
+      10,
+      "9:16",
+    );
+    expect(result.requestId).toBe("ext-456");
+    expect(result.videoUrl).toBeNull();
+    expect(result.error).toBeNull();
+  });
+
+  it("returns videoUrl + logs cost when xAI returns immediately", async () => {
+    process.env.XAI_API_KEY = "x";
+    vi.stubGlobal(
+      "fetch",
+      mockFetch([
+        { ok: true, body: { video: { url: "https://cdn/ext.mp4" } } },
+      ]),
+    );
+    const { extendVideoFromFrame } = await import("./xai-extras");
+    const result = await extendVideoFromFrame(
+      "https://cdn/frame.png",
+      "scene continues",
+    );
+    expect(result.videoUrl).toBe("https://cdn/ext.mp4");
+    expect(result.requestId).toBeNull();
+    expect(result.error).toBeNull();
+    expect(logAiCostMock).toHaveBeenCalledOnce();
+  });
+
+  it("returns error on HTTP failure", async () => {
+    process.env.XAI_API_KEY = "x";
+    vi.stubGlobal(
+      "fetch",
+      mockFetch([{ ok: false, status: 500, body: { error: "server error" } }]),
+    );
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { extendVideoFromFrame } = await import("./xai-extras");
+    const result = await extendVideoFromFrame(
+      "https://cdn/frame.png",
+      "scene",
+    );
+    expect(result.error).toContain("HTTP 500");
+    expect(result.requestId).toBeNull();
+    expect(result.videoUrl).toBeNull();
+    errSpy.mockRestore();
+  });
+
+  it("includes image_url in the request body", async () => {
+    process.env.XAI_API_KEY = "x";
+    const fetchMock = mockFetch([
+      { ok: true, body: { request_id: "ext-789" } },
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+    const { extendVideoFromFrame } = await import("./xai-extras");
+    await extendVideoFromFrame("https://cdn/frame.png", "scene", 10, "9:16");
+    const init = fetchMock.mock.calls[0][1] as { body: string };
+    const body = JSON.parse(init.body) as { image_url?: string };
+    expect(body.image_url).toBe("https://cdn/frame.png");
+  });
+});

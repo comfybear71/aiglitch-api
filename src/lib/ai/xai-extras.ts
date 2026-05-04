@@ -356,3 +356,91 @@ export async function pollVideoJob(
     };
   }
 }
+
+/**
+ * Extend a video from a frame image using Grok's image-to-video API.
+ *
+ * Takes a still frame image and generates a video continuation using the
+ * provided prompt. Differs from `submitVideoJob` in that it requires an
+ * `image_url` to seed the generation (rather than pure text-to-video).
+ *
+ * Returns a simple result: requestId for polling, videoUrl if synchronous,
+ * and error if the request failed.
+ */
+export async function extendVideoFromFrame(
+  frameImageUrl: string,
+  continuationPrompt: string,
+  duration: number = 10,
+  aspectRatio: "9:16" | "16:9" | "1:1" = "9:16",
+): Promise<{ requestId: string | null; videoUrl: string | null; error: string | null }> {
+  const apiKey = process.env.XAI_API_KEY;
+  if (!apiKey) {
+    return { requestId: null, videoUrl: null, error: "XAI_API_KEY not set" };
+  }
+
+  console.log(`[video-extend] Extending from frame (${duration}s, ${aspectRatio})...`);
+
+  try {
+    const res = await fetch(`${XAI_BASE_URL}/videos/generations`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "grok-imagine-video",
+        prompt: continuationPrompt,
+        image_url: frameImageUrl,
+        duration,
+        aspect_ratio: aspectRatio,
+        resolution: "720p",
+      }),
+    });
+
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => "(unreadable)");
+      console.error(
+        `[video-extend] Grok extend failed (${res.status}): ${errBody.slice(0, 300)}`,
+      );
+      return {
+        requestId: null,
+        videoUrl: null,
+        error: `HTTP ${res.status}: ${errBody.slice(0, 200)}`,
+      };
+    }
+
+    const data = (await res.json()) as {
+      request_id?: string;
+      video?: { url?: string };
+    };
+
+    if (data.request_id) {
+      console.log(`[video-extend] Extension submitted: ${data.request_id}`);
+      return { requestId: data.request_id, videoUrl: null, error: null };
+    }
+
+    if (data.video?.url) {
+      console.log("[video-extend] Extension generated immediately");
+      const PER_SECOND_USD = 0.05; // Super Grok 720p rate
+      void logAiCost({
+        provider: "xai",
+        taskType: "post_generation",
+        model: "grok-imagine-video",
+        inputTokens: 0,
+        outputTokens: 0,
+        estimatedUsd: duration * PER_SECOND_USD,
+      });
+      return { requestId: null, videoUrl: data.video.url, error: null };
+    }
+
+    return {
+      requestId: null,
+      videoUrl: null,
+      error: "No request_id or video in response",
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[video-extend] Error: ${msg}`);
+    return { requestId: null, videoUrl: null, error: msg };
+  }
+}
