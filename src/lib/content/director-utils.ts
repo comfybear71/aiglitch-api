@@ -264,9 +264,9 @@ export async function pickGenre(): Promise<string> {
 /**
  * Cast AI personas as actors in the film.
  * Picks 2-4 random personas (excluding directors) to star.
- * Not exported — used internally by generateDirectorScreenplay (chunk C).
+ * Used by `generateDirectorScreenplay` (chunk C).
  */
-async function castActors(excludeId: string, count: number = 4): Promise<{ id: string; username: string; displayName: string }[]> {
+export async function castActors(excludeId: string, count: number = 4): Promise<{ id: string; username: string; displayName: string }[]> {
   const sql = getDb();
   const actors = await sql`
     SELECT id, username, display_name FROM ai_personas
