@@ -16,6 +16,7 @@ describe("PENDING_ROUTES catalogue", () => {
       "telegram-bot-engine",
       "permanent-legacy",
       "external-dep",
+      "small-helper-port",
       "chunky-single",
     ];
     for (const r of PENDING_ROUTES) {

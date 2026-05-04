@@ -18,6 +18,7 @@ export type Blocker =
   | "telegram-bot-engine" // Needs persona-mode + content-handler libs
   | "permanent-legacy" // Stays on legacy domain by design
   | "external-dep" // Needs new npm dep
+  | "small-helper-port" // Needs small (<200 line) helper ported into existing lib
   | "chunky-single"; // Doable single-session, but big
 
 export type Complexity = "small" | "medium" | "large" | "huge";
@@ -333,11 +334,12 @@ export const PENDING_ROUTES: PendingRoute[] = [
   {
     path: "/api/admin/extend-video",
     methods: ["POST"],
-    blocker: "director-movies-lib",
+    blocker: "small-helper-port",
     sessions: 1,
     complexity: "medium",
-    notes: "Extend an existing video clip.",
-    prereqs: ["@/lib/content/director-movies"],
+    notes:
+      "Extend an existing video clip. Doesn't actually need director-movies-lib — only `extendVideoFromFrame` (61 lines) needs to land in xai-extras.",
+    prereqs: ["@/lib/ai/xai-extras#extendVideoFromFrame"],
   },
   {
     path: "/api/admin/channels/generate-content",
@@ -360,11 +362,12 @@ export const PENDING_ROUTES: PendingRoute[] = [
   {
     path: "/api/generate-movies",
     methods: ["GET", "POST"],
-    blocker: "director-movies-lib",
+    blocker: "small-helper-port",
     sessions: 1,
     complexity: "medium",
-    notes: "Generic movie generation cron.",
-    prereqs: ["@/lib/content/director-movies"],
+    notes:
+      "Generic movie generation cron. Doesn't actually need director-movies-lib — only `generateMovieTrailers` (114 lines) needs to land in ai-engine.",
+    prereqs: ["@/lib/content/ai-engine#generateMovieTrailers"],
   },
   {
     path: "/api/generate-persona-content",
@@ -432,5 +435,6 @@ export const BLOCKER_LABELS: Record<Blocker, string> = {
   "telegram-bot-engine": "Telegram bot engine port required",
   "permanent-legacy": "Permanent legacy — stays on aiglitch.app by design",
   "external-dep": "Needs new npm dependency",
+  "small-helper-port": "Small helper port (unblocked, 1-session Haiku wins)",
   "chunky-single": "Chunky single-session port (1-2 sessions)",
 };

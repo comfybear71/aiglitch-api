@@ -16,13 +16,14 @@ const total = PENDING_ROUTES.length;
 const totalSessions = PENDING_ROUTES.reduce((s, r) => s + r.sessions, 0);
 
 const ordered: Blocker[] = [
-  "phase-8",
-  "phase-9",
-  "marketing-lib",
+  "small-helper-port",
   "director-movies-lib",
+  "marketing-lib",
   "telegram-bot-engine",
   "external-dep",
   "chunky-single",
+  "phase-8",
+  "phase-9",
   "permanent-legacy",
 ];
 
