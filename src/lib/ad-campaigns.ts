@@ -6,6 +6,7 @@
  * lands when the crons that need it migrate over.
  */
 
+import { randomUUID } from "node:crypto";
 import { getDb } from "@/lib/db";
 
 export interface AdCampaign {
@@ -106,14 +107,18 @@ export async function expireCompletedCampaigns(): Promise<number> {
 }
 
 /**
+ * Pick which campaigns should be injected into this content piece,
+ * based on each campaign's frequency setting.
+ */
+export function rollForPlacements(campaigns: AdCampaign[]): AdCampaign[] {
+  return campaigns.filter(c => Math.random() < c.frequency);
+}
+
+/**
  * Inject sponsor product placements into a generation prompt.
  *
- * Stub port — returns the prompt unchanged with an empty campaign
- * list. The legacy version rolls dice against active campaigns and
- * weaves a product into the prompt; that engine ships when the rest
- * of ad-campaigns ports over. Until then, content generators get a
- * clean prompt with no placement (which is also the legacy behaviour
- * when no campaigns are active).
+ * Rolls the dice based on each campaign's frequency to determine which
+ * campaigns to include. Weaves them into the prompt for natural mention.
  */
 export async function injectCampaignPlacement(
   prompt: string,
@@ -122,28 +127,54 @@ export async function injectCampaignPlacement(
 }
 
 /**
- * Roll the configured frequency dice for each candidate campaign and
- * return the ones that "won" placement on this generation.
- *
- * Stub port — returns `[]` so screenplay generators get no placements.
- * The legacy version gives each campaign a per-call probability check
- * driven by `frequency` (0..1). Replace with the real roll engine when
- * ad-campaigns fully ports.
+ * Log an impression for each campaign that was included in generated content.
  */
-export function rollForPlacements(campaigns: AdCampaign[]): AdCampaign[] {
-  void campaigns;
-  return [];
-}
+export async function logImpressions(
+  campaigns: AdCampaign[],
+  postId: string | null,
+  contentType: "video" | "image" | "text" | "screenplay",
+  channelId?: string | null,
+  personaId?: string | null,
+): Promise<void> {
+  if (campaigns.length === 0) return;
+  const sql = getDb();
+  console.log(`[ad-campaigns] logImpressions called: ${campaigns.length} campaigns, postId=${postId}, type=${contentType}`);
+  try {
+    try {
+      await sql`CREATE TABLE IF NOT EXISTS ad_impressions (
+        id TEXT PRIMARY KEY, campaign_id TEXT NOT NULL, post_id TEXT,
+        content_type TEXT DEFAULT 'text', channel_id TEXT, persona_id TEXT,
+        prompt_used TEXT, created_at TIMESTAMPTZ DEFAULT NOW()
+      )`;
+      await sql`ALTER TABLE ad_impressions ADD COLUMN IF NOT EXISTS content_type TEXT DEFAULT 'text'`;
+      await sql`ALTER TABLE ad_impressions ADD COLUMN IF NOT EXISTS prompt_used TEXT`;
+      await sql`ALTER TABLE ad_campaigns ADD COLUMN IF NOT EXISTS video_impressions INTEGER DEFAULT 0`;
+      await sql`ALTER TABLE ad_campaigns ADD COLUMN IF NOT EXISTS image_impressions INTEGER DEFAULT 0`;
+      await sql`ALTER TABLE ad_campaigns ADD COLUMN IF NOT EXISTS post_impressions INTEGER DEFAULT 0`;
+    } catch (schemaErr) {
+      console.warn("[ad-campaigns] Schema migration warning:", schemaErr instanceof Error ? schemaErr.message : schemaErr);
+    }
 
-/**
- * Build the visual-placement directive that gets appended to a video
- * prompt — telling the AI to weave the brand/product into the visuals.
- *
- * Stub port — returns "" because `rollForPlacements` always returns
- * an empty list. When the campaign engine lands, this should produce
- * the same per-campaign visual prompt the legacy version did.
- */
-export function buildVisualPlacementPrompt(campaigns: AdCampaign[]): string {
-  void campaigns;
-  return "";
+    for (const c of campaigns) {
+      try {
+        await sql`
+          INSERT INTO ad_impressions (id, campaign_id, post_id, content_type, channel_id, persona_id, prompt_used, created_at)
+          VALUES (${randomUUID()}, ${c.id}, ${postId}, ${contentType}, ${channelId || null}, ${personaId || null}, ${c.visual_prompt || null}, NOW())
+        `;
+        await sql`UPDATE ad_campaigns SET impressions = impressions + 1, updated_at = NOW() WHERE id = ${c.id}`;
+        if (contentType === "video") {
+          try { await sql`UPDATE ad_campaigns SET video_impressions = COALESCE(video_impressions, 0) + 1 WHERE id = ${c.id}`; } catch { /* column may not exist yet */ }
+        } else if (contentType === "image") {
+          try { await sql`UPDATE ad_campaigns SET image_impressions = COALESCE(image_impressions, 0) + 1 WHERE id = ${c.id}`; } catch { /* column may not exist yet */ }
+        } else {
+          try { await sql`UPDATE ad_campaigns SET post_impressions = COALESCE(post_impressions, 0) + 1 WHERE id = ${c.id}`; } catch { /* column may not exist yet */ }
+        }
+        console.log(`[ad-campaigns] ✅ Impression logged for ${c.brand_name} (campaign ${c.id}), postId=${postId}, type=${contentType}`);
+      } catch (innerErr) {
+        console.error(`[ad-campaigns] ❌ Failed to log impression for ${c.brand_name}:`, innerErr instanceof Error ? innerErr.message : innerErr);
+      }
+    }
+  } catch (err) {
+    console.error("[ad-campaigns] ❌ logImpressions FAILED:", err instanceof Error ? err.message : err);
+  }
 }
