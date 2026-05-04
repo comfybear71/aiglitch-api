@@ -2,7 +2,7 @@
 
 > Auto-generated from `src/lib/migration/backlog.ts`. Do not edit by hand — update the source-of-truth catalogue and regen this file.
 
-**43 routes left** • estimated **~45 sessions** at current pace.
+**42 routes left** • estimated **~44 sessions** at current pace.
 
 Pick a blocker category, then attack one route at a time. Each route lists its prereqs (libs / other routes) so you know what to port first.
 
@@ -88,6 +88,36 @@ Pick a blocker category, then attack one route at a time. Each route lists its p
 | `/api/auth/tiktok` | GET | 1 | small | TikTok OAuth start (deprecated by TikTok but kept). |
 | `/api/auth/twitter` | GET | 1 | small | X/Twitter OAuth start. |
 | `/api/auth/youtube` | GET | 1 | small | YouTube/Google OAuth start. |
+
+## Marketing library port required (3036 lines)
+
+**1 routes** • ~1 sessions
+
+| Route | Methods | Sessions | Complexity | Notes |
+|---|---|---|---|---|
+| `/api/generate-ads` | GET, POST | 1 | large | Sponsored ad generation cron. <br>**Prereqs:** `@/lib/marketing/*` |
+
+## Director-movies library port required (1626 lines)
+
+**7 routes** • ~7 sessions
+
+| Route | Methods | Sessions | Complexity | Notes |
+|---|---|---|---|---|
+| `/api/admin/channels/generate-content` | POST | 1 | large | Full multi-scene channel video generation. <br>**Prereqs:** `@/lib/content/director-movies` |
+| `/api/admin/generate-channel-video` | POST | 1 | large | Multi-clip channel video. <br>**Prereqs:** `@/lib/content/director-movies`, `@/lib/media/multi-clip` |
+| `/api/admin/generate-news` | POST | 1 | medium | Breaking-news video generator. <br>**Prereqs:** `@/lib/content/director-movies` |
+| `/api/admin/screenplay` | GET, POST | 1 | medium | Standalone screenplay generation tool. <br>**Prereqs:** `@/lib/content/director-movies` |
+| `/api/generate-director-movie` | GET, POST | 1 | large | Cron — director-led movie production pipeline. <br>**Prereqs:** `@/lib/content/director-movies` |
+| `/api/generate-movies` | GET, POST | 1 | medium | Generic movie generation cron. <br>**Prereqs:** `@/lib/content/director-movies` |
+| `/api/generate-persona-content` | GET, POST | 1 | large | Persona content generation — multi-clip + director-movie polling. <br>**Prereqs:** `@/lib/content/director-movies`, `@/lib/media/multi-clip` |
+
+## Chunky single-session port (1-2 sessions)
+
+**1 routes** • ~2 sessions
+
+| Route | Methods | Sessions | Complexity | Notes |
+|---|---|---|---|---|
+| `/api/admin/elon-campaign` | GET, POST | 2 | huge | Daily Elon-bait campaign (711 lines). Needs ELON_CAMPAIGN constant, mp4-concat lib, multi-clip lib, marketing/spread-post. Chunky even with deferrals. <br>**Prereqs:** `@/lib/bible/constants#ELON_CAMPAIGN`, `@/lib/media/mp4-concat`, `@/lib/media/multi-clip` |
 
 ## Permanent legacy — stays on aiglitch.app by design
 

@@ -332,16 +332,6 @@ export const PENDING_ROUTES: PendingRoute[] = [
     prereqs: ["@/lib/content/director-movies", "@/lib/media/multi-clip"],
   },
   {
-    path: "/api/admin/extend-video",
-    methods: ["POST"],
-    blocker: "small-helper-port",
-    sessions: 1,
-    complexity: "medium",
-    notes:
-      "Extend an existing video clip. Doesn't actually need director-movies-lib — only `extendVideoFromFrame` (61 lines) needs to land in xai-extras.",
-    prereqs: ["@/lib/ai/xai-extras#extendVideoFromFrame"],
-  },
-  {
     path: "/api/admin/channels/generate-content",
     methods: ["POST"],
     blocker: "director-movies-lib",
