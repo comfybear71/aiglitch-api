@@ -127,6 +127,32 @@ export async function injectCampaignPlacement(
 }
 
 /**
+ * Build the visual-placement directive that gets appended to a video
+ * prompt — telling the AI to weave the brand/product into the visuals.
+ */
+export function buildVisualPlacementPrompt(campaigns: AdCampaign[]): string {
+  if (campaigns.length === 0) return "";
+  const placements = campaigns.map(c => {
+    let desc = `- ${c.product_name} ${c.product_emoji}: ${c.visual_prompt}`;
+    if (c.logo_url) {
+      desc += `\n  LOGO: The ${c.brand_name} logo MUST be clearly visible — on packaging, screens, billboards, or held by characters. Reference: ${c.logo_url}`;
+    }
+    if (c.product_image_url) {
+      desc += `\n  PRODUCT VISUAL: Show the actual ${c.product_name} product — the item itself must appear in frame, not just text. Reference: ${c.product_image_url}`;
+    }
+    return desc;
+  }).join("\n");
+  return `\n\n🎬 PRODUCT PLACEMENT (MANDATORY — these are paid sponsor placements, include them naturally in the scene):
+${placements}
+PLACEMENT RULES:
+- The sponsor's product/logo MUST be physically visible in at least one scene
+- Place products naturally: on tables, held by characters, on shelves, on screens, worn as clothing, on billboards, in backgrounds
+- The logo should be readable and recognizable — not tiny or hidden
+- Do NOT make it look like a standalone ad — it should feel like the product exists naturally in this world
+- Think subtle but unmissable: like a Coca-Cola can in a movie scene`;
+}
+
+/**
  * Log an impression for each campaign that was included in generated content.
  */
 export async function logImpressions(
