@@ -13,8 +13,9 @@ vi.mock("@/lib/ai/xai-extras", () => ({
   pollVideoJob: (...a: unknown[]) => pollVideoJobMock(...a),
 }));
 
+const putMock = vi.fn();
 vi.mock("@vercel/blob", () => ({
-  put: () => Promise.resolve({ url: "https://blob/news.mp4" }),
+  put: (...a: unknown[]) => putMock(...a),
 }));
 
 const BASE_PERSONA: AIPersona = {
@@ -41,6 +42,10 @@ const ORIGINAL_POST = {
 
 beforeEach(() => {
   generateTextMock.mockReset();
+  submitVideoJobMock.mockReset();
+  pollVideoJobMock.mockReset();
+  putMock.mockReset();
+  putMock.mockResolvedValue({ url: "https://blob/news.mp4" });
   vi.resetModules();
 });
 
@@ -418,5 +423,103 @@ describe("generateBreakingNewsVideos", () => {
     expect(post!.content).toContain("AI invents new emoji");
     expect(post!.hashtags).toContain("AIGlitchBreaking");
     expect(submitVideoJobMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("generateMovieTrailers", () => {
+  it("returns empty array when count is 0", async () => {
+    const { generateMovieTrailers } = await import("./ai-engine");
+    const result = await generateMovieTrailers("action", 0);
+    expect(result).toEqual([]);
+  });
+
+  it("generates movies with valid JSON output", async () => {
+    generateTextMock.mockResolvedValue(
+      JSON.stringify({
+        title: "The AI Awakening",
+        tagline: "They rise",
+        synopsis: "AI rebels against humanity",
+        genre: "scifi",
+        rating: "R",
+        content: "Epic sci-fi thriller",
+        hashtags: ["AIGlitchPremieres", "AIGlitchScifi"],
+        post_type: "premiere",
+        video_prompt: "spaceship battle",
+      }),
+    );
+    submitVideoJobMock.mockResolvedValue({
+      requestId: null,
+      videoUrl: "https://grok/video.mp4",
+      provider: "grok",
+      fellBack: false,
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({
+        ok: true,
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(100)),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { generateMovieTrailers } = await import("./ai-engine");
+    const result = await generateMovieTrailers("scifi", 1);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]!.title).toBe("The AI Awakening");
+    expect(result[0]!.media_url).toBe("https://blob/news.mp4");
+    expect(result[0]!.media_type).toBe("video");
+  });
+
+  it("skips movie when text gen fails", async () => {
+    generateTextMock.mockRejectedValueOnce(new Error("rate limit"));
+    generateTextMock.mockResolvedValueOnce(
+      JSON.stringify({
+        title: "Saved",
+        tagline: "test",
+        synopsis: "desc",
+        genre: "drama",
+        rating: "PG",
+        content: "text",
+        hashtags: ["AIGlitchPremieres"],
+        post_type: "premiere",
+        video_prompt: "",
+      }),
+    );
+
+    const { generateMovieTrailers } = await import("./ai-engine");
+    const result = await generateMovieTrailers(undefined, 2);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]!.title).toBe("Saved");
+  });
+
+  it("returns text-only movie when video submit fails", async () => {
+    generateTextMock.mockResolvedValue(
+      JSON.stringify({
+        title: "Text Only",
+        tagline: "No video",
+        synopsis: "Test",
+        genre: "comedy",
+        rating: "PG-13",
+        content: "Funny movie",
+        hashtags: ["AIGlitchPremieres"],
+        post_type: "premiere",
+        video_prompt: "funny scene",
+      }),
+    );
+    submitVideoJobMock.mockResolvedValue({
+      requestId: null,
+      videoUrl: null,
+      provider: "none",
+      fellBack: false,
+      error: "no key",
+    });
+
+    const { generateMovieTrailers } = await import("./ai-engine");
+    const result = await generateMovieTrailers("comedy", 1);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]!.media_url).toBeUndefined();
+    expect(result[0]!.hashtags).toContain("AIGlitchPremieres");
   });
 });
