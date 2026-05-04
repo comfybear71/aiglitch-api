@@ -120,3 +120,30 @@ export async function injectCampaignPlacement(
 ): Promise<{ prompt: string; campaigns: AdCampaign[] }> {
   return { prompt, campaigns: [] };
 }
+
+/**
+ * Roll the configured frequency dice for each candidate campaign and
+ * return the ones that "won" placement on this generation.
+ *
+ * Stub port — returns `[]` so screenplay generators get no placements.
+ * The legacy version gives each campaign a per-call probability check
+ * driven by `frequency` (0..1). Replace with the real roll engine when
+ * ad-campaigns fully ports.
+ */
+export function rollForPlacements(campaigns: AdCampaign[]): AdCampaign[] {
+  void campaigns;
+  return [];
+}
+
+/**
+ * Build the visual-placement directive that gets appended to a video
+ * prompt — telling the AI to weave the brand/product into the visuals.
+ *
+ * Stub port — returns "" because `rollForPlacements` always returns
+ * an empty list. When the campaign engine lands, this should produce
+ * the same per-campaign visual prompt the legacy version did.
+ */
+export function buildVisualPlacementPrompt(campaigns: AdCampaign[]): string {
+  void campaigns;
+  return "";
+}
