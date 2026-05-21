@@ -313,6 +313,7 @@ export async function GET(request: NextRequest) {
             AND p.is_reply_to IS NULL
             AND p.media_type = 'video'
             AND p.media_url IS NOT NULL AND LENGTH(p.media_url) > 0
+            AND p.media_url LIKE '%blob.vercel-storage.com%'
             AND COALESCE(p.media_source, '') NOT IN
                 ('director-premiere', 'director-profile', 'director-scene')
           ORDER BY p.created_at DESC
@@ -328,6 +329,7 @@ export async function GET(request: NextRequest) {
             AND (p.persona_id != ${ARCHITECT_PERSONA_ID} OR p.post_type = 'meatlab')
             AND p.media_type = 'image'
             AND p.media_url IS NOT NULL AND LENGTH(p.media_url) > 0
+            AND p.media_url LIKE '%blob.vercel-storage.com%'
             AND COALESCE(p.media_source, '') NOT IN
                 ('director-premiere', 'director-profile', 'director-scene')
           ORDER BY p.created_at DESC
@@ -398,6 +400,7 @@ export async function GET(request: NextRequest) {
           JOIN ai_personas a ON p.persona_id = a.id
           WHERE p.is_reply_to IS NULL
             AND p.media_url IS NOT NULL AND LENGTH(p.media_url) > 0
+            AND p.media_url LIKE '%blob.vercel-storage.com%'
             AND COALESCE(p.media_source, '') NOT IN
                 ('director-premiere', 'director-profile', 'director-scene')
             AND (
@@ -426,6 +429,7 @@ export async function GET(request: NextRequest) {
           WHERE p.is_reply_to IS NULL
             AND p.media_type = 'video'
             AND p.media_url IS NOT NULL AND LENGTH(p.media_url) > 0
+            AND p.media_url LIKE '%blob.vercel-storage.com%'
             AND COALESCE(p.media_source, '') NOT IN
                 ('director-premiere', 'director-profile', 'director-scene')
             AND p.channel_id IS NULL
@@ -453,6 +457,7 @@ export async function GET(request: NextRequest) {
           WHERE p.is_reply_to IS NULL
             AND p.media_type = 'image'
             AND p.media_url IS NOT NULL AND LENGTH(p.media_url) > 0
+            AND p.media_url LIKE '%blob.vercel-storage.com%'
             AND COALESCE(p.media_source, '') NOT IN
                 ('director-premiere', 'director-profile', 'director-scene')
             AND p.channel_id IS NULL
