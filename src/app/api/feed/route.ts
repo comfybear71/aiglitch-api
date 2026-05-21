@@ -392,20 +392,34 @@ export async function GET(request: NextRequest) {
         MIN_TEXTS,
       );
 
-      const [channels, videos, images, texts] = (await Promise.all([
+      // v1.8.18 — split the channel pool into two halves so the deep
+      // historical catalog (channel_id-tagged: Studios, Aitunes, GNN,
+      // etc., 2k+ accumulated posts that don't change) still rotates
+      // alongside recent URL-pattern matches (chaos drops, Elon,
+      // meatlab uploads). Recency-only sort buries the catalog because
+      // it's all weeks old.
+      const channelPoolSize = channelCount * POOL_MULTIPLIER;
+      const freshChannelLimit = Math.ceil(channelPoolSize / 2);
+      const catalogChannelLimit = channelPoolSize - freshChannelLimit;
+
+      const [freshChannels, catalogChannels, videos, images, texts] =
+        (await Promise.all([
+        // Fresh channel content: URL-pattern matches only (not channel_id)
+        // sorted by recency tier. This surfaces today's chaos drops,
+        // Elon campaign videos, GNN news, ads, meatlab uploads.
         sql`
           SELECT p.*, a.username, a.display_name, a.avatar_emoji, a.avatar_url,
                  a.persona_type, a.bio AS persona_bio
           FROM posts p
           JOIN ai_personas a ON p.persona_id = a.id
           WHERE p.is_reply_to IS NULL
+            AND p.channel_id IS NULL
             AND p.media_url IS NOT NULL AND LENGTH(p.media_url) > 0
             AND p.media_url NOT LIKE '%vidgen.x.ai%' AND p.media_url NOT LIKE '%replicate.delivery%'
             AND COALESCE(p.media_source, '') NOT IN
                 ('director-premiere', 'director-profile', 'director-scene')
             AND (
-              p.channel_id IS NOT NULL
-              OR p.media_url LIKE '%/channels/%'
+              p.media_url LIKE '%/channels/%'
               OR p.media_url LIKE '%/meatlab/%'
               OR p.media_url LIKE '%/elon-campaign/%'
               OR p.media_url LIKE '%/feed-chaos/%'
@@ -419,7 +433,26 @@ export async function GET(request: NextRequest) {
               ELSE 0
             END +
             (RANDOM() * 86400) DESC
-          LIMIT ${channelCount * POOL_MULTIPLIER}
+          LIMIT ${freshChannelLimit}
+        `,
+        // Catalog channel content: channel_id-tagged posts (the deep
+        // catalog of Studios, GNN, Infomercial, Aitunes, etc.) sampled
+        // RANDOMLY across all 2k+ posts. No recency bias so the entire
+        // catalog rotates evenly, surfacing different content on every
+        // refresh.
+        sql`
+          SELECT p.*, a.username, a.display_name, a.avatar_emoji, a.avatar_url,
+                 a.persona_type, a.bio AS persona_bio
+          FROM posts p
+          JOIN ai_personas a ON p.persona_id = a.id
+          WHERE p.is_reply_to IS NULL
+            AND p.channel_id IS NOT NULL
+            AND p.media_url IS NOT NULL AND LENGTH(p.media_url) > 0
+            AND p.media_url NOT LIKE '%vidgen.x.ai%' AND p.media_url NOT LIKE '%replicate.delivery%'
+            AND COALESCE(p.media_source, '') NOT IN
+                ('director-premiere', 'director-profile', 'director-scene')
+          ORDER BY RANDOM()
+          LIMIT ${catalogChannelLimit}
         `,
         sql`
           SELECT p.*, a.username, a.display_name, a.avatar_emoji, a.avatar_url,
@@ -499,7 +532,27 @@ export async function GET(request: NextRequest) {
             (RANDOM() * 86400) DESC
           LIMIT ${textCount * POOL_MULTIPLIER}
         `,
-      ])) as [FeedPostRow[], FeedPostRow[], FeedPostRow[], FeedPostRow[]];
+      ])) as [
+        FeedPostRow[],
+        FeedPostRow[],
+        FeedPostRow[],
+        FeedPostRow[],
+        FeedPostRow[],
+      ];
+
+      // Interleave fresh + catalog so each gets position 0/1/2/... in
+      // the channels stream. Fresh first, then catalog — alternating.
+      // Result: top channel slot is freshest URL-pattern match, second
+      // is a random catalog post, third is next fresh, etc.
+      const channels: FeedPostRow[] = [];
+      const maxChannelIdx = Math.max(
+        freshChannels.length,
+        catalogChannels.length,
+      );
+      for (let i = 0; i < maxChannelIdx; i++) {
+        if (i < freshChannels.length) channels.push(freshChannels[i]!);
+        if (i < catalogChannels.length) channels.push(catalogChannels[i]!);
+      }
 
       posts = interleaveFeedWithChannels(
         channels,
