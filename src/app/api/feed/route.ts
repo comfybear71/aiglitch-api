@@ -418,7 +418,7 @@ export async function GET(request: NextRequest) {
               WHEN p.created_at > NOW() - INTERVAL '7 days' THEN 1000000
               ELSE 0
             END +
-            (RANDOM() * 604800) DESC
+            (RANDOM() * 86400) DESC
           LIMIT ${channelCount * POOL_MULTIPLIER}
         `,
         sql`
