@@ -47,9 +47,9 @@ describe("interleaveFeed", () => {
     expect(result[0]?.id).toBe("dup-1");
   });
 
-  it("favours videos when all RNG outputs are equal (3x weight)", () => {
-    // With rng() === 1, scores are videos=3, images=2, texts=1.
-    // Top slot must be a video.
+  it("favours videos when all RNG outputs are equal at same position (3x weight)", () => {
+    // v1.8.16: score = (1000 - pos*4) + weight*5 + rng()*3
+    // At position 0 with rng=1: v=1018, i=1013, t=1008. Videos lead.
     const result = interleaveFeed(
       mkPosts("v", 1),
       mkPosts("i", 1),
@@ -91,10 +91,10 @@ describe("interleaveFeedWithChannels", () => {
     expect(result).toHaveLength(8);
   });
 
-  it("ranks videos first, then channels/images tied, then texts when RNG is equal", () => {
-    // v1.8.13 weights: videos=3, channels=2, images=2, texts=1.
-    // With rng() === 1, scores are: v=3, c=2, i=2, t=1.
-    // Channels and images tie at 2 — sort is unstable so we just verify
+  it("ranks videos first, then channels/images tied, then texts at position 0", () => {
+    // v1.8.16: score = (1000 - pos*4) + weight*5 + rng()*3
+    // At pos 0 with rng=1: v=1018, c=1013, i=1013, t=1008.
+    // Channels and images tie at 1013 — sort is unstable so we just verify
     // videos lead and texts trail.
     const result = interleaveFeedWithChannels(
       mkPosts("c", 1),
@@ -122,13 +122,12 @@ describe("interleaveFeedWithChannels", () => {
     expect(result[0]?.id).toBe("dup-1");
   });
 
-  it("videos dominate top, channels mix with images, texts trail (v1.8.13 weights)", () => {
-    // v1.8.13: videos=3x, channels=2x=images, texts=1x.
-    // With rng()===1, all 8 videos rank above all channels+images, which
-    // rank above all texts. Result with limit=20 and equal supply (8 each):
-    //   slots 0-7   : videos (8 wins at score 3)
-    //   slots 8-15  : channels + images, tied at score 2 (some of each)
-    //   slots 16-19 : 4 of the remaining texts (score 1)
+  it("interleaves streams by position with weight tiebreakers (v1.8.16)", () => {
+    // v1.8.16: score = (1000 - pos*4) + weight*5 + rng()*3
+    // With 8 of each stream at limit=20 and rng=1, top of feed should
+    // alternate roughly by position (v0, c0/i0, t0, v1, c1/i1, t1, v2...)
+    // because position decay (4 per step) is small enough that videos
+    // at position k+1 outrank channels at position k+2 but not k+1.
     const result = interleaveFeedWithChannels(
       mkPosts("c", 8),
       mkPosts("v", 8),
@@ -137,10 +136,17 @@ describe("interleaveFeedWithChannels", () => {
       20,
       () => 1,
     );
+    // All four streams should contribute to top 20 when supply is balanced.
     const videoCount = result.filter((p) => p.id.startsWith("v-")).length;
+    const channelCount = result.filter((p) => p.id.startsWith("c-")).length;
+    const imageCount = result.filter((p) => p.id.startsWith("i-")).length;
     const textCount = result.filter((p) => p.id.startsWith("t-")).length;
-    expect(videoCount).toBe(8);
-    expect(textCount).toBeLessThanOrEqual(4);
+    expect(videoCount).toBeGreaterThanOrEqual(4);
+    expect(channelCount).toBeGreaterThanOrEqual(3);
+    expect(imageCount).toBeGreaterThanOrEqual(3);
+    expect(textCount).toBeGreaterThanOrEqual(2);
+    // v-0 must lead (highest score at pos 0 with rng=1)
+    expect(result[0]?.id).toBe("v-0");
   });
 
   it("returns empty array when all four streams are empty", () => {
