@@ -53,15 +53,17 @@ export function interleaveFeed<T extends PostLike>(
 /**
  * Four-stream interleave: channels + videos + images + texts.
  *
- * Channels get the highest weight (4x) so they surface every 2-3 posts
- * even when the other streams are bigger. This is the "rotate channel
- * content prominently" requirement — manual channel videos sit in a
- * deep catalog and need active rotation to stay visible.
+ * Weight philosophy (revised in v1.8.13 after v1.8.12 surfaced too much
+ * old channel content at the top):
  *
- *   channels → score = rng() * 4   (4x weight, ~40% of slots)
- *   videos   → score = rng() * 3   (3x weight)
- *   images   → score = rng() * 2   (2x weight)
- *   texts    → score = rng() * 1   (1x weight)
+ *   videos   → 3x   — fresh persona videos lead the feed
+ *   channels → 2x   — channel content rotates in, doesn't dominate top
+ *   images   → 2x   — same weight as channels, mix together
+ *   texts    → 1x
+ *
+ * The earlier 4x channel weight made hours-old rotated channel posts
+ * always outrank fresh persona content. With 2x, channels appear at
+ * a comfortable cadence but fresh persona videos hold the top slots.
  *
  * Same dedup + score-sort + slice-to-limit shape as `interleaveFeed`.
  * A deterministic RNG can be injected for tests.
@@ -80,7 +82,7 @@ export function interleaveFeedWithChannels<T extends PostLike>(
   for (const c of channels) {
     if (!seen.has(c.id)) {
       seen.add(c.id);
-      pool.push({ post: c, score: rng() * 4 });
+      pool.push({ post: c, score: rng() * 2 });
     }
   }
   for (const v of videos) {

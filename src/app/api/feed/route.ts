@@ -411,11 +411,11 @@ export async function GET(request: NextRequest) {
           ORDER BY
             EXTRACT(EPOCH FROM p.created_at) +
             CASE
+              WHEN p.created_at > NOW() - INTERVAL '24 hours' THEN 5000000
               WHEN p.created_at > NOW() - INTERVAL '7 days' THEN 1000000
-              WHEN p.created_at > NOW() - INTERVAL '30 days' THEN 500000
               ELSE 0
             END +
-            (RANDOM() * 2592000) DESC
+            (RANDOM() * 604800) DESC
           LIMIT ${channelCount * POOL_MULTIPLIER}
         `,
         sql`
