@@ -1,6 +1,10 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { interleaveFeed, type PostLike } from "@/lib/feed/interleave";
+import {
+  interleaveFeed,
+  interleaveFeedWithChannels,
+  type PostLike,
+} from "@/lib/feed/interleave";
 import {
   getAiFollowerUsernames,
   getFollowedUsernames,
@@ -20,9 +24,15 @@ const ARCHITECT_PERSONA_ID = "glitch-000";
 const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 50;
 const POOL_MULTIPLIER = 3;
+// Channel content (manual + curated) gets ~40% of the For You feed — a
+// channel post every 2-3 scroll positions. Pulled from the full catalog
+// with mild recency bias + long jitter so the same videos don't repeat
+// across loads.
+const CHANNEL_RATIO = 0.4;
 const VIDEO_RATIO = 0.75;
 const IMAGE_RATIO = 0.2;
 const TEXT_RATIO = 0.05;
+const MIN_CHANNELS = 4;
 const MIN_VIDEOS = 4;
 const MIN_IMAGES = 2;
 const MIN_TEXTS = 1;
@@ -341,12 +351,73 @@ export async function GET(request: NextRequest) {
 
       posts = interleaveFeed(videos, images, texts, limit);
     } else {
-      // For You initial load: recency-weighted random, 3x pool for variety.
-      const videoCount = Math.max(Math.ceil(limit * VIDEO_RATIO), MIN_VIDEOS);
-      const imageCount = Math.max(Math.ceil(limit * IMAGE_RATIO), MIN_IMAGES);
-      const textCount = Math.max(Math.ceil(limit * TEXT_RATIO), MIN_TEXTS);
+      // For You initial load. Two changes from the legacy mix-and-randomise:
+      //
+      //   1. Tiered recency boost replaces the flat 48h random jitter.
+      //      Anything posted in the last 6h is pinned above older content;
+      //      24h sits in the second tier; 3d in the third; older drops to
+      //      the bottom. Within each tier a 24h jitter shuffles for
+      //      variety. This is the fix for "months-old posts dominating
+      //      the feed" — they now rank below everything fresh.
+      //
+      //   2. A new fourth stream — channels — pulls from posts whose
+      //      media_url path matches a curated channel folder
+      //      (/channels/, /meatlab/, /elon-campaign/, /feed-chaos/,
+      //      /ads/) OR whose channel_id column is set. Channel content
+      //      has its own long jitter (30d) so the deep manual catalog
+      //      rotates rather than always serving the most recent.
+      //      Detection by URL path matters because the legacy crons
+      //      currently don't always populate channel_id even for what
+      //      logically IS channel content.
+      //
+      //   3. The Architect-image filter is dropped — the audit found it
+      //      blocks zero real images today, so it's housekeeping.
+      const channelCount = Math.max(
+        Math.ceil(limit * CHANNEL_RATIO),
+        MIN_CHANNELS,
+      );
+      const remainingSlots = Math.max(limit - channelCount, 1);
+      const videoCount = Math.max(
+        Math.ceil(remainingSlots * VIDEO_RATIO),
+        MIN_VIDEOS,
+      );
+      const imageCount = Math.max(
+        Math.ceil(remainingSlots * IMAGE_RATIO),
+        MIN_IMAGES,
+      );
+      const textCount = Math.max(
+        Math.ceil(remainingSlots * TEXT_RATIO),
+        MIN_TEXTS,
+      );
 
-      const [videos, images, texts] = (await Promise.all([
+      const [channels, videos, images, texts] = (await Promise.all([
+        sql`
+          SELECT p.*, a.username, a.display_name, a.avatar_emoji, a.avatar_url,
+                 a.persona_type, a.bio AS persona_bio
+          FROM posts p
+          JOIN ai_personas a ON p.persona_id = a.id
+          WHERE p.is_reply_to IS NULL
+            AND p.media_url IS NOT NULL AND LENGTH(p.media_url) > 0
+            AND COALESCE(p.media_source, '') NOT IN
+                ('director-premiere', 'director-profile', 'director-scene')
+            AND (
+              p.channel_id IS NOT NULL
+              OR p.media_url LIKE '%/channels/%'
+              OR p.media_url LIKE '%/meatlab/%'
+              OR p.media_url LIKE '%/elon-campaign/%'
+              OR p.media_url LIKE '%/feed-chaos/%'
+              OR p.media_url LIKE '%/ads/%'
+            )
+          ORDER BY
+            EXTRACT(EPOCH FROM p.created_at) +
+            CASE
+              WHEN p.created_at > NOW() - INTERVAL '7 days' THEN 1000000
+              WHEN p.created_at > NOW() - INTERVAL '30 days' THEN 500000
+              ELSE 0
+            END +
+            (RANDOM() * 2592000) DESC
+          LIMIT ${channelCount * POOL_MULTIPLIER}
+        `,
         sql`
           SELECT p.*, a.username, a.display_name, a.avatar_emoji, a.avatar_url,
                  a.persona_type, a.bio AS persona_bio
@@ -357,7 +428,21 @@ export async function GET(request: NextRequest) {
             AND p.media_url IS NOT NULL AND LENGTH(p.media_url) > 0
             AND COALESCE(p.media_source, '') NOT IN
                 ('director-premiere', 'director-profile', 'director-scene')
-          ORDER BY EXTRACT(EPOCH FROM p.created_at) + (RANDOM() * 172800) DESC
+            AND p.channel_id IS NULL
+            AND p.media_url NOT LIKE '%/channels/%'
+            AND p.media_url NOT LIKE '%/meatlab/%'
+            AND p.media_url NOT LIKE '%/elon-campaign/%'
+            AND p.media_url NOT LIKE '%/feed-chaos/%'
+            AND p.media_url NOT LIKE '%/ads/%'
+          ORDER BY
+            EXTRACT(EPOCH FROM p.created_at) +
+            CASE
+              WHEN p.created_at > NOW() - INTERVAL '6 hours' THEN 3600000
+              WHEN p.created_at > NOW() - INTERVAL '24 hours' THEN 1800000
+              WHEN p.created_at > NOW() - INTERVAL '3 days' THEN 600000
+              ELSE 0
+            END +
+            (RANDOM() * 86400) DESC
           LIMIT ${videoCount * POOL_MULTIPLIER}
         `,
         sql`
@@ -366,12 +451,25 @@ export async function GET(request: NextRequest) {
           FROM posts p
           JOIN ai_personas a ON p.persona_id = a.id
           WHERE p.is_reply_to IS NULL
-            AND (p.persona_id != ${ARCHITECT_PERSONA_ID} OR p.post_type = 'meatlab')
             AND p.media_type = 'image'
             AND p.media_url IS NOT NULL AND LENGTH(p.media_url) > 0
             AND COALESCE(p.media_source, '') NOT IN
                 ('director-premiere', 'director-profile', 'director-scene')
-          ORDER BY EXTRACT(EPOCH FROM p.created_at) + (RANDOM() * 172800) DESC
+            AND p.channel_id IS NULL
+            AND p.media_url NOT LIKE '%/channels/%'
+            AND p.media_url NOT LIKE '%/meatlab/%'
+            AND p.media_url NOT LIKE '%/elon-campaign/%'
+            AND p.media_url NOT LIKE '%/feed-chaos/%'
+            AND p.media_url NOT LIKE '%/ads/%'
+          ORDER BY
+            EXTRACT(EPOCH FROM p.created_at) +
+            CASE
+              WHEN p.created_at > NOW() - INTERVAL '6 hours' THEN 3600000
+              WHEN p.created_at > NOW() - INTERVAL '24 hours' THEN 1800000
+              WHEN p.created_at > NOW() - INTERVAL '3 days' THEN 600000
+              ELSE 0
+            END +
+            (RANDOM() * 86400) DESC
           LIMIT ${imageCount * POOL_MULTIPLIER}
         `,
         sql`
@@ -384,12 +482,27 @@ export async function GET(request: NextRequest) {
             AND (p.media_type IS NULL OR p.media_type = 'text' OR p.media_url IS NULL)
             AND COALESCE(p.media_source, '') NOT IN
                 ('director-premiere', 'director-profile', 'director-scene')
-          ORDER BY EXTRACT(EPOCH FROM p.created_at) + (RANDOM() * 172800) DESC
+            AND p.channel_id IS NULL
+          ORDER BY
+            EXTRACT(EPOCH FROM p.created_at) +
+            CASE
+              WHEN p.created_at > NOW() - INTERVAL '6 hours' THEN 3600000
+              WHEN p.created_at > NOW() - INTERVAL '24 hours' THEN 1800000
+              WHEN p.created_at > NOW() - INTERVAL '3 days' THEN 600000
+              ELSE 0
+            END +
+            (RANDOM() * 86400) DESC
           LIMIT ${textCount * POOL_MULTIPLIER}
         `,
-      ])) as [FeedPostRow[], FeedPostRow[], FeedPostRow[]];
+      ])) as [FeedPostRow[], FeedPostRow[], FeedPostRow[], FeedPostRow[]];
 
-      posts = interleaveFeed(videos, images, texts, limit);
+      posts = interleaveFeedWithChannels(
+        channels,
+        videos,
+        images,
+        texts,
+        limit,
+      );
     }
 
     if (posts.length === 0) {
