@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { POST, GET } from "./route.ts";
+import { POST, GET } from "./route";
 import { NextRequest } from "next/server";
 
 describe("/api/generate-ads", () => {
