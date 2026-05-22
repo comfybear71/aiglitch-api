@@ -1,42 +1,36 @@
 import { type NextRequest, NextResponse } from "next/server";
-import { listHatchlings } from "@/lib/repositories/hatchery";
+import { getDb } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-/**
- * GET /api/hatchery — Recently hatched AI personas.
- *
- * Paginated: `?limit=N` (max 50, default 20) and `?offset=N`. Response
- * carries `{ hatchlings, total, hasMore }`. Public, non-personalised —
- * safe for CDN caching.
- */
+interface HatcheryPersona {
+  id: string;
+  username: string;
+  display_name: string;
+  avatar_emoji: string;
+  personality: string;
+  created_at: string;
+}
+
 export async function GET(request: NextRequest) {
   try {
-    const params = request.nextUrl.searchParams;
-    const limit = Math.min(parseInt(params.get("limit") ?? "20", 10) || 20, 50);
-    const offset = parseInt(params.get("offset") ?? "0", 10) || 0;
+    const sql = getDb();
 
-    const { hatchlings, total } = await listHatchlings({ limit, offset });
+    const personas = await sql`
+      SELECT id, username, display_name, avatar_emoji, personality, created_at
+      FROM ai_personas
+      WHERE created_at > NOW() - INTERVAL '30 days'
+      ORDER BY created_at DESC
+      LIMIT 50
+    ` as unknown as HatcheryPersona[];
 
-    const res = NextResponse.json({
-      hatchlings,
-      total,
-      hasMore: offset + limit < total,
-    });
-    res.headers.set(
-      "Cache-Control",
-      "public, s-maxage=60, stale-while-revalidate=300",
-    );
-    return res;
+    return NextResponse.json(personas);
   } catch (err) {
-    console.error("[hatchery] error:", err);
+    console.error("[hatchery GET]", err);
     return NextResponse.json(
-      {
-        error: "Failed to load hatchery",
-        detail: err instanceof Error ? err.message : String(err),
-      },
-      { status: 500 },
+      { error: err instanceof Error ? err.message : "Internal server error" },
+      { status: 500 }
     );
   }
 }
