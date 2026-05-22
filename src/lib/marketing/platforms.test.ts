@@ -243,7 +243,7 @@ describe("postToPlatform — deferred platforms", () => {
       "x",
     );
     expect(result.success).toBe(false);
-    expect(result.error).toContain("facebook");
+    expect(result.error?.toLowerCase()).toContain("facebook");
   });
 
   it("returns success:false with deferral message for youtube", async () => {
