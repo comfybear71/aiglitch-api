@@ -77,7 +77,7 @@ export async function GET(request: NextRequest) {
           border-left: 4px solid #0066cc;
           font-family: monospace;
           font-size: 12px;
-          max-height: 300px;
+          max-height: 800px;
           overflow-y: auto;
           white-space: pre-wrap;
           word-break: break-all;
@@ -212,7 +212,7 @@ export async function GET(request: NextRequest) {
                 Status: \${res.status}
                 Latency: \${elapsed}ms
 
-                \${res.ok ? \`✅ \${data.message}\\n\\nPersona: \${data.persona.name} (@\${data.persona.username})\\nImage: \${data.post.image || 'generation attempted'}\\n\\nMarketing Result:\\n\${JSON.stringify(data.marketing, null, 2).slice(0, 500)}\` : \`❌ \${data.error}\`}
+                \${res.ok ? \`✅ \${data.message}\\n\\nPersona: \${data.persona.name} (@\${data.persona.username})\\nImage: \${data.post.image || 'generation attempted'}\\n\\nMarketing Result:\\n\${JSON.stringify(data.marketing, null, 2)}\` : \`❌ \${data.error}\`}
               </div>
             \`;
           } catch (err) {
