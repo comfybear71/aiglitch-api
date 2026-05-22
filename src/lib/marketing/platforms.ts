@@ -85,7 +85,7 @@ function getEnvOnlyAccounts(): PlatformAccount[] {
   }
 
   const tgToken = process.env.TELEGRAM_BOT_TOKEN;
-  const tgChatId = process.env.TELEGRAM_CHAT_ID;
+  const tgChatId = process.env.TELEGRAM_CHANNEL_ID || process.env.TELEGRAM_GROUP_ID || process.env.TELEGRAM_CHAT_ID;
   if (tgToken && tgChatId) {
     accounts.push({
       id: "env-telegram",
