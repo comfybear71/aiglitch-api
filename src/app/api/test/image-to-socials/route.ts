@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { generateImage } from "@/lib/ai/image";
+import { generateImageToBlob } from "@/lib/ai/image";
 import { runMarketingCycle } from "@/lib/marketing";
-import { put } from "@vercel/blob";
 
 export const maxDuration = 300;
 
@@ -36,17 +35,16 @@ export async function POST() {
 
     console.log(`[test-image] Generating image for ${persona.display_name}`);
 
-    // 3. Generate image via Grok
+    // 3. Generate image via Grok and upload to Blob
     let imageUrl: string | null = null;
     try {
-      const imageBuffer = await generateImage(imagePrompt);
-      if (imageBuffer) {
-        const blob = await put(`test-persona-${persona.id}-${Date.now()}.jpg`, imageBuffer, {
-          access: "public",
-        });
-        imageUrl = blob.url;
-        console.log(`[test-image] Image generated and uploaded: ${imageUrl}`);
-      }
+      const result = await generateImageToBlob({
+        prompt: imagePrompt,
+        taskType: "image_generation",
+        blobPath: `test-persona-${persona.id}-${Date.now()}.jpg`,
+      });
+      imageUrl = result.blobUrl;
+      console.log(`[test-image] Image generated and uploaded: ${imageUrl}`);
     } catch (err) {
       console.warn(`[test-image] Image generation failed:`, err);
     }
