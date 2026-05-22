@@ -52,7 +52,11 @@ export async function generatePostImage(
       prompt: buildPrompt(input),
       taskType: "image_generation",
       aspectRatio: "1:1",
-      blobPath: `posts/${input.source}/${input.postId}.png`,
+      blobPath: `posts/${input.source}/${input.postId}.jpg`,
+      // X caps media upload at 5 MB; xAI PNGs blow past that. JPEG
+      // quality 85 keeps every image well under the cap and looks
+      // visually identical for social-feed sized images.
+      reencode: "jpeg",
     });
     return { blobUrl };
   } catch (err) {

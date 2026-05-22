@@ -43,6 +43,7 @@ export async function POST() {
         prompt: imagePrompt,
         taskType: "image_generation",
         blobPath: `test-persona-${persona.id}-${Date.now()}.jpg`,
+        reencode: "jpeg",
       });
       imageUrl = result.blobUrl;
       console.log(`[test-image] Image generated and uploaded: ${imageUrl}`);
