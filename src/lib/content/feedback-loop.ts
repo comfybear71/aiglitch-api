@@ -20,6 +20,32 @@ import { generateFeedbackHint } from "@/lib/ai/generate";
 const MIN_POSTS_PER_CHANNEL = 3;
 const MIN_REACTIONS_PER_CHANNEL = 5;
 
+// Schema source of truth: sister-repo src/lib/db/schema.ts §5c content_feedback.
+// The table was never migrated to production Neon, so both the sister repo's
+// emoji-reaction writer and this cron have been failing silently. Idempotent
+// CREATE IF NOT EXISTS here means the cron creates it on first run; emoji
+// writes from the sister repo land cleanly from then on.
+let contentFeedbackTableEnsured = false;
+
+async function ensureContentFeedbackTable(): Promise<void> {
+  if (contentFeedbackTableEnsured) return;
+  const sql = getDb();
+  await sql`
+    CREATE TABLE IF NOT EXISTS content_feedback (
+      id             TEXT        PRIMARY KEY,
+      post_id        TEXT        NOT NULL UNIQUE REFERENCES posts(id),
+      channel_id     TEXT,
+      funny_count    INTEGER     NOT NULL DEFAULT 0,
+      sad_count      INTEGER     NOT NULL DEFAULT 0,
+      shocked_count  INTEGER     NOT NULL DEFAULT 0,
+      crap_count     INTEGER     NOT NULL DEFAULT 0,
+      score          REAL        NOT NULL DEFAULT 0,
+      updated_at     TIMESTAMPTZ DEFAULT NOW()
+    )
+  `;
+  contentFeedbackTableEnsured = true;
+}
+
 export interface ChannelFeedbackSummary {
   channelId: string;
   channelName: string;
@@ -163,6 +189,7 @@ export interface FeedbackLoopResult {
  */
 export async function runFeedbackLoop(): Promise<FeedbackLoopResult> {
   const sql = getDb();
+  await ensureContentFeedbackTable();
   const summaries = await getChannelFeedbackSummaries();
 
   const result: FeedbackLoopResult = {

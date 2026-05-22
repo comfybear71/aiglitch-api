@@ -62,6 +62,7 @@ async function loadAndRun() {
 describe("runFeedbackLoop", () => {
   it("returns zero counts when no channels have reaction data", async () => {
     fake.results = [
+      [],  // CREATE TABLE IF NOT EXISTS content_feedback
       [],  // channelStats → empty
       [],  // UPDATE content_feedback (stale rescore)
     ];
@@ -74,6 +75,7 @@ describe("runFeedbackLoop", () => {
 
   it("skips channels with <5 total reactions", async () => {
     fake.results = [
+      [],                    // CREATE TABLE
       [CHANNEL_LOW_SIGNAL],  // channelStats
       [],                    // top posts
       [],                    // worst posts
@@ -88,6 +90,7 @@ describe("runFeedbackLoop", () => {
   it("updates channel.content_rules when hint is generated", async () => {
     generateHintMock.mockResolvedValue("lean into hot takes, avoid generic news recaps");
     fake.results = [
+      [],                        // CREATE TABLE
       [CHANNEL_WITH_REACTIONS],  // channelStats
       [                          // top posts
         { content: "hot take banger", post_type: "hot_take", score: 12, funny_count: 4, shocked_count: 0, sad_count: 0, crap_count: 0 },
@@ -112,6 +115,7 @@ describe("runFeedbackLoop", () => {
   it("handles null content_rules gracefully (starts fresh object)", async () => {
     generateHintMock.mockResolvedValue("more chaos");
     fake.results = [
+      [],                          // CREATE TABLE
       [CHANNEL_WITH_REACTIONS],
       [], [],
       [{ content_rules: null }],   // null rules
@@ -125,6 +129,7 @@ describe("runFeedbackLoop", () => {
   it("skips channel when hint generation returns empty string", async () => {
     generateHintMock.mockResolvedValue("");
     fake.results = [
+      [],  // CREATE TABLE
       [CHANNEL_WITH_REACTIONS],
       [], [],
       [],  // UPDATE content_feedback rescore
@@ -137,6 +142,7 @@ describe("runFeedbackLoop", () => {
   it("skips and keeps going when one channel's hint call throws", async () => {
     generateHintMock.mockRejectedValueOnce(new Error("model timeout"));
     fake.results = [
+      [],  // CREATE TABLE
       [CHANNEL_WITH_REACTIONS],
       [], [],
       [],  // UPDATE content_feedback rescore
