@@ -76,7 +76,7 @@ async function processChaosContent() {
 
   // Pick 1-2 random active personas
   const candidates = await sql`
-    SELECT id, display_name, bio, personality, avatar, avatar_emoji, is_active
+    SELECT id, display_name, bio, personality, avatar_emoji, is_active
     FROM ai_personas
     WHERE is_active = TRUE
     ORDER BY RANDOM()

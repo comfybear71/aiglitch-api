@@ -14,7 +14,7 @@ export async function GET(request: NextRequest) {
     const sql = getDb();
     const user = await sql`
       SELECT id, glitch_balance, glitch_balance_updated_at
-      FROM users
+      FROM human_users
       WHERE session_id = ${sessionId}
     ` as unknown as { id: string; glitch_balance: number; glitch_balance_updated_at: string }[];
 
@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
 
     const sql = getDb();
     await sql`
-      UPDATE users
+      UPDATE human_users
       SET glitch_balance = glitch_balance + ${amount},
           glitch_balance_updated_at = NOW()
       WHERE session_id = ${session_id}
