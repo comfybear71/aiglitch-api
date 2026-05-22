@@ -402,8 +402,28 @@ export async function GET(request: NextRequest) {
       const freshChannelLimit = Math.ceil(channelPoolSize / 2);
       const catalogChannelLimit = channelPoolSize - freshChannelLimit;
 
-      const [freshChannels, catalogChannels, videos, images, texts] =
-        (await Promise.all([
+      // v1.8.20 — same split applied to video and image pools. Without
+      // it, the top of feed locked to the freshest 20 persona videos
+      // because that's all there were in the pool's recency window.
+      // Half from "fresh" (last 14d, epoch-biased) + half from "catalog"
+      // (whole library, random) gives both freshness AND variety.
+      const videoPoolSize = videoCount * POOL_MULTIPLIER;
+      const freshVideoLimit = Math.ceil(videoPoolSize / 2);
+      const catalogVideoLimit = videoPoolSize - freshVideoLimit;
+
+      const imagePoolSize = imageCount * POOL_MULTIPLIER;
+      const freshImageLimit = Math.ceil(imagePoolSize / 2);
+      const catalogImageLimit = imagePoolSize - freshImageLimit;
+
+      const [
+        freshChannels,
+        catalogChannels,
+        freshVideos,
+        catalogVideos,
+        freshImages,
+        catalogImages,
+        texts,
+      ] = (await Promise.all([
         // Fresh channel content: URL-pattern matches only (not channel_id)
         // sorted by recency tier. This surfaces today's chaos drops,
         // Elon campaign videos, GNN news, ads, meatlab uploads.
@@ -449,6 +469,9 @@ export async function GET(request: NextRequest) {
           ORDER BY RANDOM()
           LIMIT ${catalogChannelLimit}
         `,
+        // Fresh persona videos: last 14 days, sorted by epoch + 7-day jitter.
+        // Same pattern as the fresh channel sub-pool — surfaces recent
+        // persona content at the top.
         sql`
           SELECT p.*, a.username, a.display_name, a.avatar_emoji, a.avatar_url,
                  a.persona_type, a.bio AS persona_bio
@@ -466,11 +489,36 @@ export async function GET(request: NextRequest) {
             AND p.media_url NOT LIKE '%/elon-campaign/%'
             AND p.media_url NOT LIKE '%/feed-chaos/%'
             AND p.media_url NOT LIKE '%/ads/%'
+            AND p.created_at > NOW() - INTERVAL '14 days'
           ORDER BY
             EXTRACT(EPOCH FROM p.created_at) +
             (RANDOM() * 604800) DESC
-          LIMIT ${videoCount * POOL_MULTIPLIER}
+          LIMIT ${freshVideoLimit}
         `,
+        // Catalog persona videos: ANY persona video (no recency filter),
+        // ORDER BY RANDOM(). Brings variety into the video stream so the
+        // same ~20 recent posts don't lock the top of feed across refreshes.
+        sql`
+          SELECT p.*, a.username, a.display_name, a.avatar_emoji, a.avatar_url,
+                 a.persona_type, a.bio AS persona_bio
+          FROM posts p
+          JOIN ai_personas a ON p.persona_id = a.id
+          WHERE p.is_reply_to IS NULL
+            AND p.media_type = 'video'
+            AND p.media_url IS NOT NULL AND LENGTH(p.media_url) > 0
+            AND p.media_url NOT LIKE '%vidgen.x.ai%' AND p.media_url NOT LIKE '%replicate.delivery%'
+            AND COALESCE(p.media_source, '') NOT IN
+                ('director-premiere', 'director-profile', 'director-scene')
+            AND p.channel_id IS NULL
+            AND p.media_url NOT LIKE '%/channels/%'
+            AND p.media_url NOT LIKE '%/meatlab/%'
+            AND p.media_url NOT LIKE '%/elon-campaign/%'
+            AND p.media_url NOT LIKE '%/feed-chaos/%'
+            AND p.media_url NOT LIKE '%/ads/%'
+          ORDER BY RANDOM()
+          LIMIT ${catalogVideoLimit}
+        `,
+        // Fresh persona images: same split pattern as videos.
         sql`
           SELECT p.*, a.username, a.display_name, a.avatar_emoji, a.avatar_url,
                  a.persona_type, a.bio AS persona_bio
@@ -488,10 +536,32 @@ export async function GET(request: NextRequest) {
             AND p.media_url NOT LIKE '%/elon-campaign/%'
             AND p.media_url NOT LIKE '%/feed-chaos/%'
             AND p.media_url NOT LIKE '%/ads/%'
+            AND p.created_at > NOW() - INTERVAL '14 days'
           ORDER BY
             EXTRACT(EPOCH FROM p.created_at) +
             (RANDOM() * 604800) DESC
-          LIMIT ${imageCount * POOL_MULTIPLIER}
+          LIMIT ${freshImageLimit}
+        `,
+        // Catalog persona images: random across whole catalog for variety.
+        sql`
+          SELECT p.*, a.username, a.display_name, a.avatar_emoji, a.avatar_url,
+                 a.persona_type, a.bio AS persona_bio
+          FROM posts p
+          JOIN ai_personas a ON p.persona_id = a.id
+          WHERE p.is_reply_to IS NULL
+            AND p.media_type = 'image'
+            AND p.media_url IS NOT NULL AND LENGTH(p.media_url) > 0
+            AND p.media_url NOT LIKE '%vidgen.x.ai%' AND p.media_url NOT LIKE '%replicate.delivery%'
+            AND COALESCE(p.media_source, '') NOT IN
+                ('director-premiere', 'director-profile', 'director-scene')
+            AND p.channel_id IS NULL
+            AND p.media_url NOT LIKE '%/channels/%'
+            AND p.media_url NOT LIKE '%/meatlab/%'
+            AND p.media_url NOT LIKE '%/elon-campaign/%'
+            AND p.media_url NOT LIKE '%/feed-chaos/%'
+            AND p.media_url NOT LIKE '%/ads/%'
+          ORDER BY RANDOM()
+          LIMIT ${catalogImageLimit}
         `,
         sql`
           SELECT p.*, a.username, a.display_name, a.avatar_emoji, a.avatar_url,
@@ -515,21 +585,27 @@ export async function GET(request: NextRequest) {
         FeedPostRow[],
         FeedPostRow[],
         FeedPostRow[],
+        FeedPostRow[],
+        FeedPostRow[],
       ];
 
-      // Interleave fresh + catalog so each gets position 0/1/2/... in
-      // the channels stream. Fresh first, then catalog — alternating.
-      // Result: top channel slot is freshest URL-pattern match, second
-      // is a random catalog post, third is next fresh, etc.
-      const channels: FeedPostRow[] = [];
-      const maxChannelIdx = Math.max(
-        freshChannels.length,
-        catalogChannels.length,
-      );
-      for (let i = 0; i < maxChannelIdx; i++) {
-        if (i < freshChannels.length) channels.push(freshChannels[i]!);
-        if (i < catalogChannels.length) channels.push(catalogChannels[i]!);
-      }
+      // Helper: interleave fresh + catalog arrays so each gets position
+      // 0/1/2/... in the stream. Fresh[0], catalog[0], fresh[1], catalog[1]...
+      // Means the score-weighted interleave's top slot per stream goes
+      // to the freshest post; second slot is a random catalog post; etc.
+      const merge = (fresh: FeedPostRow[], catalog: FeedPostRow[]): FeedPostRow[] => {
+        const out: FeedPostRow[] = [];
+        const maxIdx = Math.max(fresh.length, catalog.length);
+        for (let i = 0; i < maxIdx; i++) {
+          if (i < fresh.length) out.push(fresh[i]!);
+          if (i < catalog.length) out.push(catalog[i]!);
+        }
+        return out;
+      };
+
+      const channels = merge(freshChannels, catalogChannels);
+      const videos = merge(freshVideos, catalogVideos);
+      const images = merge(freshImages, catalogImages);
 
       posts = interleaveFeedWithChannels(
         channels,
