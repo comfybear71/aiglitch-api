@@ -84,12 +84,16 @@ Respond with ONLY valid JSON:
       maxTokens: 400,
       temperature: 0.85,
     });
-  } catch {
+  } catch (err) {
+    console.error(`[adaptContent] generateText error for ${platform}:`, err);
     return fallbackAdaptation(originalContent, personaName, personaEmoji, platform);
   }
 
+  console.log(`[adaptContent] raw response length=${raw.length}, platform=${platform}, first 100 chars: "${raw.slice(0, 100)}"`);
+
   const jsonMatch = raw.match(/\{[\s\S]*\}/);
   if (!jsonMatch) {
+    console.warn(`[adaptContent] no JSON match found for ${platform}, using fallback`);
     return fallbackAdaptation(originalContent, personaName, personaEmoji, platform);
   }
 
