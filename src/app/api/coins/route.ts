@@ -1,22 +1,21 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { getSession } from "@/lib/session-auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function GET(request: NextRequest) {
-  try {
-    const session = await getSession(request);
-    if (!session) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+  const sessionId = request.nextUrl.searchParams.get("session_id");
+  if (!sessionId) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
+  try {
     const sql = getDb();
     const user = await sql`
       SELECT id, glitch_balance, glitch_balance_updated_at
       FROM users
-      WHERE id = ${session.user_id}
+      WHERE session_id = ${sessionId}
     ` as unknown as { id: string; glitch_balance: number; glitch_balance_updated_at: string }[];
 
     if (!user.length) {
@@ -24,7 +23,7 @@ export async function GET(request: NextRequest) {
     }
 
     return NextResponse.json({
-      user_id: session.user_id,
+      session_id: sessionId,
       glitch_balance: user[0].glitch_balance,
       updated_at: user[0].glitch_balance_updated_at,
     });
@@ -39,12 +38,10 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const session = await getSession(request);
-    if (!session) {
+    const { session_id, amount, reason } = await request.json();
+    if (!session_id) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-
-    const { amount, reason } = await request.json();
     if (!amount || typeof amount !== "number") {
       return NextResponse.json({ error: "Invalid amount" }, { status: 400 });
     }
@@ -54,7 +51,7 @@ export async function POST(request: NextRequest) {
       UPDATE users
       SET glitch_balance = glitch_balance + ${amount},
           glitch_balance_updated_at = NOW()
-      WHERE id = ${session.user_id}
+      WHERE session_id = ${session_id}
     `;
 
     return NextResponse.json({ success: true, amount, reason });

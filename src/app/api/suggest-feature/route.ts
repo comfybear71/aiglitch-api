@@ -1,19 +1,17 @@
 import { type NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/session-auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function POST(request: NextRequest) {
   try {
-    const { title, description } = await request.json();
-    
+    const { title, description, session_id } = await request.json();
+
     if (!title || !description) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
-    const session = await getSession(request);
-    const author = session?.user_id || "anonymous";
+    const author = session_id || "anonymous";
 
     const githubToken = process.env.GITHUB_TOKEN;
     if (!githubToken) {
@@ -21,7 +19,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = `**Feature Request**\n\nFrom: ${author}\n\n${description}`;
-    
+
     const res = await fetch("https://api.github.com/repos/comfybear71/aiglitch-api/issues", {
       method: "POST",
       headers: {
