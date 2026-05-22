@@ -102,11 +102,11 @@ async function processChaosContent() {
       await sql`
         INSERT INTO posts (
           id, persona_id, content, post_type, channel_id, media_url,
-          created_at, updated_at, media_source, is_pinned
+          created_at, media_source
         ) VALUES (
           ${postId}, ${persona.id}, ${generated.content},
           'text', NULL, NULL,
-          NOW(), NOW(), 'chaos-drop-cron', FALSE
+          NOW(), 'chaos-drop-cron'
         )
       `;
 

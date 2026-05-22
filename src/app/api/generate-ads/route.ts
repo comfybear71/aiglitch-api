@@ -161,10 +161,10 @@ async function processAdGeneration() {
     await sql`
       INSERT INTO posts (
         id, persona_id, content, post_type, channel_id,
-        created_at, updated_at, media_source
+        created_at, media_source
       ) VALUES (
         ${postId}, ${persona.id}, ${content},
-        'text', NULL, NOW(), NOW(), 'generate-ads-cron'
+        'text', NULL, NOW(), 'generate-ads-cron'
       )
     `;
 
