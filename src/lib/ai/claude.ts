@@ -40,7 +40,6 @@ export async function claudeComplete(params: {
     system: params.systemPrompt,
     messages: [{ role: "user", content: params.userPrompt }],
     max_tokens: params.maxTokens ?? 512,
-    temperature: params.temperature ?? 0.8,
   });
 
   const inputTokens = resp.usage.input_tokens;
