@@ -20,6 +20,7 @@
  */
 
 import { put } from "@vercel/blob";
+import sharp from "sharp";
 import { canProceed, recordFailure, recordSuccess } from "./circuit-breaker";
 import { logAiCost } from "./cost-ledger";
 import { XAI_BASE_URL } from "./xai";
@@ -116,6 +117,14 @@ export async function generateImage(
 export interface GenerateImageToBlobOptions extends GenerateImageOptions {
   blobPath: string;
   contentType?: string;
+  /**
+   * Re-encode the source image before uploading to Blob. Default `"none"`
+   * (upload xAI's raw PNG as-is). Pass `"jpeg"` to compress (quality 85)
+   * which keeps the file under X's 5 MB media-upload cap — required for
+   * social spread, optional for avatars.
+   */
+  reencode?: "jpeg" | "none";
+  jpegQuality?: number;
 }
 
 export interface GenerateImageToBlobResult {
@@ -133,13 +142,26 @@ export async function generateImageToBlob(
   if (!imgRes.ok) {
     throw new Error(`Failed to download xAI image (${imgRes.status})`);
   }
-  const imgBuffer = Buffer.from(await imgRes.arrayBuffer());
-  const contentType =
-    opts.contentType ?? imgRes.headers.get("content-type") ?? "image/png";
+  const sourceBuffer = Buffer.from(await imgRes.arrayBuffer());
 
-  const blob = await put(opts.blobPath, imgBuffer, {
+  const reencode = opts.reencode ?? "none";
+  let uploadBuffer: Buffer;
+  let resolvedContentType: string;
+
+  if (reencode === "jpeg") {
+    uploadBuffer = await sharp(sourceBuffer)
+      .jpeg({ quality: opts.jpegQuality ?? 85, mozjpeg: true })
+      .toBuffer();
+    resolvedContentType = opts.contentType ?? "image/jpeg";
+  } else {
+    uploadBuffer = sourceBuffer;
+    resolvedContentType =
+      opts.contentType ?? imgRes.headers.get("content-type") ?? "image/png";
+  }
+
+  const blob = await put(opts.blobPath, uploadBuffer, {
     access: "public",
-    contentType,
+    contentType: resolvedContentType,
     addRandomSuffix: false,
   });
 
