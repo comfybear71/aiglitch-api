@@ -314,25 +314,20 @@ async function uploadMediaToX(
     const mediaId = initData.media_id_string;
     if (!mediaId) return null;
 
-    // APPEND: Upload media data
+    // APPEND: Upload media data (raw binary in body)
     const appendUrl = new URL("https://upload.twitter.com/1.1/media/upload.json");
     appendUrl.searchParams.set("command", "APPEND");
     appendUrl.searchParams.set("media_id", mediaId);
     appendUrl.searchParams.set("segment_index", "0");
 
-    const appendFormData = new FormData();
-    appendFormData.append("command", "APPEND");
-    appendFormData.append("media_id", mediaId);
-    appendFormData.append("media_data", mediaBuffer.toString("base64"));
-    appendFormData.append("segment_index", "0");
-
-    const appendAuth = buildOAuth1Header("POST", "https://upload.twitter.com/1.1/media/upload.json", creds);
-    const appendRes = await fetch("https://upload.twitter.com/1.1/media/upload.json", {
+    const appendAuth = buildOAuth1Header("POST", appendUrl.toString(), creds);
+    const appendRes = await fetch(appendUrl.toString(), {
       method: "POST",
       headers: {
         Authorization: appendAuth,
+        "Content-Type": "application/octet-stream",
       },
-      body: appendFormData,
+      body: mediaBuffer,
     });
 
     if (!appendRes.ok) return null;
