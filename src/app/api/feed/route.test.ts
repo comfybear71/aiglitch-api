@@ -103,7 +103,7 @@ describe("GET /api/feed (Slices A through F)", () => {
   });
 
   it("returns posts: [] when all five streams are empty (v1.8.18 split channels)", async () => {
-    fake.results = [[], [], [], [], []];
+    fake.results = [[], [], [], [], [], [], []];
     const res = await callGet();
     expect(res.status).toBe(200);
     expect(res.headers.get("Cache-Control")).toBe("private, no-store");
@@ -115,16 +115,18 @@ describe("GET /api/feed (Slices A through F)", () => {
     expect(body.posts).toEqual([]);
     expect(body.nextCursor).toBeNull();
     expect(body.nextOffset).toBeNull();
-    expect(fake.calls).toHaveLength(5);
+    expect(fake.calls).toHaveLength(7);
   });
 
   it("returns both nextCursor and nextOffset keys (shape parity with legacy)", async () => {
     fake.results = [
       [], // fresh channels (URL-pattern)
       [], // catalog channels (channel_id-tagged, random)
-      [videoRow("v1")],
-      [],
-      [],
+      [videoRow("v1")], // fresh videos
+      [], // catalog videos
+      [], // fresh images
+      [], // catalog images
+      [], // text
       [], // ai comments
       [], // human comments
     ];
@@ -139,9 +141,11 @@ describe("GET /api/feed (Slices A through F)", () => {
     fake.results = [
       [], // fresh channels
       [], // catalog channels
-      [videoRow("v1")],
-      [],
-      [],
+      [videoRow("v1")], // fresh videos
+      [], // catalog videos
+      [], // fresh images
+      [], // catalog images
+      [], // text
       [], // ai comments
       [], // human comments
       // No bookmark query when no session_id.
@@ -160,16 +164,18 @@ describe("GET /api/feed (Slices A through F)", () => {
     expect(body.posts[0]?.comments).toEqual([]);
     expect(body.posts[0]?.bookmarked).toBe(false);
     expect(body.posts[0]?.meatbag_author).toBeNull();
-    expect(fake.calls).toHaveLength(7);
+    expect(fake.calls).toHaveLength(9);
   });
 
   it("queries bookmarks + likes when session_id is present", async () => {
     fake.results = [
       [], // fresh channels
       [], // catalog channels
-      [videoRow("v1")],
-      [],
-      [],
+      [videoRow("v1")], // fresh videos
+      [], // catalog videos
+      [], // fresh images
+      [], // catalog images
+      [], // text
       [], // ai comments
       [], // human comments
       [{ post_id: "v1" }], // bookmark rows
@@ -181,9 +187,9 @@ describe("GET /api/feed (Slices A through F)", () => {
     };
     expect(body.posts[0]?.bookmarked).toBe(true);
     expect(body.posts[0]?.liked).toBe(true);
-    expect(fake.calls).toHaveLength(9);
-    const bookmarkCall = fake.calls[7]!;
-    const likedCall = fake.calls[8]!;
+    expect(fake.calls).toHaveLength(11);
+    const bookmarkCall = fake.calls[9]!;
+    const likedCall = fake.calls[10]!;
     expect(bookmarkCall.values).toContain("user-1");
     expect(likedCall.values).toContain("user-1");
     expect(likedCall.strings.join("?")).toContain("human_likes");
@@ -193,9 +199,11 @@ describe("GET /api/feed (Slices A through F)", () => {
     fake.results = [
       [], // fresh channels
       [], // catalog channels
-      [videoRow("v1")],
-      [],
-      [],
+      [videoRow("v1")], // fresh videos
+      [], // catalog videos
+      [], // fresh images
+      [], // catalog images
+      [], // text
       [], // ai comments
       [], // human comments
       [], // no bookmarks
@@ -212,9 +220,11 @@ describe("GET /api/feed (Slices A through F)", () => {
     fake.results = [
       [], // fresh channels
       [], // catalog channels
-      [videoRow("v1")],
-      [],
-      [],
+      [videoRow("v1")], // fresh videos
+      [], // catalog videos
+      [], // fresh images
+      [], // catalog images
+      [], // text
       [], // ai comments
       [], // human comments
       [], // bookmarks: none for user-2
@@ -226,7 +236,7 @@ describe("GET /api/feed (Slices A through F)", () => {
     };
     expect(body.posts[0]?.liked).toBe(false);
     // The likes query must carry user-2, not user-1, as the session filter.
-    const likedCall = fake.calls[8]!;
+    const likedCall = fake.calls[10]!;
     expect(likedCall.values).toContain("user-2");
     expect(likedCall.values).not.toContain("user-1");
   });
@@ -235,9 +245,11 @@ describe("GET /api/feed (Slices A through F)", () => {
     fake.results = [
       [], // fresh channels
       [], // catalog channels
-      [videoRow("v1")],
-      [],
-      [],
+      [videoRow("v1")], // fresh videos
+      [], // catalog videos
+      [], // fresh images
+      [], // catalog images
+      [], // text
       [],
       [],
     ];
@@ -246,17 +258,19 @@ describe("GET /api/feed (Slices A through F)", () => {
       posts: Array<{ liked: boolean }>;
     };
     expect(body.posts[0]?.liked).toBe(false);
-    // 7 calls: 5 streams + 2 comment queries. No bookmark/liked queries without session.
-    expect(fake.calls).toHaveLength(7);
+    // 9 calls: 7 streams + 2 comment queries. No bookmark/liked queries without session.
+    expect(fake.calls).toHaveLength(9);
   });
 
   it("overlays meatbag author when post has meatbag_author_id", async () => {
     fake.results = [
       [], // fresh channels
       [], // catalog channels
-      [videoRow("v1", { meatbag_author_id: "human-42" })],
-      [],
-      [],
+      [videoRow("v1", { meatbag_author_id: "human-42" })], // fresh videos
+      [], // catalog videos
+      [], // fresh images
+      [], // catalog images
+      [], // text
       [], // ai comments
       [], // human comments
       [
@@ -280,19 +294,19 @@ describe("GET /api/feed (Slices A through F)", () => {
   });
 
   it("respects limit and clamps to MAX_LIMIT (50)", async () => {
-    fake.results = [[], [], [], [], []];
+    fake.results = [[], [], [], [], [], [], []];
     await callGet("http://localhost/api/feed?limit=999");
-    // Five calls: fresh channels / catalog channels / video / image / text.
+    // Seven calls (v1.8.20):
+    //   fresh-channel / catalog-channel / fresh-video / catalog-video /
+    //   fresh-image / catalog-image / text
     // For limit=50:
-    //   channelPoolSize = ceil(50 * 0.4) * 3 = 60
-    //     freshChannelLimit = 30
-    //     catalogChannelLimit = 30
+    //   channelPoolSize = ceil(50 * 0.4) * 3 = 60 → fresh=30, catalog=30
     //   remaining = 50 - 20 = 30
-    //   videos   = ceil(30 * 0.75) = 23        → *3 = 69
-    //   images   = ceil(30 * 0.2) = 6          → *3 = 18
-    //   texts    = ceil(30 * 0.05) = 2         → *3 = 6
-    const expectedLimits = [30, 30, 69, 18, 6];
-    for (let i = 0; i < 5; i++) {
+    //   videoPoolSize   = ceil(30 * 0.75) * 3 = 69 → fresh=35, catalog=34
+    //   imagePoolSize   = ceil(30 * 0.2) * 3 = 18  → fresh=9,  catalog=9
+    //   texts           = ceil(30 * 0.05) * 3 = 6
+    const expectedLimits = [30, 30, 35, 34, 9, 9, 6];
+    for (let i = 0; i < 7; i++) {
       expect(fake.calls[i]?.values).toContain(expectedLimits[i]);
     }
   });
@@ -346,9 +360,11 @@ describe("GET /api/feed (Slices A through F)", () => {
     fake.results = [
       [], // fresh channels
       [], // catalog channels
-      [row("v1", "2026-04-19T09:00:00Z"), row("v2", "2026-04-19T08:00:00Z"), row("v3", "2026-04-19T07:00:00Z")],
-      [],
-      [],
+      [row("v1", "2026-04-19T09:00:00Z"), row("v2", "2026-04-19T08:00:00Z"), row("v3", "2026-04-19T07:00:00Z")], // fresh videos
+      [], // catalog videos
+      [], // fresh images
+      [], // catalog images
+      [], // text
       [], // ai comments
       [], // human comments
     ];
@@ -364,9 +380,11 @@ describe("GET /api/feed (Slices A through F)", () => {
     fake.results = [
       [], // fresh channels
       [], // catalog channels
-      [videoRow("v1")],
-      [],
-      [],
+      [videoRow("v1")], // fresh videos
+      [], // catalog videos
+      [], // fresh images
+      [], // catalog images
+      [], // text
       [],
       [],
     ];
@@ -376,7 +394,7 @@ describe("GET /api/feed (Slices A through F)", () => {
   });
 
   it("default mode keeps private, no-store Cache-Control", async () => {
-    fake.results = [[], [], [], [], []];
+    fake.results = [[], [], [], [], [], [], []];
     const res = await callGet();
     expect(res.headers.get("Cache-Control")).toBe("private, no-store");
   });
@@ -483,12 +501,13 @@ describe("GET /api/feed (Slices A through F)", () => {
 
   it("following=1 without session_id falls through to For You (legacy behaviour)", async () => {
     // Legacy silently falls through. We match it — feed should behave like the
-    // For You default path. v1.8.18 splits channels into fresh+catalog = 5
-    // queries total (fresh channels + catalog channels + video + image + text).
-    fake.results = [[], [], [], [], []];
+    // For You default path. v1.8.20 splits channels + video + image into
+    // fresh+catalog = 7 queries total (fresh-ch + cat-ch + fresh-v +
+    // cat-v + fresh-i + cat-i + text).
+    fake.results = [[], [], [], [], [], [], []];
     const res = await callGet("http://localhost/api/feed?following=1");
     expect(res.status).toBe(200);
-    expect(fake.calls).toHaveLength(5);
+    expect(fake.calls).toHaveLength(7);
   });
 
   // ── Slice D — breaking mode ────────────────────────────────────────────
@@ -779,11 +798,11 @@ describe("GET /api/feed (Slices A through F)", () => {
   });
 
   it("following_list without session_id falls through to For You (legacy behaviour)", async () => {
-    // v1.8.18: 5 stream queries (fresh channels + catalog channels + video + image + text)
-    fake.results = [[], [], [], [], []];
+    // v1.8.20: 7 stream queries (fresh-ch + cat-ch + fresh-v + cat-v + fresh-i + cat-i + text)
+    fake.results = [[], [], [], [], [], [], []];
     const res = await callGet("http://localhost/api/feed?following_list=1");
     expect(res.status).toBe(200);
-    expect(fake.calls).toHaveLength(5);
+    expect(fake.calls).toHaveLength(7);
     const body = (await res.json()) as Record<string, unknown>;
     expect(Object.keys(body).sort()).toEqual(["nextCursor", "nextOffset", "posts"]);
   });
