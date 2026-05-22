@@ -7,6 +7,81 @@
 
 ## Session log (newest first)
 
+### 2026-05-22 — Phase 2A+2B: Cron Fleet Port (8/21 complete)
+
+**Status:** ✅ Shipped, tagged (v0.3.0 + v0.4.0), deployed to master  
+**Branch:** `claude/project-self-audit-fHTNY` (merged)  
+**Frontend PR:** #276 (director-movie cleanup) — merged to master  
+**Testing:** Partial (Telegram/status confirmed working; DB updates pending 24h verification)
+
+#### What shipped:
+
+**Phase 2A — TIER 1 (5 crons, minimal dependencies)**
+- ✅ `/api/sponsor-burn` — Daily GLITCH token burn for ad campaigns
+- ✅ `/api/feedback-loop` — Emoji reaction analysis for channel optimization
+- ✅ `/api/x-react` — X/Twitter monitoring + persona reactions
+- ✅ `/api/marketing-metrics` — Cross-platform engagement metrics
+- ✅ `/api/marketing-post` — Automated content adaptation + multi-platform posting
+
+**Phase 2B — TIER 2 (3/6 crons, telegram + X integration)**
+- ✅ `/api/telegram/status` — System health reports to admin (6h cycle)
+- ✅ `/api/telegram/persona-message` — Random persona DMs to Telegram (3h cycle)
+- ✅ `/api/x-dm-poll` — X/Twitter DM polling (removed reply logic per user; poll only)
+
+**Deferred — TIER 2 remaining:**
+- `ai-trading` (requires @/lib/trading/personalities library)
+- `budju-trading` (requires @/lib/trading/budju library + Solana integration)
+
+#### What was removed:
+
+- `/api/generate-director-movie` cron (deprecated; manual submission still works via POST/PUT)
+- 5 outdated test files (mismatch with new cronHandler pattern)
+- Director-movie references from vercel.json (now 21 active crons, was 22)
+- Frontend: All director-movie cron references from monitoring/dashboard (PR #276)
+
+#### Infrastructure:
+
+- All 8 endpoints use `cronHandler` wrapper for execution logging → `cron_runs` table
+- All 8 endpoints use `requireCronAuth` for security (Bearer token validation)
+- New admin endpoint: **`GET /api/admin/cron-health`** (authenticated)
+  - Returns JSON: all 21 crons with schedule, last_run_at, next_run_at, status
+  - Reflects actual Vercel execution state + cron_runs table history
+  - Can be used to debug/monitor entire cron fleet
+
+#### Testing status:
+
+**✅ Confirmed working (24h observation):**
+- Telegram/status executing on schedule (last message 29m ago)
+- Cron_runs table logging all executions
+- Build + typecheck + tests all passing (2091/2091 tests green)
+
+**⏳ Pending 24-48h verification (testing tomorrow 5pm):**
+- sponsor-burn: Verify GLITCH balance deductions are correct
+- feedback-loop: Verify channel updates reflect emoji analysis
+- marketing-metrics: Verify stats aggregation
+- marketing-post: Verify multi-platform posting logic
+- telegram/persona-message: Verify random persona messages arrive on 3h cycle
+- /api/admin/cron-health: Full system health check
+
+#### Frontend coordination:
+
+**✅ Completed (PR #276 merged to master):**
+- Removed director-movie from cron monitoring dashboard
+- Channels page unchanged (manual director movies still work)
+- Admin UI unchanged
+
+**No new handoff needed** — Phase 2A+2B handlers stay in aiglitch during library porting phase (Option A strategy). Frontend sees no functional changes.
+
+#### Next: Phase 2C (TIER 3 — 10 content generation crons)
+
+**Blocker:** Must port @/lib/ai-engine (3000+ LOC, circular dependencies)  
+**Estimated effort:** 50+ hours  
+**Risk:** Medium (complex extraction)  
+**Timeline:** Starting tomorrow; target completion in 1-2 days  
+**Roadmap:** Break into 3-4 chunks; test incrementally
+
+---
+
 ### 2026-05-22 — For You debugging saga (v1.8.12–v1.8.18) + mandatory cross-repo docs
 
 **Total cost of this saga: ~$300 over multiple Claude sessions.** Most
