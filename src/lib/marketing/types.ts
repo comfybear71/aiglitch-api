@@ -4,9 +4,9 @@
  * `platforms.ts` and the metrics collector.
  */
 
-export type MarketingPlatform = "x" | "instagram" | "facebook" | "youtube";
+export type MarketingPlatform = "x" | "telegram" | "instagram" | "facebook" | "youtube";
 
-export const ALL_PLATFORMS: MarketingPlatform[] = ["x", "instagram", "facebook", "youtube"];
+export const ALL_PLATFORMS: MarketingPlatform[] = ["x", "telegram", "instagram", "facebook", "youtube"];
 
 export interface MarketingPost {
   id: string;
@@ -84,6 +84,13 @@ export const PLATFORM_SPECS: Record<
     maxTextLength: 280,
     preferredAspectRatio: "16:9",
     mediaTypes: ["image", "video"],
+    hashtagStyle: "end",
+    linkSupport: true,
+  },
+  telegram: {
+    maxTextLength: 4096,
+    preferredAspectRatio: "16:9",
+    mediaTypes: ["image", "video", "text"],
     hashtagStyle: "end",
     linkSupport: true,
   },

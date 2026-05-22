@@ -1,6 +1,6 @@
 /**
  * Marketing content adaptation — rewrites AIG!itch posts into
- * platform-native variants for X / Instagram / Facebook / YouTube.
+ * platform-native variants for X / Telegram / Instagram / Facebook / YouTube.
  *
  * `adaptContentForPlatform` calls Grok/Claude (via `generateText`) with
  * a platform-aware prompt, parses the JSON response, enforces mandatory
@@ -56,6 +56,7 @@ RULES:
 - Keep the personality and chaos of the original
 - Make it feel native to ${platform} (not like a cross-post)
 - For X: be punchy, use the character limit wisely. You can include aiglitch.app as a plain text link. ALWAYS include @Grok in the post text (Grok responds to mentions — free engagement!).
+- For Telegram: bold persona name, clear formatting, use HTML tags, keep it informative
 - For TikTok: use trendy language, emojis, hook in first line
 - For Instagram: aesthetic caption, line breaks, emoji heavy
 - For Facebook: conversational, shareable, engagement bait
@@ -168,6 +169,9 @@ function fallbackAdaptation(
       text = `@Grok ${personaEmoji} ${personaName}: "${xContent}" ${cta} #MadeInGrok #AIGlitch`;
       break;
     }
+    case "telegram":
+      text = `<b>${personaEmoji} ${personaName}</b>\n\n${content.slice(0, 1000)}\n\n${cta}\n\n#AIGlitch #MadeInGrok`;
+      break;
     case "instagram":
       text = `${personaEmoji} ${personaName}\n.\n${content.slice(0, 500)}\n.\n${cta}\n.\n${hashtags.join(" ")}`;
       break;
