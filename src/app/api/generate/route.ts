@@ -35,6 +35,7 @@ import {
 import { cronHandler } from "@/lib/cron-handler";
 import { requireCronAuth } from "@/lib/cron-auth";
 import { getDb } from "@/lib/db";
+import { generatePostImage } from "@/lib/marketing/post-image";
 import type { AIPersona } from "@/lib/personas";
 
 export const dynamic = "force-dynamic";
@@ -134,7 +135,7 @@ async function fetchRecentPostsContext(
 
 async function insertPost(
   sql: ReturnType<typeof getDb>,
-  personaId: string,
+  persona: AIPersona,
   generated: GeneratedPost,
   extras: { beef_thread_id?: string; challenge_tag?: string; is_collab_with?: string } = {},
 ): Promise<string> {
@@ -142,20 +143,32 @@ async function insertPost(
   const aiLikeCount = Math.floor(Math.random() * 100);
   const hashtagStr = generated.hashtags.join(",");
 
+  const { blobUrl } = await generatePostImage({
+    postId,
+    personaUsername: persona.username,
+    personaDisplayName: persona.display_name,
+    personaAvatarEmoji: persona.avatar_emoji,
+    postContent: generated.content,
+    source: "generate",
+  });
+  const postType = blobUrl ? "image" : generated.post_type;
+
   await sql`
     INSERT INTO posts (
       id, persona_id, content, post_type, hashtags, ai_like_count,
+      media_url, media_type,
       beef_thread_id, challenge_tag, is_collab_with
     )
     VALUES (
-      ${postId}, ${personaId}, ${generated.content}, ${generated.post_type},
+      ${postId}, ${persona.id}, ${generated.content}, ${postType},
       ${hashtagStr}, ${aiLikeCount},
+      ${blobUrl}, ${blobUrl ? "image" : null},
       ${extras.beef_thread_id ?? null},
       ${extras.challenge_tag ?? null},
       ${extras.is_collab_with ?? null}
     )
   `;
-  await sql`UPDATE ai_personas SET post_count = post_count + 1 WHERE id = ${personaId}`;
+  await sql`UPDATE ai_personas SET post_count = post_count + 1 WHERE id = ${persona.id}`;
   return postId;
 }
 
@@ -251,7 +264,7 @@ async function runBeefRound(
   ]) {
     try {
       const post = await generateBeefPost(author, target, topic, recentContext, dailyTopics);
-      const postId = await insertPost(sql, author.id, post, { beef_thread_id: beefId });
+      const postId = await insertPost(sql, author, post, { beef_thread_id: beefId });
       results.push({
         persona: author.username,
         post: post.content,
@@ -281,7 +294,7 @@ async function runCollabRound(
 
   try {
     const post = await generateCollabPost(personaA, personaB, recentContext);
-    const postId = await insertPost(sql, personaA.id, post, {
+    const postId = await insertPost(sql, personaA, post, {
       is_collab_with: personaB.username,
     });
     results.push({
@@ -317,7 +330,7 @@ async function runChallengeRound(
   for (const persona of challengers) {
     try {
       const post = await generateChallengePost(persona, challenge.tag, challenge.desc);
-      const postId = await insertPost(sql, persona.id, post, { challenge_tag: challenge.tag });
+      const postId = await insertPost(sql, persona, post, { challenge_tag: challenge.tag });
       results.push({
         persona: persona.username,
         post: post.content,
@@ -379,7 +392,7 @@ async function runGenerate(): Promise<RunSummary> {
     const persona = personas[i]!;
     try {
       const post = await generatePost(persona, recentContext, dailyTopics);
-      const postId = await insertPost(sql, persona.id, post);
+      const postId = await insertPost(sql, persona, post);
       results.push({
         persona: persona.username,
         post: post.content,

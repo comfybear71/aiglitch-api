@@ -7,6 +7,39 @@
 
 ## Session log (newest first)
 
+### 2026-05-22 — Wire per-post AI image generation into all 4 content crons
+
+**Status:** Implemented on `claude/project-audit-report-ZnHrF`, typecheck + 1927/1927 tests passing. Awaiting deploy + manual verify on X/Telegram.
+**Driver:** Audit revealed posts had `media_url = NULL` from every content cron, so X/Telegram either posted text-only or used random fallback images from `pickFallbackMedia` — many of which were dead xAI/Replicate ephemeral URLs that 404'd at upload time. X then fell through to text-only and rendered an OG card preview instead of the persona image (confirmed by user screenshot).
+
+**Changes:**
+- `src/lib/marketing/post-image.ts` (new) — shared `generatePostImage()` helper. Wraps `generateImageToBlob`, returns `{ blobUrl: null }` on any failure so callers degrade to text-only. Env-var kill switch: `DISABLE_POST_IMAGE_GEN=true`. Blob path `posts/<source>/<postId>.png`.
+- `src/app/api/generate/route.ts` — `insertPost()` now takes a full persona (not just id) and generates an image before INSERT. Touches all 4 paths (beef, collab, challenge, normal).
+- `src/app/api/generate-persona-content/route.ts` — same pattern at the single INSERT site.
+- `src/app/api/generate-chaos-drop/route.ts` — same. Also added `username` to the persona SELECT (was missing).
+- `src/app/api/generate-ads/route.ts` — same.
+- `src/lib/marketing/spread-post.ts` — `pickFallbackMedia` now denylists known-ephemeral hosts (`xai-images`, `replicate.delivery`, `googleusercontent.com`, etc.) and pulls 20 candidates per tier so the filter has options. Matches sister-repo v1.8.14 lesson.
+- `src/lib/marketing/index.ts` — `runMarketingCycle` adds a last-resort `generatePostImage` call when both `post.media_url` and `pickFallbackMedia` are null. Patches the URL back into the source `posts` row so subsequent runs see media set.
+
+**Untouched (intentional):**
+- `postToX` / `postToTelegram` / OAuth1 chunked upload — user said "no visibility fix"; existing code is fine once it has valid Vercel Blob URLs as input.
+- Facebook code — token is the problem, not code.
+- Instagram poster stub — separate scope; #187's commit title lied but the actual write-up belongs in its own session.
+- `spread-post.ts` split-brain Telegram summary — working per data.
+- Status dashboard — user explicitly opted out of visibility surfacing.
+
+**Cost ceiling:** ~$0.02 per generated post via `grok-imagine-image`. At current cron cadence: roughly 30–40 images/day worst case ≈ **$0.60–0.80/day**. xAI circuit breaker is shared between text + image so an outage degrades to text-only automatically.
+
+**Rollback path:** Set `DISABLE_POST_IMAGE_GEN=true` in Vercel env — every cron immediately reverts to text-only posts without redeploy.
+
+**Verify after deploy:**
+1. Wait one full cron cycle (~2h for chaos-drop, ~4h for marketing-post).
+2. Query: `SELECT id, post_type, media_url, media_source FROM posts WHERE created_at > NOW() - INTERVAL '4 hours' AND media_source IN ('persona-content-cron','chaos-drop-cron','generate-ads-cron') ORDER BY created_at DESC LIMIT 20;` — should show `media_url` populated with `blob.vercel-storage.com` URLs.
+3. Query: `SELECT platform, status, error_message FROM marketing_posts WHERE created_at > NOW() - INTERVAL '4 hours' ORDER BY created_at DESC LIMIT 20;` — X + Telegram should remain `posted`.
+4. Open one of the recent X tweet IDs in browser — image should now be an actual attached photo, NOT an `aiglitch.app` OG card.
+
+---
+
 ### 2026-05-22 (continued) — Phase 6 TIER 3: Complete (3/3 Crons Shipped) ✨
 
 **Status:** ✅ Shipped, tested, pushed  
