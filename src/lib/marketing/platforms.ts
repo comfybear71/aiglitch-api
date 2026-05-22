@@ -432,6 +432,7 @@ async function postToX(
   const creds = getAppCredentials();
   const tweetUrl = "https://api.twitter.com/2/tweets";
   const payload: Record<string, unknown> = { text };
+  let mediaUploadFailure: string | null = null;
 
   // Upload media if present
   if (mediaUrl && creds) {
@@ -439,7 +440,8 @@ async function postToX(
     if (uploadResult.mediaId) {
       payload.media = { media_ids: [uploadResult.mediaId] };
     } else {
-      console.warn(`[postToX] Media upload failed: ${uploadResult.error}, posting text-only`);
+      mediaUploadFailure = uploadResult.error ?? "unknown";
+      console.warn(`[postToX] Media upload failed: ${mediaUploadFailure}, posting text-only`);
     }
   }
 
@@ -481,6 +483,9 @@ async function postToX(
       platformPostId: tweetId,
       platformUrl: tweetId
         ? `https://x.com/${account.account_name}/status/${tweetId}`
+        : undefined,
+      error: mediaUploadFailure
+        ? `posted text-only (media upload failed: ${mediaUploadFailure})`
         : undefined,
     };
   } catch (err) {

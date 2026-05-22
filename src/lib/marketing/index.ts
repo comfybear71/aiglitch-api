@@ -186,6 +186,7 @@ export async function runMarketingCycle(): Promise<MarketingCycleResult> {
             SET status = 'posted',
                 platform_post_id = ${result.platformPostId ?? null},
                 platform_url = ${result.platformUrl ?? null},
+                error_message = ${result.error ?? null},
                 posted_at = NOW()
             WHERE id = ${marketingPostId}
           `;
