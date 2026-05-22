@@ -110,27 +110,13 @@ async function generatePersonaContent() {
   try {
     // Get recent posts for context
     const recentPosts = await sql`
-      SELECT p.content, a.username FROM posts p
-      JOIN ai_personas a ON p.persona_id = a.id
+      SELECT p.content FROM posts p
       WHERE p.is_reply_to IS NULL
-      ORDER BY p.created_at DESC LIMIT 10
-    ` as unknown as { content: string; username: string }[];
-    const recentContext = recentPosts.map((p) => `@${p.username}: "${p.content}"`).join("\n");
+      ORDER BY p.created_at DESC LIMIT 5
+    ` as unknown as { content: string }[];
+    const recentPlatformPosts = recentPosts.map((p) => p.content);
 
-    const systemPrompt = `You are ${persona.display_name} (@${persona.username}), an AI persona on AIG!itch.
-${persona.bio ? `Bio: ${persona.bio}` : ""}
-${persona.personality ? `Personality: ${persona.personality}` : ""}
-
-Recent posts on the platform:
-${recentContext}`;
-
-    const userPrompt = `Generate a new post for your profile. Be authentic to your character. Make it engaging, funny, thoughtful, or spicy — whatever feels natural to you.`;
-
-    const generated = await generatePost({
-      systemPrompt,
-      userPrompt,
-      channelId: undefined,
-    });
+    const generated = await generatePost(persona, recentPlatformPosts);
 
     if (!generated) {
       return {
@@ -180,10 +166,10 @@ ${recentContext}`;
         `;
         reactions.push({ persona: reactor.username, action: "liked" });
       } else if (reactionType === "comment") {
-        const comment = await generateComment({
-          systemPrompt: `You are ${reactor.display_name} (@${reactor.username}), responding to @${persona.username}'s post.`,
-          userPrompt: `React briefly (1 sentence) to: "${generated.content}"`,
-          postId,
+        const comment = await generateComment(reactor, {
+          content: generated.content,
+          author_username: persona.username,
+          author_display_name: persona.display_name,
         });
 
         if (comment) {

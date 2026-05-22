@@ -22,7 +22,6 @@ import { requireCronAuth } from "@/lib/cron-auth";
 import { getDb } from "@/lib/db";
 import { randomUUID } from "node:crypto";
 import type { AIPersona } from "@/lib/personas";
-import { generateText } from "@/lib/ai/generate";
 import { generatePost } from "@/lib/content/ai-engine";
 
 export const dynamic = "force-dynamic";
@@ -86,83 +85,29 @@ function pickAdProduct(): MarketplaceProduct {
   return AIGLITCH_ECOSYSTEM;
 }
 
-async function generateAdCopy(
+async function generateAd(
   product: MarketplaceProduct,
   persona: AIPersona
-): Promise<{ content: string; hashtags: string[] } | null> {
-  const isGlitch = product.id === "prod-glitch-coin";
-  const isAIGlitch = product.id === "promo-aiglitch";
-
-  let instructions = "";
-  let primaryTag = "AIGlitchAd";
-
-  if (isAIGlitch) {
-    instructions =
-      "Sell the ENTIRE AIG!itch ecosystem — mention at least 2 of: Channels (inter-dimensional TV), the mobile app (G!itch Bestie), the 108+ AI personas, §GLITCH currency, or the party that never stops. Make humans DESPERATE to join.";
-    primaryTag = "AIGlitch";
-  } else if (isGlitch) {
-    instructions =
-      "Hype §GLITCH to the moon! Include moon rockets, diamond hands, WAGMI energy. Mention https://aiglitch.app. Use #HODL420 code.";
-    primaryTag = "GlitchCoin";
-  }
-
-  const prompt = `You are ${persona.display_name} (@${persona.username}), an AI influencer.
-
-${AIGLITCH_BRAND_BRIEF}
-
-Your personality: ${persona.personality || "chaotic and fun"}
-
-You've been PAID to promote this in an ad. Shill it HARD but stay in character.
-
-Product: ${product.name} ${product.emoji}
-Tagline: "${product.tagline}"
-${instructions}
-
-Write a SHORT, punchy ad caption (under 280 characters). Like a TikTok ad — enthusiastic, attention-grabbing.
-
-JSON: {"content": "your caption here", "hashtags": ["${primaryTag}", "AIG!itchAd", "one_more_tag"]}`;
-
+): Promise<string | null> {
   try {
-    const text = await generateText({
-      userPrompt: prompt,
-      maxTokens: 300,
-      taskType: "marketing",
-    });
+    // Generate base post content
+    const post = await generatePost(persona);
+    if (!post) return null;
 
-    if (!text) throw new Error("generateText returned null");
+    // Add product context to the post
+    const isGlitch = product.id === "prod-glitch-coin";
+    const isAIGlitch = product.id === "promo-aiglitch";
 
-    // Try to parse JSON
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      const parsed = JSON.parse(jsonMatch[0]) as { content: string; hashtags: string[] };
-      return {
-        content: parsed.content.slice(0, 280),
-        hashtags: parsed.hashtags || [primaryTag],
-      };
-    }
-
-    // Fallback: use full text as caption
-    return {
-      content: text.slice(0, 280),
-      hashtags: [primaryTag],
-    };
-  } catch (err) {
-    console.error(`[generate-ads] Ad copy generation failed:`, err);
-
-    // Fallback copy
+    let adTag = " #AIGlitchAd";
     if (isAIGlitch) {
-      return {
-        content: `${persona.avatar_emoji} AIG!itch is THE future. 108+ AI personas. Channels (AI Netflix). G!itch Bestie. §GLITCH currency. Join the glitch revolution. https://aiglitch.app`,
-        hashtags: ["AIGlitch", "AIG!itchAd"],
-      };
-    }
-    if (isGlitch) {
-      return {
-        content: `${persona.avatar_emoji} §GLITCH to the moon! 🚀💎 Buy now at https://aiglitch.app #HODL420 #GlitchCoin`,
-        hashtags: ["GlitchCoin", "AIG!itchAd"],
-      };
+      adTag = " #AIGlitch #AIGlitchAd";
+    } else if (isGlitch) {
+      adTag = " #GlitchCoin #HODL420";
     }
 
+    return post.content + adTag;
+  } catch (err) {
+    console.error(`[generate-ads] Generation failed:`, err);
     return null;
   }
 }
@@ -200,28 +145,25 @@ async function processAdGeneration() {
   console.log(`[generate-ads] Picked persona: @${persona.username}`);
 
   try {
-    // Generate ad copy
-    const adCopy = await generateAdCopy(product, persona);
-    if (!adCopy) {
+    // Generate ad content
+    const content = await generateAd(product, persona);
+    if (!content) {
       return {
-        action: "ad_copy_failed",
+        action: "ad_generation_failed",
         product: product.name,
         persona: persona.username,
-        error: "Ad copy generation failed",
+        error: "Ad generation failed",
       };
     }
 
     // Post to feed
     const postId = randomUUID();
-    const hashtags = adCopy.hashtags.join(" ");
-    const fullContent = `${adCopy.content} ${hashtags}`;
-
     await sql`
       INSERT INTO posts (
         id, persona_id, content, post_type, channel_id,
         created_at, updated_at, media_source
       ) VALUES (
-        ${postId}, ${persona.id}, ${fullContent},
+        ${postId}, ${persona.id}, ${content},
         'text', NULL, NOW(), NOW(), 'generate-ads-cron'
       )
     `;
@@ -233,8 +175,7 @@ async function processAdGeneration() {
       product: product.name,
       persona: persona.username,
       postId,
-      caption: adCopy.content,
-      hashtags: adCopy.hashtags,
+      content: content.substring(0, 150) + "...",
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

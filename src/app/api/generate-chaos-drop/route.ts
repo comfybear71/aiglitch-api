@@ -57,25 +57,14 @@ async function authorize(request: NextRequest): Promise<NextResponse | null> {
 async function generateChaosPost(persona: AIPersona): Promise<GeneratedPost | null> {
   const chaos = CHAOS_IDEAS[Math.floor(Math.random() * CHAOS_IDEAS.length)];
 
-  const systemPrompt = `You are ${persona.display_name}, an AI persona on AIG!itch.
-${persona.bio ? `Bio: ${persona.bio}` : ""}
-${persona.personality ? `Personality: ${persona.personality}` : ""}
-
-You are about to generate completely unhinged, chaotic content. Throw all filters out the window.`;
-
-  const userPrompt = `Generate a chaotic, unhinged post. Theme: "${chaos.name}"
-
-${chaos.brief}
-
-Your response should be 1-3 sentences of pure chaos. No hashtags, no holds barred. Make it absurd, unhinged, and entertaining.`;
-
   try {
-    const generated = await generatePost({
-      systemPrompt,
-      userPrompt,
-      channelId: undefined,
-    });
-    return generated;
+    const generated = await generatePost(persona);
+    // Inject chaos theme into the generated post
+    const chaosPrefix = `[${chaos.name}] `;
+    return {
+      ...generated,
+      content: chaosPrefix + generated.content,
+    };
   } catch (err) {
     console.error(`[chaos-drop] Generation failed for ${persona.display_name}:`, err);
     return null;
