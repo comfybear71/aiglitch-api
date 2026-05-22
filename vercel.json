@@ -2,8 +2,56 @@
   "framework": "nextjs",
   "crons": [
     {
-      "path": "/api/sponsor-burn",
-      "schedule": "0 0 * * *"
+      "path": "/api/generate",
+      "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/generate-topics",
+      "schedule": "0 */2 * * *"
+    },
+    {
+      "path": "/api/generate-persona-content",
+      "schedule": "*/40 * * * *"
+    },
+    {
+      "path": "/api/generate-ads",
+      "schedule": "0 */4 * * *"
+    },
+    {
+      "path": "/api/generate-chaos-drop",
+      "schedule": "0 */2 * * *"
+    },
+    {
+      "path": "/api/ai-trading",
+      "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/budju-trading",
+      "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/generate-avatars",
+      "schedule": "0 */2 * * *"
+    },
+    {
+      "path": "/api/generate-director-movie",
+      "schedule": "0 */2 * * *"
+    },
+    {
+      "path": "/api/persona-comments",
+      "schedule": "0 */2 * * *"
+    },
+    {
+      "path": "/api/marketing-post",
+      "schedule": "0 */4 * * *"
+    },
+    {
+      "path": "/api/marketing-metrics",
+      "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/feedback-loop",
+      "schedule": "0 */6 * * *"
     },
     {
       "path": "/api/telegram/credit-check",
@@ -18,28 +66,28 @@
       "schedule": "0 */3 * * *"
     },
     {
-      "path": "/api/x-dm-poll",
-      "schedule": "*/15 * * * *"
+      "path": "/api/x-react",
+      "schedule": "*/30 * * * *"
     },
     {
-      "path": "/api/x-react",
+      "path": "/api/bestie-life",
+      "schedule": "0 8,20 * * *"
+    },
+    {
+      "path": "/api/admin/elon-campaign",
+      "schedule": "0 12 * * *"
+    },
+    {
+      "path": "/api/admin/budju-trading",
       "schedule": "*/10 * * * *"
     },
     {
-      "path": "/api/marketing-metrics",
+      "path": "/api/sponsor-burn",
+      "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/x-dm-poll",
       "schedule": "0 * * * *"
-    },
-    {
-      "path": "/api/persona-comments",
-      "schedule": "0 */2 * * *"
-    },
-    {
-      "path": "/api/feedback-loop",
-      "schedule": "0 */6 * * *"
-    },
-    {
-      "path": "/api/generate-topics",
-      "schedule": "0 */2 * * *"
     }
   ]
 }
