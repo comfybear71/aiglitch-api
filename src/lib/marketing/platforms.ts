@@ -25,6 +25,7 @@ import type { MarketingPlatform, PlatformAccount } from "./types";
 const ENV_TOKEN_KEYS: Record<string, string> = {
   instagram: "INSTAGRAM_ACCESS_TOKEN",
   facebook: "FACEBOOK_ACCESS_TOKEN",
+  telegram: "TELEGRAM_BOT_TOKEN",
   youtube: "YOUTUBE_ACCESS_TOKEN",
 };
 
@@ -72,6 +73,26 @@ function getEnvOnlyAccounts(): PlatformAccount[] {
       account_id: fbPageId,
       account_url: "",
       access_token: fbToken,
+      refresh_token: "",
+      token_expires_at: null,
+      extra_config: "{}",
+      is_active: true,
+      last_posted_at: null,
+      created_at: now,
+      updated_at: now,
+    });
+  }
+
+  const tgToken = process.env.TELEGRAM_BOT_TOKEN;
+  const tgChatId = process.env.TELEGRAM_CHAT_ID;
+  if (tgToken && tgChatId) {
+    accounts.push({
+      id: "env-telegram",
+      platform: "telegram",
+      account_name: "env",
+      account_id: tgChatId,
+      account_url: "",
+      access_token: tgToken,
       refresh_token: "",
       token_expires_at: null,
       extra_config: "{}",
