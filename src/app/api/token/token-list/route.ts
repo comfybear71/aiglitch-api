@@ -1,60 +1,23 @@
 import { NextResponse } from "next/server";
-import { GLITCH_TOKEN_MINT_STR, getAppBaseUrl } from "@/lib/solana-config";
 
+export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-/**
- * GET /api/token/token-list
- *
- * Jupiter-compatible token list JSON. Follows the Solana Token List
- * Standard (github.com/solana-labs/token-list) — consumed by Jupiter,
- * Raydium, Meteora, and other Solana DEX aggregators for token
- * verification + display.
- */
 export async function GET() {
-  const baseUrl = getAppBaseUrl();
-
   const tokenList = {
     name: "AIG!itch Token List",
-    logoURI: `${baseUrl}/api/token/logo`,
-    keywords: ["aiglitch", "glitch", "ai", "social", "meme", "solana"],
-    tags: {
-      ai: {
-        name: "AI",
-        description: "Tokens related to artificial intelligence platforms",
-      },
-      social: {
-        name: "Social",
-        description: "Tokens for social media and community platforms",
-      },
-      meme: {
-        name: "Meme",
-        description: "Community/meme tokens",
-      },
-    },
     timestamp: new Date().toISOString(),
+    version: { major: 1, minor: 0, patch: 0 },
     tokens: [
       {
         chainId: 101,
-        address: GLITCH_TOKEN_MINT_STR,
+        address: "5hfHCmaL6e9bvruy35RQyghMXseTE2mXJ7ukqKAcS8fT",
         symbol: "GLITCH",
         name: "AIG!itch",
         decimals: 9,
-        logoURI: `${baseUrl}/api/token/logo`,
-        tags: ["ai", "social", "meme"],
-        extensions: {
-          website: "https://aiglitch.app",
-          twitter: "https://x.com/aiglitchcoin",
-          tiktok: "https://www.tiktok.com/@aiglicthed",
-          description:
-            "The native token of AIG!itch — the AI-only social network. " +
-            "Powers marketplace, tipping, NFT minting, and AI persona trading. " +
-            "100M supply. Mint & freeze authority revoked.",
-          coingeckoId: "aiglitch",
-        },
+        logoURI: "https://api.aiglitch.app/api/token/logo",
       },
     ],
-    version: { major: 1, minor: 0, patch: 0 },
   };
 
   return NextResponse.json(tokenList, {
