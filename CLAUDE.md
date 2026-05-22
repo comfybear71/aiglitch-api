@@ -5,6 +5,133 @@
 
 ---
 
+## ⚠️ MANDATORY — Sister repo (`comfybear71/aiglitch`)
+
+**This is not optional. Read this section before doing anything else.**
+
+This API repo is HALF of one project. The other half is the legacy
+`aiglitch` repo at https://github.com/comfybear71/aiglitch — which
+serves the web app at `aiglitch.app`, owns the frontend rendering,
+service worker, crons, content generation, and DB schema.
+
+**They are one project, not two.** Every Claude session in this repo
+MUST have the sister repo cloned and pulled fresh before answering
+any question that could touch both sides.
+
+### Run this at the start of every session (no exceptions)
+
+```bash
+if [ -d /home/user/aiglitch ]; then
+  git -C /home/user/aiglitch pull --ff-only
+else
+  git clone https://github.com/comfybear71/aiglitch /home/user/aiglitch
+fi
+```
+
+Public repo, no auth needed. Read-only. Never edit, never push from there.
+
+### Before answering ANY of these questions, read the sister repo first
+
+- Anything about the frontend rendering (`src/components/Feed.tsx`,
+  channel pages, post components)
+- Anything about caching the user is seeing (service worker in
+  `public/sw.js`, in-memory caches in components)
+- Anything about DB schema or how rows are inserted (the sister repo
+  owns the schema — `src/lib/db/schema.ts` is canonical)
+- Anything about content generation, persona crons, blob folder
+  structure
+- Anything about why an endpoint isn't actually reaching users
+  (check the sister repo's `next.config.ts` `beforeFiles` rewrites
+  — only routes listed there forward to api.aiglitch.app)
+- ANY user-reported bug — odds are it spans both repos
+
+### Division of responsibility
+
+| Concern | Repo | File / Location |
+|---|---|---|
+| Migrated API routes (e.g. `/api/feed`) | **this repo** | `src/app/api/*` |
+| API routes still on legacy | **aiglitch** | `src/app/api/*` (in aiglitch) |
+| Strangler rewrite list | **aiglitch** | `next.config.ts` `beforeFiles` |
+| Frontend rendering (Feed, Channel pages, etc.) | **aiglitch** | `src/components/*` |
+| Service worker (offline cache) | **aiglitch** | `public/sw.js` |
+| In-memory frontend caches | **aiglitch** | `src/components/Feed.tsx` `_feedCache` |
+| Cron content generators | **aiglitch** | `src/app/api/generate-*` (in aiglitch) |
+| Database schema | **aiglitch** | `src/lib/db/schema.ts` (canonical) |
+| Vercel Blob writers | **aiglitch** | `src/lib/media/*` (in aiglitch) |
+
+### Verification rules — learned from the For You debugging saga (v1.8.12-v1.8.18)
+
+These rules came out of 6 attempts and ~$300 of wasted compute. Don't repeat them.
+
+1. **A migration is NOT shipped until the public domain serves the new response.**
+   "Merged + tagged + deployed" on api.aiglitch.app means nothing if
+   `aiglitch.app/api/<route>` still hits legacy code. Always curl the
+   public domain after deploy and verify the response shape changed.
+
+2. **Listing counts ≠ feed-eligible counts.** Endpoints that
+   `COUNT(*)` by `channel_id` will report supply bigger than what
+   feeds surface, because feeds add extra filters (`media_url IS
+   NOT NULL`, host denylists, etc.). Always check the actual
+   feed-eligible count, not the listing count.
+
+3. **Frontend has MULTIPLE cache layers.** At minimum:
+   - Service worker (`public/sw.js`) — TTL configurable per route
+   - In-memory `_feedCache` Map (`src/components/Feed.tsx`) — currently
+     10s
+   - React component state
+   - Safari/Chrome HTTP cache
+   - Vercel edge CDN
+   When a user reports "I see the same posts every refresh," check
+   ALL cache layers, not just the one you know about. The CACHE_TTL
+   constant in Feed.tsx specifically has bitten us — two cache layers
+   with different TTLs doing the same job.
+
+4. **SQL `LIKE` can silently fail on legacy data.** Encoding quirks
+   (invisible chars, BOM, zero-width spaces) can make obviously-
+   matching strings fail LIKE patterns. Prefer denylists for known-bad
+   hosts over allowlists for known-good hosts.
+
+5. **`INNER JOIN` filters rows silently.** When debugging "why isn't
+   X showing in the response," check whether the JOIN is dropping
+   rows where the foreign key doesn't match.
+
+6. **Spiral protocol matters MORE on this codebase than usual.**
+   Stop at 3 attempts. The system has 6+ cache layers, 2 repos, 2
+   Claude sessions. Each fix can reveal a deeper layer. Going past
+   3 attempts without external help (frontend Claude reading your
+   code) wastes money fast.
+
+### Cross-session coordination protocol
+
+When working on a problem that touches both repos:
+
+1. **Pull the sister repo first.** Always. Before reading any code in
+   your own repo for a cross-repo question.
+
+2. **Read both sides before proposing a fix.** If the bug is "user
+   sees X in UI," you need to understand both the API response shape
+   AND the frontend rendering that consumes it. Reading one side is
+   guessing.
+
+3. **Hand off via the user, not directly.** Each Claude session only
+   has GitHub access to its own repo. The user is the bridge between
+   them. Always.
+
+4. **Be brief in handoff messages** — the other Claude reads them
+   cold. State the problem, the data, the proposed fix in <10 lines.
+   No tutorial.
+
+5. **Don't ship code in both repos in the same round.** Wait for one
+   side's PR to merge + deploy + verify before the other ships.
+   Concurrent shipping is impossible to debug.
+
+6. **If you're at 3 spiral-protocol attempts and still stuck, STOP
+   and ask the sister repo's Claude to look at your code.** They have
+   your repo cloned per the same mandatory section in their CLAUDE.md.
+   Fresh eyes catch what you can't see in your own writing.
+
+
+
 ## What this repo is
 
 `aiglitch-api` is the **shared backend** for the entire AIG!itch ecosystem. It is being built to replace the monolithic backend currently living inside the `aiglitch` webpage repo. After migration, **both** the web frontend (aiglitch.app) and the iOS app (Glitch-app) call this repo's endpoints.
