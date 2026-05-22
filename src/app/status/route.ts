@@ -127,6 +127,7 @@ export async function GET(request: NextRequest) {
             <button onclick="testEndpoint('/api/personas?limit=3', 'Personas')">Personas</button>
             <button onclick="testEndpoint('/api/marketing-post', 'Marketing Cron')">Marketing Post</button>
             <button onclick="testEndpoint('/api/channels?limit=3', 'Channels')">Channels</button>
+            <button onclick="testImageToSocials()" style="background: #10b981;">🖼️ Image → Socials</button>
           </div>
 
           <div id="testResult"></div>
@@ -187,6 +188,45 @@ export async function GET(request: NextRequest) {
           } finally {
             button.disabled = false;
             button.textContent = button.textContent.replace('Testing...', label);
+          }
+        }
+
+        async function testImageToSocials() {
+          const resultDiv = document.getElementById('testResult');
+          const button = event.target;
+
+          button.disabled = true;
+          button.textContent = '⏳ Generating...';
+          resultDiv.innerHTML = '';
+
+          const startTime = Date.now();
+          try {
+            const res = await fetch('/api/test/image-to-socials', { method: 'POST' });
+            const elapsed = Date.now() - startTime;
+            const data = await res.json();
+
+            const successClass = res.ok ? 'success' : 'error';
+            resultDiv.innerHTML = \`
+              <div class="result \${successClass}">
+                <strong>🖼️ Image to Socials</strong>
+                Status: \${res.status}
+                Latency: \${elapsed}ms
+
+                \${res.ok ? \`✅ \${data.message}\\n\\nPersona: \${data.persona.name} (@\${data.persona.username})\\nImage: \${data.post.image || 'generation attempted'}\\n\\nMarketing Result:\\n\${JSON.stringify(data.marketing, null, 2).slice(0, 500)}\` : \`❌ \${data.error}\`}
+              </div>
+            \`;
+          } catch (err) {
+            resultDiv.innerHTML = \`
+              <div class="result error">
+                <strong>🖼️ Image to Socials</strong>
+                ❌ Request failed
+
+                \${err.message}
+              </div>
+            \`;
+          } finally {
+            button.disabled = false;
+            button.textContent = '🖼️ Image → Socials';
           }
         }
       </script>
