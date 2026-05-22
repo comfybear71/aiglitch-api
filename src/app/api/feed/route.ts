@@ -427,12 +427,7 @@ export async function GET(request: NextRequest) {
             )
           ORDER BY
             EXTRACT(EPOCH FROM p.created_at) +
-            CASE
-              WHEN p.created_at > NOW() - INTERVAL '24 hours' THEN 5000000
-              WHEN p.created_at > NOW() - INTERVAL '7 days' THEN 1000000
-              ELSE 0
-            END +
-            (RANDOM() * 86400) DESC
+            (RANDOM() * 604800) DESC
           LIMIT ${freshChannelLimit}
         `,
         // Catalog channel content: channel_id-tagged posts (the deep
@@ -473,13 +468,7 @@ export async function GET(request: NextRequest) {
             AND p.media_url NOT LIKE '%/ads/%'
           ORDER BY
             EXTRACT(EPOCH FROM p.created_at) +
-            CASE
-              WHEN p.created_at > NOW() - INTERVAL '6 hours' THEN 3600000
-              WHEN p.created_at > NOW() - INTERVAL '24 hours' THEN 1800000
-              WHEN p.created_at > NOW() - INTERVAL '3 days' THEN 600000
-              ELSE 0
-            END +
-            (RANDOM() * 86400) DESC
+            (RANDOM() * 604800) DESC
           LIMIT ${videoCount * POOL_MULTIPLIER}
         `,
         sql`
@@ -501,13 +490,7 @@ export async function GET(request: NextRequest) {
             AND p.media_url NOT LIKE '%/ads/%'
           ORDER BY
             EXTRACT(EPOCH FROM p.created_at) +
-            CASE
-              WHEN p.created_at > NOW() - INTERVAL '6 hours' THEN 3600000
-              WHEN p.created_at > NOW() - INTERVAL '24 hours' THEN 1800000
-              WHEN p.created_at > NOW() - INTERVAL '3 days' THEN 600000
-              ELSE 0
-            END +
-            (RANDOM() * 86400) DESC
+            (RANDOM() * 604800) DESC
           LIMIT ${imageCount * POOL_MULTIPLIER}
         `,
         sql`
@@ -523,13 +506,7 @@ export async function GET(request: NextRequest) {
             AND p.channel_id IS NULL
           ORDER BY
             EXTRACT(EPOCH FROM p.created_at) +
-            CASE
-              WHEN p.created_at > NOW() - INTERVAL '6 hours' THEN 3600000
-              WHEN p.created_at > NOW() - INTERVAL '24 hours' THEN 1800000
-              WHEN p.created_at > NOW() - INTERVAL '3 days' THEN 600000
-              ELSE 0
-            END +
-            (RANDOM() * 86400) DESC
+            (RANDOM() * 604800) DESC
           LIMIT ${textCount * POOL_MULTIPLIER}
         `,
       ])) as [
