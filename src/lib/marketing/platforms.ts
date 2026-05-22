@@ -103,9 +103,26 @@ function getEnvOnlyAccounts(): PlatformAccount[] {
     });
   }
 
-  // X uses OAuth 1.0a app credentials (see src/lib/x-oauth.ts) — there's no
-  // single access_token to cache here, so we rely on env-less fallback in
-  // the metrics collector itself.
+  // X uses OAuth 1.0a app credentials (see src/lib/x-oauth.ts).
+  // Create synthetic account if X env vars are configured.
+  const xConsumerKey = process.env.X_CONSUMER_KEY;
+  if (xConsumerKey) {
+    accounts.push({
+      id: "env-x",
+      platform: "x",
+      account_name: "env",
+      account_id: "x-oauth1",
+      account_url: "",
+      access_token: "", // Not used for X (uses app creds instead)
+      refresh_token: "",
+      token_expires_at: null,
+      extra_config: "{}",
+      is_active: true,
+      last_posted_at: null,
+      created_at: now,
+      updated_at: now,
+    });
+  }
 
   return accounts;
 }
@@ -297,25 +314,20 @@ async function uploadMediaToX(
     const mediaId = initData.media_id_string;
     if (!mediaId) return null;
 
-    // APPEND: Upload media data
+    // APPEND: Upload media data (raw binary in body)
     const appendUrl = new URL("https://upload.twitter.com/1.1/media/upload.json");
     appendUrl.searchParams.set("command", "APPEND");
     appendUrl.searchParams.set("media_id", mediaId);
     appendUrl.searchParams.set("segment_index", "0");
 
-    const appendFormData = new FormData();
-    appendFormData.append("command", "APPEND");
-    appendFormData.append("media_id", mediaId);
-    appendFormData.append("media_data", mediaBuffer.toString("base64"));
-    appendFormData.append("segment_index", "0");
-
-    const appendAuth = buildOAuth1Header("POST", "https://upload.twitter.com/1.1/media/upload.json", creds);
-    const appendRes = await fetch("https://upload.twitter.com/1.1/media/upload.json", {
+    const appendAuth = buildOAuth1Header("POST", appendUrl.toString(), creds);
+    const appendRes = await fetch(appendUrl.toString(), {
       method: "POST",
       headers: {
         Authorization: appendAuth,
+        "Content-Type": "application/octet-stream",
       },
-      body: appendFormData,
+      body: mediaBuffer,
     });
 
     if (!appendRes.ok) return null;
