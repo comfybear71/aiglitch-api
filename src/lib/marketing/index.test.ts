@@ -83,7 +83,7 @@ describe("runMarketingCycle", () => {
     pickTopPostsMock.mockResolvedValue([SAMPLE_POST]);
     fake.results = [
       [], [], // ensure tables
-      [], [], [], [], [], // 5× INSERT marketing_posts (one per ALL_PLATFORM)
+      [], [], [], [], // 4× INSERT marketing_posts (one per WORKING_PLATFORM)
     ];
 
     const { __resetMarketingTablesFlag } = await import("./ensure-tables");
@@ -93,7 +93,7 @@ describe("runMarketingCycle", () => {
 
     expect(result.posted).toBe(0);
     expect(result.failed).toBe(0);
-    expect(result.skipped).toBe(5); // 1 post × 5 platforms
+    expect(result.skipped).toBe(4); // 1 post × 4 working platforms (x, telegram, instagram, facebook)
     expect(result.details[0]!.status).toBe("queued");
   });
 
@@ -121,19 +121,20 @@ describe("runMarketingCycle", () => {
     expect(result.failed).toBe(0);
   });
 
-  it("skips youtube for non-video posts", async () => {
+  it("filters out youtube accounts (not in WORKING_PLATFORMS)", async () => {
     const YT = { ...X_ACCOUNT, id: "y", platform: "youtube" };
     getActiveAccountsMock.mockResolvedValue([YT]);
     pickTopPostsMock.mockResolvedValue([SAMPLE_POST]); // image, not video
-    fake.results = [[], [], []];
+    fake.results = [[], [], []]; // ensure tables + campaign select
 
     const { __resetMarketingTablesFlag } = await import("./ensure-tables");
     __resetMarketingTablesFlag();
     const { runMarketingCycle } = await import("./index");
     const result = await runMarketingCycle();
 
-    expect(result.skipped).toBe(1);
-    expect(result.details[0]!.status).toBe("skipped");
+    expect(result.posted).toBe(0);
+    expect(result.failed).toBe(0);
+    expect(result.skipped).toBe(0); // YouTube is filtered out before posting loop
   });
 
   it("flags platform failures in details", async () => {
