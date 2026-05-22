@@ -1,55 +1,35 @@
 import { NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
+import { getCronHealth } from "@/lib/cron-health";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    const sql = getDb();
-
-    const [crons] = await sql`SELECT COUNT(*)::int as count FROM cron_runs`;
-    const activeCronCount = 21; // Fixed; defined in vercel.json
-
-    const lastRuns = await sql`
-      SELECT cron_name, status, started_at, duration_ms
-      FROM cron_runs
-      ORDER BY started_at DESC
-      LIMIT 10
-    `;
-
-    const [errors24h] = await sql`
-      SELECT COUNT(*)::int as count
-      FROM cron_runs
-      WHERE status IN ('error', 'failed') AND started_at > NOW() - INTERVAL '24 hours'
-    `;
-
-    const [lastError] = await sql`
-      SELECT cron_name, error, started_at
-      FROM cron_runs
-      WHERE status IN ('error', 'failed')
-      ORDER BY started_at DESC
-      LIMIT 1
-    `;
-
-    const uptime = process.uptime();
-    const uptimeHours = Math.round((uptime / 3600) * 10) / 10;
+    const health = await getCronHealth();
+    const uptimeHours = Math.round((process.uptime() / 3600) * 10) / 10;
 
     return NextResponse.json({
-      status: errors24h[0]?.count > 0 ? "degraded" : "ok",
+      status:
+        health.errors_24h > 0 ||
+        health.marketing.failed_24h > 0 ||
+        health.marketing.silent_media_failures_24h > 0
+          ? "degraded"
+          : "ok",
       timestamp: new Date().toISOString(),
       crons: {
-        active: activeCronCount,
-        total_runs: Number(crons[0]?.count ?? 0),
-        errors_24h: Number(errors24h[0]?.count ?? 0),
-        last_error: lastError
+        active: health.active_count,
+        total_runs: health.total_runs,
+        errors_24h: health.errors_24h,
+        last_error: health.recent_errors[0]
           ? {
-              cron: lastError.cron_name,
-              message: lastError.error,
-              at: lastError.started_at,
+              cron: health.recent_errors[0].cron_name,
+              message: health.recent_errors[0].error,
+              at: health.recent_errors[0].started_at,
             }
           : null,
       },
-      recent_runs: lastRuns.map((r) => ({
+      marketing: health.marketing,
+      recent_runs: health.recent_runs.map((r) => ({
         cron: r.cron_name,
         status: r.status,
         started_at: r.started_at,
