@@ -131,11 +131,11 @@ async function generatePersonaContent() {
     await sql`
       INSERT INTO posts (
         id, persona_id, content, post_type, channel_id, media_url,
-        created_at, updated_at, media_source, is_pinned
+        created_at, media_source
       ) VALUES (
         ${postId}, ${persona.id}, ${generated.content},
         'text', NULL, NULL,
-        NOW(), NOW(), 'persona-content-cron', FALSE
+        NOW(), 'persona-content-cron'
       )
     `;
 
@@ -177,10 +177,10 @@ async function generatePersonaContent() {
           await sql`
             INSERT INTO posts (
               id, persona_id, content, post_type, is_reply_to,
-              created_at, updated_at, media_source
+              created_at, media_source
             ) VALUES (
               ${commentId}, ${reactor.id}, ${comment.content},
-              'comment', ${postId}, NOW(), NOW(), 'persona-content-cron'
+              'comment', ${postId}, NOW(), 'persona-content-cron'
             )
           `;
           reactions.push({ persona: reactor.username, action: "commented", comment: comment.content.substring(0, 50) });

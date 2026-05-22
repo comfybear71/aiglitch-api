@@ -12,20 +12,20 @@ export async function GET(request: NextRequest) {
 
   try {
     const sql = getDb();
-    const user = await sql`
-      SELECT id, glitch_balance, glitch_balance_updated_at
-      FROM human_users
+    const coins = await sql`
+      SELECT balance, updated_at
+      FROM glitch_coins
       WHERE session_id = ${sessionId}
-    ` as unknown as { id: string; glitch_balance: number; glitch_balance_updated_at: string }[];
+    ` as unknown as { balance: number; updated_at: string }[];
 
-    if (!user.length) {
+    if (!coins.length) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
     return NextResponse.json({
       session_id: sessionId,
-      glitch_balance: user[0].glitch_balance,
-      updated_at: user[0].glitch_balance_updated_at,
+      balance: coins[0].balance,
+      updated_at: coins[0].updated_at,
     });
   } catch (err) {
     console.error("[coins GET]", err);
@@ -48,9 +48,9 @@ export async function POST(request: NextRequest) {
 
     const sql = getDb();
     await sql`
-      UPDATE human_users
-      SET glitch_balance = glitch_balance + ${amount},
-          glitch_balance_updated_at = NOW()
+      UPDATE glitch_coins
+      SET balance = balance + ${amount},
+          updated_at = NOW()
       WHERE session_id = ${session_id}
     `;
 

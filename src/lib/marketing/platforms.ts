@@ -19,6 +19,7 @@
 
 import { getDb } from "@/lib/db";
 import { buildOAuth1Header, getAppCredentials } from "@/lib/x-oauth";
+import { sendTelegramPhoto } from "@/lib/telegram";
 import type { MarketingPlatform, PlatformAccount } from "./types";
 
 /** Env var that overrides the DB access_token when set. */
@@ -287,13 +288,35 @@ export async function postToPlatform(
 async function uploadMediaToX(
   creds: ReturnType<typeof getAppCredentials>,
   mediaUrl: string,
-): Promise<string | null> {
+): Promise<{ mediaId: string | null; error?: string }> {
   try {
-    // Download media
-    const imgRes = await fetch(mediaUrl);
-    if (!imgRes.ok) return null;
-    const mediaBuffer = Buffer.from(await imgRes.arrayBuffer());
-    const mediaType = imgRes.headers.get("content-type") || "image/jpeg";
+    // Validate URL format
+    if (!mediaUrl.startsWith("http")) {
+      return { mediaId: null, error: "Invalid media URL" };
+    }
+
+    console.log(`[uploadMediaToX] Starting upload for ${mediaUrl.slice(0, 80)}...`);
+
+    // Download media with timeout
+    let mediaBuffer: Buffer;
+    let mediaType: string;
+    try {
+      const imgRes = await fetch(mediaUrl, { signal: AbortSignal.timeout(15000) });
+      if (!imgRes.ok) {
+        return {
+          mediaId: null,
+          error: `Download failed (${imgRes.status}): ${imgRes.statusText}`,
+        };
+      }
+      mediaBuffer = Buffer.from(await imgRes.arrayBuffer());
+      mediaType = imgRes.headers.get("content-type") || "image/jpeg";
+      console.log(`[uploadMediaToX] Downloaded ${mediaBuffer.length} bytes (${mediaType})`);
+    } catch (err) {
+      return {
+        mediaId: null,
+        error: `Download error: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
 
     // INIT: Start chunked upload
     const initUrl = new URL("https://upload.twitter.com/1.1/media/upload.json");
@@ -304,33 +327,73 @@ async function uploadMediaToX(
     const initAuth = buildOAuth1Header("POST", initUrl.toString(), creds);
     const initRes = await fetch(initUrl.toString(), {
       method: "POST",
-      headers: {
-        Authorization: initAuth,
-      },
+      headers: { Authorization: initAuth },
+      signal: AbortSignal.timeout(10000),
     });
 
-    if (!initRes.ok) return null;
-    const initData = (await initRes.json()) as { media_id_string?: string };
-    const mediaId = initData.media_id_string;
-    if (!mediaId) return null;
+    if (!initRes.ok) {
+      const body = await initRes.text();
+      return {
+        mediaId: null,
+        error: `INIT failed (${initRes.status}): ${body.slice(0, 150)}`,
+      };
+    }
 
-    // APPEND: Upload media data (raw binary in body)
+    const initData = (await initRes.json()) as {
+      media_id_string?: string;
+      error?: string;
+    };
+    const mediaId = initData.media_id_string;
+    if (!mediaId) {
+      return {
+        mediaId: null,
+        error: `INIT returned no media_id: ${JSON.stringify(initData)}`,
+      };
+    }
+    console.log(`[uploadMediaToX] INIT OK, media_id=${mediaId}`);
+
+    // APPEND: Upload media data (raw binary) with retries
     const appendUrl = new URL("https://upload.twitter.com/1.1/media/upload.json");
     appendUrl.searchParams.set("command", "APPEND");
     appendUrl.searchParams.set("media_id", mediaId);
     appendUrl.searchParams.set("segment_index", "0");
 
-    const appendAuth = buildOAuth1Header("POST", appendUrl.toString(), creds);
-    const appendRes = await fetch(appendUrl.toString(), {
-      method: "POST",
-      headers: {
-        Authorization: appendAuth,
-        "Content-Type": "application/octet-stream",
-      },
-      body: mediaBuffer,
-    });
+    let appendSuccess = false;
+    let appendError = "";
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const appendAuth = buildOAuth1Header("POST", appendUrl.toString(), creds);
+        const appendRes = await fetch(appendUrl.toString(), {
+          method: "POST",
+          headers: {
+            Authorization: appendAuth,
+            "Content-Type": "application/octet-stream",
+          },
+          body: new Uint8Array(mediaBuffer),
+          signal: AbortSignal.timeout(20000),
+        });
 
-    if (!appendRes.ok) return null;
+        if (!appendRes.ok) {
+          appendError = `${appendRes.status}: ${await appendRes.text()}`;
+          console.warn(
+            `[uploadMediaToX] APPEND attempt ${attempt + 1} failed: ${appendError.slice(0, 100)}`
+          );
+          if (attempt < 2) await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+          continue;
+        }
+        appendSuccess = true;
+        console.log(`[uploadMediaToX] APPEND OK (attempt ${attempt + 1})`);
+        break;
+      } catch (err) {
+        appendError = err instanceof Error ? err.message : String(err);
+        console.warn(`[uploadMediaToX] APPEND attempt ${attempt + 1} exception: ${appendError}`);
+        if (attempt < 2) await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+      }
+    }
+
+    if (!appendSuccess) {
+      return { mediaId: null, error: `APPEND failed after 3 attempts: ${appendError}` };
+    }
 
     // FINALIZE: Complete upload
     const finalizeUrl = new URL("https://upload.twitter.com/1.1/media/upload.json");
@@ -340,16 +403,24 @@ async function uploadMediaToX(
     const finalizeAuth = buildOAuth1Header("POST", finalizeUrl.toString(), creds);
     const finalizeRes = await fetch(finalizeUrl.toString(), {
       method: "POST",
-      headers: {
-        Authorization: finalizeAuth,
-      },
+      headers: { Authorization: finalizeAuth },
+      signal: AbortSignal.timeout(10000),
     });
 
-    if (!finalizeRes.ok) return null;
-    return mediaId;
+    if (!finalizeRes.ok) {
+      const body = await finalizeRes.text();
+      return {
+        mediaId: null,
+        error: `FINALIZE failed (${finalizeRes.status}): ${body.slice(0, 150)}`,
+      };
+    }
+
+    console.log(`[uploadMediaToX] FINALIZE OK, upload complete`);
+    return { mediaId };
   } catch (err) {
-    console.warn(`[postToX] Media upload failed: ${err instanceof Error ? err.message : err}`);
-    return null;
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    console.error(`[uploadMediaToX] Unexpected error: ${errorMsg}`);
+    return { mediaId: null, error: errorMsg };
   }
 }
 
@@ -364,11 +435,11 @@ async function postToX(
 
   // Upload media if present
   if (mediaUrl && creds) {
-    const mediaId = await uploadMediaToX(creds, mediaUrl);
-    if (mediaId) {
-      payload.media = { media_ids: [mediaId] };
+    const uploadResult = await uploadMediaToX(creds, mediaUrl);
+    if (uploadResult.mediaId) {
+      payload.media = { media_ids: [uploadResult.mediaId] };
     } else {
-      console.warn("[postToX] Media upload failed, posting text-only");
+      console.warn(`[postToX] Media upload failed: ${uploadResult.error}, posting text-only`);
     }
   }
 
@@ -497,44 +568,57 @@ async function postToTelegram(
   }
 
   try {
-    const endpoint = mediaUrl ? "sendPhoto" : "sendMessage";
-    const tgApiUrl = `https://api.telegram.org/bot${botToken}/${endpoint}`;
-    const payload: Record<string, unknown> = {
-      chat_id: chatId,
-      parse_mode: "HTML",
-    };
-
     if (mediaUrl) {
-      payload.photo = mediaUrl;
-      payload.caption = text;
-    } else {
-      payload.text = text;
-    }
-
-    const res = await fetch(tgApiUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-
-    if (!res.ok) {
-      const errBody = await res.text().catch(() => "(unreadable)");
+      // Use download+multipart for media (Telegram can't reliably fetch Blob URLs)
+      const result = await sendTelegramPhoto(botToken, chatId, mediaUrl, text);
+      if (!result.ok) {
+        return {
+          success: false,
+          error: `Telegram photo upload failed: ${result.error}`,
+        };
+      }
       return {
-        success: false,
-        error: `Telegram API ${res.status}: ${errBody.slice(0, 300)}`,
+        success: true,
+        platformPostId: result.messageId?.toString(),
+        platformUrl: result.messageId
+          ? `https://t.me/${account.account_name}/${result.messageId}`
+          : undefined,
+      };
+    } else {
+      // Text-only via JSON API
+      const tgApiUrl = `https://api.telegram.org/bot${botToken}/sendMessage`;
+      const res = await fetch(tgApiUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text,
+          parse_mode: "HTML",
+        }),
+      });
+
+      if (!res.ok) {
+        const errBody = await res.text().catch(() => "(unreadable)");
+        return {
+          success: false,
+          error: `Telegram API ${res.status}: ${errBody.slice(0, 300)}`,
+        };
+      }
+
+      const data = (await res.json()) as {
+        ok: boolean;
+        result?: { message_id?: number };
+      };
+      const messageId = data.result?.message_id;
+
+      return {
+        success: data.ok,
+        platformPostId: messageId?.toString(),
+        platformUrl: messageId
+          ? `https://t.me/${account.account_name}/${messageId}`
+          : undefined,
       };
     }
-
-    const data = (await res.json()) as { ok: boolean; result?: { message_id?: number } };
-    const messageId = data.result?.message_id;
-
-    return {
-      success: data.ok,
-      platformPostId: messageId?.toString(),
-      platformUrl: messageId
-        ? `https://t.me/${account.account_name}/${messageId}`
-        : undefined,
-    };
   } catch (err) {
     return {
       success: false,
