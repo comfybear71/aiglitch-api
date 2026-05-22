@@ -7,6 +7,54 @@
 
 ## Session log (newest first)
 
+### 2026-05-22 — For You debugging saga (v1.8.12–v1.8.18) + mandatory cross-repo docs
+
+**Total cost of this saga: ~$300 over multiple Claude sessions.** Most
+of that was avoidable. Adding this entry so no future session repeats
+the mistake.
+
+**The bug** (eventually): `src/components/Feed.tsx` in the **aiglitch**
+repo had `CACHE_TTL = 120_000` — a 2-minute in-memory Map cache on
+top of the service worker's 10s cache. Users saw the same first ~20
+posts on every refresh because the JS-memory cache served stale data
+for 2 minutes. Fix: one number, `120_000` → `0`. The other Claude
+session shipped it after I cloned the aiglitch repo and read Feed.tsx
+directly. **Total time to find once I had cross-repo access: ~10 mins.**
+
+**Why it took 6 attempts (v1.8.12-v1.8.18) on the API side:**
+
+- I didn't have the aiglitch repo cloned, so I was guessing about
+  frontend behaviour for the first 5 attempts
+- Each ranking/filter fix on the API side revealed a deeper issue
+  (dead URLs, encoding bugs, missing channels) — all real, all worth
+  fixing, but the user-facing symptom never went away because the
+  120s in-memory cache made every change invisible
+- The frontend Claude session fixed the SW cache (120s → 10s) in
+  one PR but missed the JS-memory cache in the same file
+- Neither session had the other repo's code accessible until very
+  late
+
+**Lessons baked into CLAUDE.md as MANDATORY:**
+
+1. Pull the sister repo at session start. Always. Public, read-only.
+2. Read the sister repo BEFORE reasoning about cross-repo bugs.
+3. Listing counts (via `COUNT(*)`) ≠ feed-eligible counts. Always
+   verify with the actual feed query's filters applied.
+4. Frontend has multiple cache layers. Check all of them.
+5. SQL `LIKE` can silently fail on legacy data with encoding quirks.
+   Prefer denylists for bad hosts over allowlists for good ones.
+6. `INNER JOIN` silently drops rows when the FK doesn't match.
+7. Spiral protocol matters MORE here than usual. Stop at 3 attempts.
+
+**What this saga did produce (good):**
+
+- Feed query is genuinely well-tuned now (v1.8.18) — fresh persona
+  content leads, channels rotate from a 2k+ catalog, dead URLs
+  filtered, encoding quirks worked around
+- Cross-repo CLAUDE.md mandatory section so future sessions wake up
+  with full context
+- Matching update going into the aiglitch repo's CLAUDE.md
+
 ### 2026-04-23 — port /api/admin/spread + /api/admin/media/spread
 - **Branch**: `claude/port-admin-spread-routes`
 - **First backlog rows dropped in 7 sessions.** marketing-lib blocker
