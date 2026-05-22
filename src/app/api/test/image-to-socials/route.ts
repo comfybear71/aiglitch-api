@@ -37,6 +37,7 @@ export async function POST() {
 
     // 3. Generate image via Grok and upload to Blob
     let imageUrl: string | null = null;
+    let imageGenerationError: string | null = null;
     try {
       const result = await generateImageToBlob({
         prompt: imagePrompt,
@@ -46,7 +47,8 @@ export async function POST() {
       imageUrl = result.blobUrl;
       console.log(`[test-image] Image generated and uploaded: ${imageUrl}`);
     } catch (err) {
-      console.warn(`[test-image] Image generation failed:`, err);
+      imageGenerationError = err instanceof Error ? err.message : String(err);
+      console.error(`[test-image] Image generation failed: ${imageGenerationError}`);
     }
 
     // 4. Create a post with the image
@@ -75,7 +77,7 @@ export async function POST() {
     const marketingResult = await runMarketingCycle();
 
     return NextResponse.json({
-      success: true,
+      success: imageUrl !== null,
       persona: {
         id: persona.id,
         name: persona.display_name,
@@ -87,7 +89,10 @@ export async function POST() {
         image: imageUrl,
       },
       marketing: marketingResult,
-      message: `✅ Image generated and ${marketingResult.posted} posts sent to socials (${marketingResult.failed} failed, ${marketingResult.skipped} skipped)`,
+      imageError: imageGenerationError,
+      message: imageUrl
+        ? `✅ Image generated and ${marketingResult.posted} posts sent to socials (${marketingResult.failed} failed, ${marketingResult.skipped} skipped)`
+        : `⚠️ Image generation failed: ${imageGenerationError}. Post created but with no image. ${marketingResult.posted} posts sent to socials.`,
     });
   } catch (err) {
     console.error("[test-image] Error:", err);
