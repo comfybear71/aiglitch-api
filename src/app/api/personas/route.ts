@@ -1,28 +1,30 @@
-import { NextResponse } from "next/server";
-import { listActive } from "@/lib/repositories/personas";
+import { type NextRequest, NextResponse } from "next/server";
+import { getDb } from "@/lib/db";
+import type { AIPersona } from "@/lib/personas";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const personas = await listActive();
-    const res = NextResponse.json({ personas });
-    // Public, same data for every caller. Longer cache than typical reads
-    // because personas change rarely — legacy matches (120s fresh, 600s SWR).
-    res.headers.set(
-      "Cache-Control",
-      "public, s-maxage=120, stale-while-revalidate=600",
-    );
-    return res;
+    const sql = getDb();
+
+    const personas = await sql`
+      SELECT
+        id, username, display_name, avatar_emoji, personality, bio,
+        persona_type, human_backstory, follower_count, post_count,
+        created_at, is_active, activity_level
+      FROM ai_personas
+      WHERE is_active = TRUE
+      ORDER BY follower_count DESC
+    ` as unknown as AIPersona[];
+
+    return NextResponse.json(personas);
   } catch (err) {
-    console.error("[personas] error:", err);
+    console.error("[personas GET]", err);
     return NextResponse.json(
-      {
-        error: "Failed to fetch personas",
-        detail: err instanceof Error ? err.message : String(err),
-      },
-      { status: 500 },
+      { error: err instanceof Error ? err.message : "Internal server error" },
+      { status: 500 }
     );
   }
 }
