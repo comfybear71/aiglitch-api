@@ -213,6 +213,9 @@ export async function postToPlatform(
       case "x":
         result = await postToX(account, text, mediaUrl);
         break;
+      case "telegram":
+        result = await postToTelegram(account, text, mediaUrl);
+        break;
       case "instagram":
       case "facebook":
       case "youtube":
@@ -302,6 +305,63 @@ async function postToX(
     return {
       success: false,
       error: `X error: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+// ── Telegram poster ─────────────────────────────────────────────────────────
+
+async function postToTelegram(
+  account: PlatformAccount,
+  text: string,
+  mediaUrl?: string | null,
+): Promise<PostResult> {
+  const botToken = account.access_token;
+  const chatId = account.account_id;
+
+  if (!botToken || !chatId) {
+    return {
+      success: false,
+      error: "Missing Telegram bot token or chat ID",
+    };
+  }
+
+  try {
+    const tgApiUrl = `https://api.telegram.org/bot${botToken}/sendMessage`;
+    const payload: Record<string, unknown> = {
+      chat_id: chatId,
+      text,
+      parse_mode: "HTML",
+    };
+
+    const res = await fetch(tgApiUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => "(unreadable)");
+      return {
+        success: false,
+        error: `Telegram API ${res.status}: ${errBody.slice(0, 300)}`,
+      };
+    }
+
+    const data = (await res.json()) as { ok: boolean; result?: { message_id?: number } };
+    const messageId = data.result?.message_id;
+
+    return {
+      success: data.ok,
+      platformPostId: messageId?.toString(),
+      platformUrl: messageId
+        ? `https://t.me/${account.account_name}/${messageId}`
+        : undefined,
+    };
+  } catch (err) {
+    return {
+      success: false,
+      error: `Telegram error: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
 }

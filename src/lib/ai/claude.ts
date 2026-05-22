@@ -54,6 +54,10 @@ export async function claudeComplete(params: {
     .map((b) => b.text)
     .join("");
 
+  if (!text) {
+    console.warn(`[claude] Empty response - content blocks: ${JSON.stringify(resp.content)}, usage: ${inputTokens}/${outputTokens}`);
+  }
+
   return { text, model, inputTokens, outputTokens, estimatedUsd };
 }
 

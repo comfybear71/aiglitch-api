@@ -55,8 +55,13 @@ export async function xaiComplete(params: {
     (inputTokens * INPUT_COST_PER_M + outputTokens * OUTPUT_COST_PER_M) /
     1_000_000;
 
+  const text = resp.choices[0]?.message?.content ?? "";
+  if (!text) {
+    console.warn(`[xai] Empty response - choices: ${JSON.stringify(resp.choices)}, usage: ${inputTokens}/${outputTokens}`);
+  }
+
   return {
-    text: resp.choices[0]?.message?.content ?? "",
+    text,
     model,
     inputTokens,
     outputTokens,

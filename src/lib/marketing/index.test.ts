@@ -83,7 +83,7 @@ describe("runMarketingCycle", () => {
     pickTopPostsMock.mockResolvedValue([SAMPLE_POST]);
     fake.results = [
       [], [], // ensure tables
-      [], [], [], [], // 4× INSERT marketing_posts (one per ALL_PLATFORM)
+      [], [], [], [], [], // 5× INSERT marketing_posts (one per ALL_PLATFORM)
     ];
 
     const { __resetMarketingTablesFlag } = await import("./ensure-tables");
@@ -93,7 +93,7 @@ describe("runMarketingCycle", () => {
 
     expect(result.posted).toBe(0);
     expect(result.failed).toBe(0);
-    expect(result.skipped).toBe(4); // 1 post × 4 platforms
+    expect(result.skipped).toBe(5); // 1 post × 5 platforms
     expect(result.details[0]!.status).toBe("queued");
   });
 
