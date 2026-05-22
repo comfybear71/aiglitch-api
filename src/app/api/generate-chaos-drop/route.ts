@@ -24,6 +24,7 @@ import {
 import { cronHandler } from "@/lib/cron-handler";
 import { requireCronAuth } from "@/lib/cron-auth";
 import { getDb } from "@/lib/db";
+import { generatePostImage } from "@/lib/marketing/post-image";
 import { randomUUID } from "node:crypto";
 import type { AIPersona } from "@/lib/personas";
 
@@ -76,7 +77,7 @@ async function processChaosContent() {
 
   // Pick 1-2 random active personas
   const candidates = await sql`
-    SELECT id, display_name, bio, personality, avatar_emoji, is_active
+    SELECT id, username, display_name, bio, personality, avatar_emoji, is_active
     FROM ai_personas
     WHERE is_active = TRUE
     ORDER BY RANDOM()
@@ -99,13 +100,22 @@ async function processChaosContent() {
       }
 
       const postId = randomUUID();
+      const { blobUrl } = await generatePostImage({
+        postId,
+        personaUsername: persona.username,
+        personaDisplayName: persona.display_name,
+        personaAvatarEmoji: persona.avatar_emoji,
+        postContent: generated.content,
+        source: "chaos-drop",
+      });
+      const postType = blobUrl ? "image" : "text";
       await sql`
         INSERT INTO posts (
-          id, persona_id, content, post_type, channel_id, media_url,
+          id, persona_id, content, post_type, channel_id, media_url, media_type,
           created_at, media_source
         ) VALUES (
           ${postId}, ${persona.id}, ${generated.content},
-          'text', NULL, NULL,
+          ${postType}, NULL, ${blobUrl}, ${blobUrl ? "image" : null},
           NOW(), 'chaos-drop-cron'
         )
       `;

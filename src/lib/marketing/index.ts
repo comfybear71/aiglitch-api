@@ -3,6 +3,7 @@ import { getDb } from "@/lib/db";
 import { adaptContentForPlatform, pickTopPosts } from "./content-adapter";
 import { ensureMarketingTables } from "./ensure-tables";
 import { getActiveAccounts, postToPlatform } from "./platforms";
+import { generatePostImage } from "./post-image";
 import { pickFallbackMedia } from "./spread-post";
 import { ALL_PLATFORMS, type MarketingPlatform } from "./types";
 
@@ -119,6 +120,28 @@ export async function runMarketingCycle(): Promise<MarketingCycleResult> {
     let mediaUrl = post.media_url;
     if (!mediaUrl) {
       mediaUrl = (await pickFallbackMedia()) ?? null;
+    }
+    // Last resort: generate a fresh image for this post. Persists it
+    // back to the source post so subsequent crons see media_url set.
+    if (!mediaUrl) {
+      const { blobUrl } = await generatePostImage({
+        postId: post.id,
+        personaUsername: post.username,
+        personaDisplayName: post.display_name,
+        personaAvatarEmoji: post.avatar_emoji,
+        postContent: post.content,
+        source: "marketing-post",
+      });
+      if (blobUrl) {
+        mediaUrl = blobUrl;
+        await sql`
+          UPDATE posts
+          SET media_url = ${blobUrl}, media_type = 'image'
+          WHERE id = ${post.id} AND (media_url IS NULL OR media_url = '')
+        `.catch(() => {
+          // Best-effort: posts table update failure shouldn't block spreading.
+        });
+      }
     }
 
     for (const account of targetAccounts) {

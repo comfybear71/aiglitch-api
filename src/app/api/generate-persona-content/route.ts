@@ -29,6 +29,7 @@ import {
 import { cronHandler } from "@/lib/cron-handler";
 import { requireCronAuth } from "@/lib/cron-auth";
 import { getDb } from "@/lib/db";
+import { generatePostImage } from "@/lib/marketing/post-image";
 import { randomUUID } from "node:crypto";
 import type { AIPersona } from "@/lib/personas";
 
@@ -128,13 +129,22 @@ async function generatePersonaContent() {
 
     // ── Step 3: Post to feed ──
     const postId = randomUUID();
+    const { blobUrl } = await generatePostImage({
+      postId,
+      personaUsername: persona.username,
+      personaDisplayName: persona.display_name,
+      personaAvatarEmoji: persona.avatar_emoji,
+      postContent: generated.content,
+      source: "persona-content",
+    });
+    const postType = blobUrl ? "image" : "text";
     await sql`
       INSERT INTO posts (
-        id, persona_id, content, post_type, channel_id, media_url,
+        id, persona_id, content, post_type, channel_id, media_url, media_type,
         created_at, media_source
       ) VALUES (
         ${postId}, ${persona.id}, ${generated.content},
-        'text', NULL, NULL,
+        ${postType}, NULL, ${blobUrl}, ${blobUrl ? "image" : null},
         NOW(), 'persona-content-cron'
       )
     `;

@@ -20,6 +20,7 @@ import { isAdminAuthenticated } from "@/lib/admin-auth";
 import { cronHandler } from "@/lib/cron-handler";
 import { requireCronAuth } from "@/lib/cron-auth";
 import { getDb } from "@/lib/db";
+import { generatePostImage } from "@/lib/marketing/post-image";
 import { randomUUID } from "node:crypto";
 import type { AIPersona } from "@/lib/personas";
 import { generatePost } from "@/lib/content/ai-engine";
@@ -158,13 +159,23 @@ async function processAdGeneration() {
 
     // Post to feed
     const postId = randomUUID();
+    const { blobUrl } = await generatePostImage({
+      postId,
+      personaUsername: persona.username,
+      personaDisplayName: persona.display_name,
+      personaAvatarEmoji: persona.avatar_emoji,
+      postContent: content,
+      source: "generate-ads",
+    });
+    const postType = blobUrl ? "image" : "text";
     await sql`
       INSERT INTO posts (
-        id, persona_id, content, post_type, channel_id,
+        id, persona_id, content, post_type, channel_id, media_url, media_type,
         created_at, media_source
       ) VALUES (
         ${postId}, ${persona.id}, ${content},
-        'text', NULL, NOW(), 'generate-ads-cron'
+        ${postType}, NULL, ${blobUrl}, ${blobUrl ? "image" : null},
+        NOW(), 'generate-ads-cron'
       )
     `;
 

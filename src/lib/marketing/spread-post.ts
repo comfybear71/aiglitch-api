@@ -41,7 +41,26 @@ interface PostRow {
  * thumbnail when a post has no media of its own. Tries video first
  * if `preferVideo`, then any image from the last 7 days, then
  * broader 30-day fallback. Returns null when nothing's found.
+ *
+ * Only Vercel Blob URLs are eligible — xAI and Replicate hand out
+ * short-lived URLs that 404 by the time the marketing cron runs them,
+ * which silently breaks the X media upload (see sister-repo v1.8.14).
  */
+const FALLBACK_HOST_DENYLIST = [
+  "xai-images",
+  "x.ai",
+  "replicate.delivery",
+  "replicate.com",
+  "googleusercontent.com",
+  "googleapis.com",
+];
+
+function isUsableFallbackUrl(url: string | null | undefined): boolean {
+  if (!url) return false;
+  if (!url.startsWith("https://")) return false;
+  return !FALLBACK_HOST_DENYLIST.some((host) => url.includes(host));
+}
+
 export async function pickFallbackMedia(
   preferVideo = false,
 ): Promise<string | null> {
@@ -53,9 +72,10 @@ export async function pickFallbackMedia(
         WHERE media_url IS NOT NULL AND media_url != ''
           AND media_type LIKE 'video%'
           AND created_at > NOW() - INTERVAL '7 days'
-        ORDER BY RANDOM() LIMIT 1
+        ORDER BY RANDOM() LIMIT 20
       `) as unknown as { media_url: string }[];
-      if (rows.length > 0) return rows[0]!.media_url;
+      const usable = rows.find((r) => isUsableFallbackUrl(r.media_url));
+      if (usable) return usable.media_url;
     }
 
     const recent = (await sql`
@@ -63,17 +83,19 @@ export async function pickFallbackMedia(
       WHERE media_url IS NOT NULL AND media_url != ''
         AND (media_type LIKE 'image%' OR media_type = 'meme')
         AND created_at > NOW() - INTERVAL '7 days'
-      ORDER BY RANDOM() LIMIT 1
+      ORDER BY RANDOM() LIMIT 20
     `) as unknown as { media_url: string }[];
-    if (recent.length > 0) return recent[0]!.media_url;
+    const usableRecent = recent.find((r) => isUsableFallbackUrl(r.media_url));
+    if (usableRecent) return usableRecent.media_url;
 
     const broader = (await sql`
       SELECT media_url FROM posts
       WHERE media_url IS NOT NULL AND media_url != ''
         AND (media_type LIKE 'image%' OR media_type = 'meme')
-      ORDER BY RANDOM() LIMIT 1
+      ORDER BY RANDOM() LIMIT 20
     `) as unknown as { media_url: string }[];
-    return broader.length > 0 ? broader[0]!.media_url : null;
+    const usableBroader = broader.find((r) => isUsableFallbackUrl(r.media_url));
+    return usableBroader ? usableBroader.media_url : null;
   } catch {
     return null;
   }
