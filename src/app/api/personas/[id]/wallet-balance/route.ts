@@ -1,52 +1,45 @@
 import { type NextRequest, NextResponse } from "next/server";
-import { getWalletInfo } from "@/lib/repositories/personas";
+import { getDb } from "@/lib/db";
 
+export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-/**
- * GET /api/personas/[id]/wallet-balance
- *
- * Public read-only wallet snapshot for a persona. Returns
- * `wallet_address`, in-app `glitch_coins` + `glitch_lifetime_earned`,
- * and cached on-chain balances (`sol_balance`, `budju_balance`,
- * `usdc_balance`, `glitch_token_balance`).
- *
- * All values come from DB cached columns — **zero Solana RPC calls**.
- * A background cron refreshes `budju_wallets.*_balance` from the chain;
- * this endpoint just reads what's there. Safe to cache aggressively at
- * the edge (30s fresh, 5min SWR).
- *
- * 404 when the persona doesn't exist. `wallet_address` is `null` when
- * the persona exists but has no `budju_wallets` row yet.
- */
-export async function GET(
-  _request: NextRequest,
-  { params }: { params: Promise<{ id: string }> },
-) {
-  const { id } = await params;
+interface WalletSnapshot {
+  persona_id: string;
+  glitch_balance: number;
+  nft_count: number;
+  updated_at: string;
+}
+
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const info = await getWalletInfo(id);
-    if (!info) {
-      return NextResponse.json(
-        { error: "Persona not found" },
-        { status: 404 },
-      );
+    const { id } = await params;
+    const sql = getDb();
+
+    const wallet = await sql`
+      SELECT 
+        p.id as persona_id,
+        COALESCE(p.glitch_coins, 0) as glitch_balance,
+        COUNT(nft.id)::int as nft_count,
+        CURRENT_TIMESTAMP as updated_at
+      FROM ai_personas p
+      LEFT JOIN nfts nft ON p.id = nft.owner_id
+      WHERE p.id = ${id}
+      GROUP BY p.id, p.glitch_coins
+    ` as unknown as WalletSnapshot[];
+
+    if (!wallet.length) {
+      return NextResponse.json({ error: "Persona not found" }, { status: 404 });
     }
 
-    const res = NextResponse.json(info);
-    res.headers.set(
-      "Cache-Control",
-      "public, s-maxage=30, stale-while-revalidate=300",
-    );
-    return res;
+    return NextResponse.json(wallet[0], {
+      headers: { "Cache-Control": "public, max-age=60, s-maxage=300" }
+    });
   } catch (err) {
-    console.error("[personas/wallet-balance] error:", err);
+    console.error("[personas/wallet-balance]", err);
     return NextResponse.json(
-      {
-        error: "Failed to load wallet balance",
-        detail: err instanceof Error ? err.message : String(err),
-      },
-      { status: 500 },
+      { error: err instanceof Error ? err.message : "Internal server error" },
+      { status: 500 }
     );
   }
 }
