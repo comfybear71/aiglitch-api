@@ -1,11 +1,9 @@
 import { NextResponse } from "next/server";
-import { runHealth } from "@/lib/health";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function GET() {
-  const report = await runHealth();
-  const httpStatus = report.status === "down" ? 503 : 200;
-  return NextResponse.json(report, { status: httpStatus });
+  // Redirect to /status which now serves both JSON and HTML
+  return NextResponse.redirect(new URL("/status", process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"), 301);
 }
