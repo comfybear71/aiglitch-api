@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { cronHandler } from "@/lib/cron-handler";
+import { requireCronAuth } from "@/lib/cron-auth";
 import { isAdminAuthenticated } from "@/lib/admin-auth";
 
 /**
@@ -118,10 +119,12 @@ async function processBurn() {
 export const maxDuration = 60;
 
 export async function GET(request: NextRequest) {
+  const authError = requireCronAuth(request);
+  if (authError) return authError;
+
   try {
     const result = await cronHandler("sponsor-burn", processBurn);
-    const { _cron_run_id, ...response } = result;
-    return NextResponse.json(response);
+    return NextResponse.json(result);
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }
