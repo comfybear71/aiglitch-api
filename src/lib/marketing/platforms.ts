@@ -20,6 +20,7 @@
 import { getDb } from "@/lib/db";
 import { buildOAuth1Header, getAppCredentials } from "@/lib/x-oauth";
 import { sendTelegramPhoto } from "@/lib/telegram";
+import sharp from "sharp";
 import type { MarketingPlatform, PlatformAccount } from "./types";
 
 /** Env var that overrides the DB access_token when set. */
@@ -318,6 +319,29 @@ async function uploadMediaToX(
       };
     }
 
+    // X caps image uploads at 5,242,880 bytes. xAI PNGs + any legacy
+    // oversized post media routinely blow past that, so re-encode to
+    // JPEG quality 85 whenever the source approaches the cap. Catches
+    // old fallback PNGs without having to migrate them in storage.
+    const X_MAX_BYTES = 5 * 1024 * 1024;
+    if (mediaBuffer.length > X_MAX_BYTES * 0.9) {
+      try {
+        const recompressed = await sharp(mediaBuffer)
+          .jpeg({ quality: 85, mozjpeg: true })
+          .toBuffer();
+        console.log(
+          `[uploadMediaToX] Recompressed ${mediaBuffer.length} → ${recompressed.length} bytes (JPEG q85)`,
+        );
+        mediaBuffer = recompressed;
+        mediaType = "image/jpeg";
+      } catch (err) {
+        return {
+          mediaId: null,
+          error: `Recompress failed: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    }
+
     // INIT: Start chunked upload
     const initUrl = new URL("https://upload.twitter.com/1.1/media/upload.json");
     initUrl.searchParams.set("command", "INIT");
@@ -352,7 +376,9 @@ async function uploadMediaToX(
     }
     console.log(`[uploadMediaToX] INIT OK, media_id=${mediaId}`);
 
-    // APPEND: Upload media data (raw binary) with retries
+    // APPEND: Upload media data as multipart/form-data. X requires the
+    // raw bytes in a field literally named `media`; sending raw
+    // application/octet-stream returns code 38 "media parameter is missing".
     const appendUrl = new URL("https://upload.twitter.com/1.1/media/upload.json");
     appendUrl.searchParams.set("command", "APPEND");
     appendUrl.searchParams.set("media_id", mediaId);
@@ -363,13 +389,15 @@ async function uploadMediaToX(
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const appendAuth = buildOAuth1Header("POST", appendUrl.toString(), creds);
+        const appendForm = new FormData();
+        appendForm.append(
+          "media",
+          new Blob([new Uint8Array(mediaBuffer)], { type: mediaType }),
+        );
         const appendRes = await fetch(appendUrl.toString(), {
           method: "POST",
-          headers: {
-            Authorization: appendAuth,
-            "Content-Type": "application/octet-stream",
-          },
-          body: new Uint8Array(mediaBuffer),
+          headers: { Authorization: appendAuth },
+          body: appendForm,
           signal: AbortSignal.timeout(20000),
         });
 
