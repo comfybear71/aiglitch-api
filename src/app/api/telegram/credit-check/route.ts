@@ -1,79 +1,135 @@
-/**
- * GET /api/telegram/credit-check  — Vercel cron every 30 min (CRON_SECRET)
- * POST /api/telegram/credit-check — admin manual trigger
- *
- * Checks two credit indicators and sends a Telegram alert if either
- * trips a threshold:
- *
- *   1. AI spend total (ai_cost_log) — alert if cumulative >= $5 USD
- *   2. Sponsor low-balance — alert for each active sponsor with
- *      glitch_balance < LOW_BALANCE_THRESHOLD
- *
- * ai_cost_log query is wrapped in try/catch — the table may not exist
- * in all environments. Defaults to 0 on any error.
- *
- * Silently succeeds (alerted: false) when Telegram is not configured.
- */
-
 import { type NextRequest, NextResponse } from "next/server";
 import { requireCronAuth } from "@/lib/cron-auth";
 import { cronHandler } from "@/lib/cron-handler";
-import { isAdminAuthenticated } from "@/lib/admin-auth";
 import { getDb } from "@/lib/db";
-import { sendMessage, getAdminChannel } from "@/lib/telegram";
+import { env } from "@/lib/bible/env";
+import { sendTelegramMessage } from "@/lib/telegram";
+
+async function checkApiHealth(provider: "anthropic" | "xai"): Promise<{
+  status: "ok" | "warn" | "error";
+  detail: string;
+}> {
+  try {
+    if (provider === "anthropic") {
+      if (!env.ANTHROPIC_API_KEY) return { status: "error", detail: "No API key configured" };
+      const res = await fetch("https://api.anthropic.com/v1/models", {
+        headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (res.ok) return { status: "ok", detail: "Active" };
+      const body = await res.text().catch(() => "");
+      if (res.status === 429 || body.includes("credit") || body.includes("exhausted"))
+        return { status: "error", detail: `Credits exhausted (HTTP ${res.status})` };
+      return { status: "warn", detail: `HTTP ${res.status}` };
+    } else {
+      if (!env.XAI_API_KEY) return { status: "error", detail: "No API key configured" };
+      const res = await fetch("https://api.x.ai/v1/models", {
+        headers: { Authorization: `Bearer ${env.XAI_API_KEY}` },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (res.ok) return { status: "ok", detail: "Active" };
+      const body = await res.text().catch(() => "");
+      if (res.status === 429 || body.includes("credit") || body.includes("exhausted"))
+        return { status: "error", detail: `Credits exhausted (HTTP ${res.status})` };
+      return { status: "warn", detail: `HTTP ${res.status}` };
+    }
+  } catch (e) {
+    return { status: "warn", detail: e instanceof Error ? e.message : "Timeout" };
+  }
+}
+
+async function getMonthlySpend(): Promise<{ anthropic: number; xai: number }> {
+  try {
+    const sql = getDb();
+    const rows = await sql`
+      SELECT provider, COALESCE(SUM(estimated_cost_usd), 0) as total
+      FROM ai_cost_log
+      WHERE created_at >= DATE_TRUNC('month', NOW())
+      GROUP BY provider
+    ` as unknown as { provider: string; total: number }[];
+
+    let anthropic = 0, xai = 0;
+    for (const row of rows) {
+      const cost = Number(row.total);
+      if (row.provider === "claude") anthropic += cost;
+      if (row.provider.startsWith("grok")) xai += cost;
+    }
+    return { anthropic, xai };
+  } catch {
+    return { anthropic: 0, xai: 0 };
+  }
+}
+
+async function checkContentFreshness(): Promise<{ ageMinutes: number | null; stale: boolean }> {
+  try {
+    const sql = getDb();
+    const [row] = await sql`SELECT created_at FROM posts WHERE is_reply_to IS NULL ORDER BY created_at DESC LIMIT 1`;
+    if (!row?.created_at) return { ageMinutes: null, stale: false };
+    const ageMs = Date.now() - new Date(row.created_at).getTime();
+    const ageMinutes = Math.round(ageMs / 60000);
+    return { ageMinutes, stale: ageMinutes > 60 };
+  } catch {
+    return { ageMinutes: null, stale: false };
+  }
+}
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const AI_SPEND_ALERT_USD = 5;
-const LOW_BALANCE_THRESHOLD = 200;
-
 async function runCreditCheck() {
-  const sql = getDb();
+  const results: string[] = [];
+  const [anthropicHealth, xaiHealth, spend, freshness] = await Promise.all([
+    checkApiHealth("anthropic"),
+    checkApiHealth("xai"),
+    getMonthlySpend(),
+    checkContentFreshness(),
+  ]);
 
-  let totalUsd = 0;
-  try {
-    const spendRows = (await sql`
-      SELECT COALESCE(SUM(estimated_usd), 0)::float AS total_usd
-      FROM ai_cost_log
-    `) as unknown as { total_usd: number }[];
-    totalUsd = spendRows[0]?.total_usd ?? 0;
-  } catch {
-    // ai_cost_log may not exist yet — skip spend check
-  }
+  const anthropicBudget = env.ANTHROPIC_MONTHLY_BUDGET ?? null;
+  const xaiBudget = env.XAI_MONTHLY_BUDGET ?? null;
 
-  const lowSponsors = (await sql`
-    SELECT company_name, glitch_balance
-    FROM sponsors
-    WHERE status = 'active' AND glitch_balance < ${LOW_BALANCE_THRESHOLD}
-    ORDER BY glitch_balance ASC
-  `) as unknown as { company_name: string; glitch_balance: number }[];
+  const creditBalances = {
+    anthropic: {
+      budget: anthropicBudget,
+      spent: Math.round(spend.anthropic * 100) / 100,
+      remaining: anthropicBudget != null ? Math.round((anthropicBudget - spend.anthropic) * 100) / 100 : null,
+    },
+    xai: {
+      budget: xaiBudget,
+      spent: Math.round(spend.xai * 100) / 100,
+      remaining: xaiBudget != null ? Math.round((xaiBudget - spend.xai) * 100) / 100 : null,
+    },
+  };
 
   const alerts: string[] = [];
 
-  if (totalUsd >= AI_SPEND_ALERT_USD) {
-    alerts.push(`⚠️ AI spend total: <b>$${totalUsd.toFixed(2)}</b> (threshold $${AI_SPEND_ALERT_USD})`);
+  if (anthropicHealth.status === "error") {
+    alerts.push(`⚠️ <b>Anthropic API:</b> ${anthropicHealth.detail}`);
+  }
+  if (xaiHealth.status === "error") {
+    alerts.push(`⚠️ <b>xAI API:</b> ${xaiHealth.detail}`);
   }
 
-  for (const s of lowSponsors) {
-    alerts.push(`💸 Low balance: <b>${s.company_name}</b> — §${s.glitch_balance} GLITCH remaining`);
+  if (freshness.stale && freshness.ageMinutes != null) {
+    alerts.push(`⚠️ <b>Content stale:</b> Last post ${freshness.ageMinutes}m ago (threshold: 60m)`);
   }
 
-  let alerted = false;
   if (alerts.length > 0) {
-    const channel = getAdminChannel();
-    if (channel) {
-      const text = `🔔 <b>AIG!itch Credit Check</b>\n\n${alerts.join("\n")}`;
-      await sendMessage(channel.token, channel.chatId, text);
-      alerted = true;
-    }
+    const message =
+      `🔔 <b>AIG!itch API Health Alert</b>\n\n` +
+      alerts.join("\n") +
+      `\n\n<b>Budget Status:</b>\n` +
+      `Anthropic: $${creditBalances.anthropic.spent}/${creditBalances.anthropic.budget ?? "∞"}\n` +
+      `xAI: $${creditBalances.xai.spent}/${creditBalances.xai.budget ?? "∞"}`;
+    await sendTelegramMessage(message);
   }
 
   return {
-    total_usd: totalUsd,
-    low_balance_count: lowSponsors.length,
-    alerts: alerts.length,
-    alerted,
+    checked_at: new Date().toISOString(),
+    credit_balances: creditBalances,
+    api_health: { anthropic: anthropicHealth, xai: xaiHealth },
+    content_freshness: freshness,
+    alerts,
   };
 }
 
@@ -83,19 +139,6 @@ export async function GET(request: NextRequest) {
 
   try {
     const result = await cronHandler("telegram-credit-check", runCreditCheck);
-    return NextResponse.json(result);
-  } catch (err) {
-    console.error("[telegram/credit-check] error:", err);
-    return NextResponse.json({ error: "Credit check failed" }, { status: 500 });
-  }
-}
-
-export async function POST(request: NextRequest) {
-  if (!(await isAdminAuthenticated(request))) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-  try {
-    const result = await runCreditCheck();
     return NextResponse.json(result);
   } catch (err) {
     console.error("[telegram/credit-check] error:", err);

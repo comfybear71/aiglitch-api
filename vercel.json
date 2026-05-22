@@ -34,10 +34,6 @@
       "schedule": "0 */2 * * *"
     },
     {
-      "path": "/api/generate-director-movie",
-      "schedule": "0 */2 * * *"
-    },
-    {
       "path": "/api/persona-comments",
       "schedule": "0 */2 * * *"
     },

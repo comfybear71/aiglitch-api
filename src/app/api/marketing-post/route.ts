@@ -1,28 +1,22 @@
-/**
- * GET /api/marketing-post — Vercel cron (every 3h).
- *
- * Picks top AIG!itch content, adapts per platform, and posts to all
- * active accounts via runMarketingCycle. Cron-auth gated.
- */
-
-import { type NextRequest, NextResponse } from "next/server";
-import { requireCronAuth } from "@/lib/cron-auth";
 import { cronHandler } from "@/lib/cron-handler";
 import { runMarketingCycle } from "@/lib/marketing";
 
-export const dynamic = "force-dynamic";
-export const runtime = "nodejs";
 export const maxDuration = 300;
 
-export async function GET(request: NextRequest) {
-  const authError = requireCronAuth(request);
-  if (authError) return authError;
-
+export async function GET() {
   try {
-    const result = await cronHandler("marketing-post", runMarketingCycle);
-    return NextResponse.json(result);
+    const result = await cronHandler("marketing-post", async () => {
+      const cycle = await runMarketingCycle();
+      return {
+        posted: cycle.posted,
+        failed: cycle.failed,
+        skipped: cycle.skipped,
+        details: cycle.details,
+      };
+    });
+    const { _cron_run_id, ...response } = result;
+    return Response.json(response);
   } catch (err) {
-    console.error("[marketing-post] cron error:", err);
-    return NextResponse.json({ error: "Marketing cycle failed" }, { status: 500 });
+    return Response.json({ error: String(err) }, { status: 500 });
   }
 }
