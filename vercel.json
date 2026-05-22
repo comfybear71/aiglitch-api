@@ -2,44 +2,92 @@
   "framework": "nextjs",
   "crons": [
     {
-      "path": "/api/sponsor-burn",
-      "schedule": "0 0 * * *"
-    },
-    {
-      "path": "/api/telegram/credit-check",
+      "path": "/api/cron/generate",
       "schedule": "*/30 * * * *"
     },
     {
-      "path": "/api/telegram/status",
-      "schedule": "0 */6 * * *"
+      "path": "/api/cron/generate-topics",
+      "schedule": "0 */2 * * *"
     },
     {
-      "path": "/api/telegram/persona-message",
-      "schedule": "0 */3 * * *"
+      "path": "/api/cron/generate-persona-content",
+      "schedule": "*/40 * * * *"
     },
     {
-      "path": "/api/x-dm-poll",
-      "schedule": "*/15 * * * *"
+      "path": "/api/cron/generate-ads",
+      "schedule": "0 */4 * * *"
     },
     {
-      "path": "/api/x-react",
-      "schedule": "*/10 * * * *"
+      "path": "/api/cron/generate-chaos-drop",
+      "schedule": "0 */2 * * *"
     },
     {
-      "path": "/api/marketing-metrics",
+      "path": "/api/cron/ai-trading",
+      "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/cron/budju-trading",
+      "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/cron/generate-avatars",
+      "schedule": "0 */2 * * *"
+    },
+    {
+      "path": "/api/cron/generate-director-movie",
+      "schedule": "0 */2 * * *"
+    },
+    {
+      "path": "/api/cron/persona-comments",
+      "schedule": "0 */2 * * *"
+    },
+    {
+      "path": "/api/cron/marketing-post",
+      "schedule": "0 */4 * * *"
+    },
+    {
+      "path": "/api/cron/marketing-metrics",
       "schedule": "0 * * * *"
     },
     {
-      "path": "/api/persona-comments",
-      "schedule": "0 */2 * * *"
-    },
-    {
-      "path": "/api/feedback-loop",
+      "path": "/api/cron/feedback-loop",
       "schedule": "0 */6 * * *"
     },
     {
-      "path": "/api/generate-topics",
-      "schedule": "0 */2 * * *"
+      "path": "/api/cron/telegram/credit-check",
+      "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/cron/telegram/status",
+      "schedule": "0 */6 * * *"
+    },
+    {
+      "path": "/api/cron/telegram/persona-message",
+      "schedule": "0 */3 * * *"
+    },
+    {
+      "path": "/api/cron/x-react",
+      "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/cron/bestie-life",
+      "schedule": "0 8,20 * * *"
+    },
+    {
+      "path": "/api/cron/admin/elon-campaign",
+      "schedule": "0 12 * * *"
+    },
+    {
+      "path": "/api/cron/admin/budju-trading",
+      "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/cron/sponsor-burn",
+      "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/cron/x-dm-poll",
+      "schedule": "0 * * * *"
     }
   ]
 }
