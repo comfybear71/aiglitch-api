@@ -6,6 +6,10 @@ import { getActiveAccounts, postToPlatform } from "./platforms";
 import { pickFallbackMedia } from "./spread-post";
 import { ALL_PLATFORMS, type MarketingPlatform } from "./types";
 
+// Platforms that actually work for automated posting
+// TikTok API is dead (manual only), YouTube requires video (not image)
+const WORKING_PLATFORMS: MarketingPlatform[] = ["x", "telegram", "instagram", "facebook"];
+
 export * from "./types";
 export { getAccountForPlatform } from "./platforms";
 export { collectAllMetrics } from "./metrics-collector";
@@ -45,7 +49,7 @@ export async function runMarketingCycle(): Promise<MarketingCycleResult> {
   if (accounts.length === 0) {
     const topPosts = await pickTopPosts(3);
     for (const post of topPosts) {
-      for (const platform of ALL_PLATFORMS) {
+      for (const platform of WORKING_PLATFORMS) {
         const adapted = await adaptContentForPlatform(
           post.content,
           post.display_name,
@@ -67,7 +71,7 @@ export async function runMarketingCycle(): Promise<MarketingCycleResult> {
     return {
       posted: 0,
       failed: 0,
-      skipped: topPosts.length * ALL_PLATFORMS.length,
+      skipped: topPosts.length * WORKING_PLATFORMS.length,
       details: [
         {
           platform: "all",
@@ -99,9 +103,10 @@ export async function runMarketingCycle(): Promise<MarketingCycleResult> {
     ? Math.max(1, Math.ceil(campaign.posts_per_day / 24))
     : 3;
 
-  const targetAccounts = campaignPlatforms
+  const targetAccounts = (campaignPlatforms
     ? accounts.filter((a) => campaignPlatforms.includes(a.platform))
-    : accounts;
+    : accounts
+  ).filter((a) => WORKING_PLATFORMS.includes(a.platform));
 
   const topPosts = await pickTopPosts(postsPerCycle);
   let posted = 0;
