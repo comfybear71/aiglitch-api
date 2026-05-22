@@ -216,8 +216,10 @@ export async function postToPlatform(
       case "telegram":
         result = await postToTelegram(account, text, mediaUrl);
         break;
-      case "instagram":
       case "facebook":
+        result = await postToFacebook(account, text, mediaUrl);
+        break;
+      case "instagram":
       case "youtube":
         result = {
           success: false,
@@ -242,24 +244,105 @@ export async function postToPlatform(
   }
 }
 
-// ── X poster (text-only — media upload deferred) ────────────────────────
+// ── X poster (with media upload) ────────────────────────────────────────
+
+async function uploadMediaToX(
+  creds: ReturnType<typeof getAppCredentials>,
+  mediaUrl: string,
+): Promise<string | null> {
+  try {
+    // Download media
+    const imgRes = await fetch(mediaUrl);
+    if (!imgRes.ok) return null;
+    const mediaBuffer = Buffer.from(await imgRes.arrayBuffer());
+    const mediaType = imgRes.headers.get("content-type") || "image/jpeg";
+
+    // INIT: Start chunked upload
+    const initUrl = "https://upload.twitter.com/1.1/media/upload.json";
+    const initPayload = new URLSearchParams({
+      command: "INIT",
+      total_bytes: mediaBuffer.length.toString(),
+      media_type: mediaType,
+    });
+
+    const initAuth = buildOAuth1Header("POST", initUrl, creds, initPayload.toString());
+    const initRes = await fetch(initUrl, {
+      method: "POST",
+      headers: {
+        Authorization: initAuth,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: initPayload,
+    });
+
+    if (!initRes.ok) return null;
+    const initData = (await initRes.json()) as { media_id_string?: string };
+    const mediaId = initData.media_id_string;
+    if (!mediaId) return null;
+
+    // APPEND: Upload media data
+    const appendUrl = "https://upload.twitter.com/1.1/media/upload.json";
+    const appendPayload = new URLSearchParams({
+      command: "APPEND",
+      media_id: mediaId,
+      media_data: mediaBuffer.toString("base64"),
+      segment_index: "0",
+    });
+
+    const appendAuth = buildOAuth1Header("POST", appendUrl, creds, appendPayload.toString());
+    const appendRes = await fetch(appendUrl, {
+      method: "POST",
+      headers: {
+        Authorization: appendAuth,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: appendPayload,
+    });
+
+    if (!appendRes.ok) return null;
+
+    // FINALIZE: Complete upload
+    const finalizePayload = new URLSearchParams({
+      command: "FINALIZE",
+      media_id: mediaId,
+    });
+
+    const finalizeAuth = buildOAuth1Header("POST", appendUrl, creds, finalizePayload.toString());
+    const finalizeRes = await fetch(appendUrl, {
+      method: "POST",
+      headers: {
+        Authorization: finalizeAuth,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: finalizePayload,
+    });
+
+    if (!finalizeRes.ok) return null;
+    return mediaId;
+  } catch (err) {
+    console.warn(`[postToX] Media upload failed: ${err instanceof Error ? err.message : err}`);
+    return null;
+  }
+}
 
 async function postToX(
   account: PlatformAccount,
   text: string,
   mediaUrl?: string | null,
 ): Promise<PostResult> {
-  if (mediaUrl) {
-    // Chunked OAuth1 v1.1 media upload (~210 LOC state machine) — DEFERRED.
-    // Caller can still spread the text, but no image/video attaches yet.
-    console.warn(
-      "[postToX] Media URL ignored — chunked upload deferred to follow-up port",
-    );
-  }
-
   const creds = getAppCredentials();
   const tweetUrl = "https://api.twitter.com/2/tweets";
   const payload: Record<string, unknown> = { text };
+
+  // Upload media if present
+  if (mediaUrl && creds) {
+    const mediaId = await uploadMediaToX(creds, mediaUrl);
+    if (mediaId) {
+      payload.media = { media_ids: [mediaId] };
+    } else {
+      console.warn("[postToX] Media upload failed, posting text-only");
+    }
+  }
 
   let authHeader: string;
   if (creds) {
@@ -309,6 +392,65 @@ async function postToX(
   }
 }
 
+// ── Facebook poster ────────────────────────────────────────────────────────
+
+async function postToFacebook(
+  account: PlatformAccount,
+  text: string,
+  mediaUrl?: string | null,
+): Promise<PostResult> {
+  const accessToken = account.access_token;
+  const pageId = account.account_id;
+
+  if (!accessToken || !pageId) {
+    return {
+      success: false,
+      error: "Missing Facebook access token or page ID",
+    };
+  }
+
+  try {
+    const graphUrl = `https://graph.facebook.com/v19.0/${pageId}/feed`;
+    const payload: Record<string, unknown> = {
+      message: text,
+      access_token: accessToken,
+    };
+
+    if (mediaUrl) {
+      payload.picture = mediaUrl;
+      payload.link = mediaUrl;
+    }
+
+    const res = await fetch(graphUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(payload as Record<string, string>).toString(),
+    });
+
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => "(unreadable)");
+      return {
+        success: false,
+        error: `Facebook API ${res.status}: ${errBody.slice(0, 300)}`,
+      };
+    }
+
+    const data = (await res.json()) as { id?: string };
+    const postId = data.id;
+
+    return {
+      success: true,
+      platformPostId: postId,
+      platformUrl: postId ? `https://facebook.com/${postId}` : undefined,
+    };
+  } catch (err) {
+    return {
+      success: false,
+      error: `Facebook error: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
 // ── Telegram poster ─────────────────────────────────────────────────────────
 
 async function postToTelegram(
@@ -327,12 +469,19 @@ async function postToTelegram(
   }
 
   try {
-    const tgApiUrl = `https://api.telegram.org/bot${botToken}/sendMessage`;
+    const endpoint = mediaUrl ? "sendPhoto" : "sendMessage";
+    const tgApiUrl = `https://api.telegram.org/bot${botToken}/${endpoint}`;
     const payload: Record<string, unknown> = {
       chat_id: chatId,
-      text,
       parse_mode: "HTML",
     };
+
+    if (mediaUrl) {
+      payload.photo = mediaUrl;
+      payload.caption = text;
+    } else {
+      payload.text = text;
+    }
 
     const res = await fetch(tgApiUrl, {
       method: "POST",
