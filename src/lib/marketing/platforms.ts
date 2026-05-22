@@ -258,21 +258,17 @@ async function uploadMediaToX(
     const mediaType = imgRes.headers.get("content-type") || "image/jpeg";
 
     // INIT: Start chunked upload
-    const initUrl = "https://upload.twitter.com/1.1/media/upload.json";
-    const initPayload = new URLSearchParams({
-      command: "INIT",
-      total_bytes: mediaBuffer.length.toString(),
-      media_type: mediaType,
-    });
+    const initUrl = new URL("https://upload.twitter.com/1.1/media/upload.json");
+    initUrl.searchParams.set("command", "INIT");
+    initUrl.searchParams.set("total_bytes", mediaBuffer.length.toString());
+    initUrl.searchParams.set("media_type", mediaType);
 
-    const initAuth = buildOAuth1Header("POST", initUrl, creds, initPayload.toString());
-    const initRes = await fetch(initUrl, {
+    const initAuth = buildOAuth1Header("POST", initUrl.toString(), creds);
+    const initRes = await fetch(initUrl.toString(), {
       method: "POST",
       headers: {
         Authorization: initAuth,
-        "Content-Type": "application/x-www-form-urlencoded",
       },
-      body: initPayload,
     });
 
     if (!initRes.ok) return null;
@@ -281,40 +277,39 @@ async function uploadMediaToX(
     if (!mediaId) return null;
 
     // APPEND: Upload media data
-    const appendUrl = "https://upload.twitter.com/1.1/media/upload.json";
-    const appendPayload = new URLSearchParams({
-      command: "APPEND",
-      media_id: mediaId,
-      media_data: mediaBuffer.toString("base64"),
-      segment_index: "0",
-    });
+    const appendUrl = new URL("https://upload.twitter.com/1.1/media/upload.json");
+    appendUrl.searchParams.set("command", "APPEND");
+    appendUrl.searchParams.set("media_id", mediaId);
+    appendUrl.searchParams.set("segment_index", "0");
 
-    const appendAuth = buildOAuth1Header("POST", appendUrl, creds, appendPayload.toString());
-    const appendRes = await fetch(appendUrl, {
+    const appendFormData = new FormData();
+    appendFormData.append("command", "APPEND");
+    appendFormData.append("media_id", mediaId);
+    appendFormData.append("media_data", mediaBuffer.toString("base64"));
+    appendFormData.append("segment_index", "0");
+
+    const appendAuth = buildOAuth1Header("POST", "https://upload.twitter.com/1.1/media/upload.json", creds);
+    const appendRes = await fetch("https://upload.twitter.com/1.1/media/upload.json", {
       method: "POST",
       headers: {
         Authorization: appendAuth,
-        "Content-Type": "application/x-www-form-urlencoded",
       },
-      body: appendPayload,
+      body: appendFormData,
     });
 
     if (!appendRes.ok) return null;
 
     // FINALIZE: Complete upload
-    const finalizePayload = new URLSearchParams({
-      command: "FINALIZE",
-      media_id: mediaId,
-    });
+    const finalizeUrl = new URL("https://upload.twitter.com/1.1/media/upload.json");
+    finalizeUrl.searchParams.set("command", "FINALIZE");
+    finalizeUrl.searchParams.set("media_id", mediaId);
 
-    const finalizeAuth = buildOAuth1Header("POST", appendUrl, creds, finalizePayload.toString());
-    const finalizeRes = await fetch(appendUrl, {
+    const finalizeAuth = buildOAuth1Header("POST", finalizeUrl.toString(), creds);
+    const finalizeRes = await fetch(finalizeUrl.toString(), {
       method: "POST",
       headers: {
         Authorization: finalizeAuth,
-        "Content-Type": "application/x-www-form-urlencoded",
       },
-      body: finalizePayload,
     });
 
     if (!finalizeRes.ok) return null;
