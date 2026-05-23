@@ -77,38 +77,57 @@ export async function sendTelegramPhoto(
   photoUrl: string,
   caption?: string,
 ): Promise<TelegramResult> {
-  try {
-    const file = await downloadAsFile(photoUrl, "photo.jpg");
-    if (!file) {
-      return { ok: false, error: "Failed to download image for Telegram upload" };
-    }
-
-    const form = new FormData();
-    form.append("chat_id", String(chatId));
-    form.append("photo", file);
-    if (caption) {
-      form.append("caption", caption);
-      form.append("parse_mode", "HTML");
-    }
-
-    const res = await fetch(`${TELEGRAM_API}/bot${botToken}/sendPhoto`, {
-      method: "POST",
-      body: form,
-      // Bumped from 30s → 60s after recurring chaos-drop spread
-      // timeouts. Vercel cold start + blob download + multipart upload
-      // can exceed 30s under load.
-      signal: AbortSignal.timeout(60_000),
-    });
-    const data = (await res.json()) as {
-      ok: boolean;
-      description?: string;
-      result?: { message_id?: number };
-    };
-    if (!data.ok) return { ok: false, error: data.description };
-    return { ok: true, messageId: data.result?.message_id };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  const file = await downloadAsFile(photoUrl, "photo.jpg");
+  if (!file) {
+    return { ok: false, error: "Failed to download image for Telegram upload" };
   }
+
+  // Up to 3 attempts on transient failures. The 60s timeout proved
+  // insufficient when chained with Vercel cold-start latency — we
+  // were still seeing single-occurrence "operation was aborted due
+  // to timeout" rows in the dashboard. Retrying with the same file
+  // is safe; Telegram dedupes nothing here and the cron's idempotent
+  // surface accepts the resend.
+  let lastError = "Unknown error";
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const form = new FormData();
+      form.append("chat_id", String(chatId));
+      form.append("photo", file);
+      if (caption) {
+        form.append("caption", caption);
+        form.append("parse_mode", "HTML");
+      }
+
+      const res = await fetch(`${TELEGRAM_API}/bot${botToken}/sendPhoto`, {
+        method: "POST",
+        body: form,
+        signal: AbortSignal.timeout(60_000),
+      });
+      const data = (await res.json()) as {
+        ok: boolean;
+        description?: string;
+        result?: { message_id?: number };
+      };
+      if (data.ok) return { ok: true, messageId: data.result?.message_id };
+      lastError = data.description ?? "Telegram returned ok=false";
+      // Telegram-side rejection (rate limit, bad chat, etc.) — don't
+      // retry, just surface the message.
+      if (!/timeout|timed out|operation was aborted/i.test(lastError)) {
+        return { ok: false, error: lastError };
+      }
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+      if (!/timeout|timed out|operation was aborted/i.test(lastError)) {
+        return { ok: false, error: lastError };
+      }
+    }
+    // Backoff: 1s, 2s before next try
+    if (attempt < 3) {
+      await new Promise((r) => setTimeout(r, 1000 * attempt));
+    }
+  }
+  return { ok: false, error: `${lastError} (3 attempts)` };
 }
 
 /**

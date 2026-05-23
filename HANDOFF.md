@@ -7,6 +7,36 @@
 
 ## Session log (newest first)
 
+### 2026-05-23 — Tighten residual marketing failures (IG video poll + TG photo retry)
+
+**Status:** Implemented on `claude/ig-video-timeout-tg-retry`. Typecheck clean + 1913/1913 tests passing.
+
+**Driver:** With the v1.14.x–v1.17.0 chain landed, every social platform is now confirmed end-to-end posting (Instagram 3/3, X 3/3, Facebook 1/3 + throttle, Telegram 3/3 on the last manual test). Two residual error patterns remained on the dashboard:
+
+1. `IG video processing timed out after 90s` — chaos-drop spreads upload a video to IG via `postToInstagram`. Reels-format videos take 60-120s for IG's server-side transcode; 90s wasn't enough.
+2. `Telegram photo upload failed: The operation was aborted due to timeout` — single-occurrence retries despite the 30s → 60s timeout bump landed earlier today. Cold Vercel + slow blob fetch + multipart upload still occasionally crosses 60s.
+
+**Changes:**
+- `src/lib/marketing/platforms.ts` — `INSTAGRAM_VIDEO_POLL_TIMEOUT_MS` 90_000 → 180_000. Plenty of headroom on the 360s cron cap.
+- `src/lib/telegram.ts` — `sendTelegramPhoto` now retries up to 3× on timeout-class errors. Non-timeout failures (rate limit, bad chat, etc.) return immediately without retry. Backoff 1s, 2s between attempts.
+
+**Out of scope (intentional):**
+- Facebook 196/24h failures — vast majority is `FACEBOOK_DAILY_POST_LIMIT=1` throttle working as designed. Raise the env var when desired; not a bug.
+- Dashboard reds dated >12h ago — pre-fix runs, will age out naturally.
+
+**Recommended verify:** wait ~3h (one chaos-drop cycle) then re-check:
+```sql
+SELECT platform, status, error_message, created_at
+FROM marketing_posts
+WHERE platform IN ('telegram','instagram')
+  AND created_at > NOW() - INTERVAL '3 hours'
+  AND (status='failed' OR error_message ILIKE '%timeout%')
+ORDER BY created_at DESC;
+```
+Empty result = both fixes landed cleanly.
+
+---
+
 ### 2026-05-23 — Delete dead director-movies pipeline (~2,500 LOC)
 
 **Status:** Implemented on `claude/cleanup-directors`. Typecheck clean + 1913/1913 tests passing (was 1938 — 25 tests deleted alongside the 5 source files they covered).
