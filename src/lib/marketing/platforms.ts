@@ -671,6 +671,23 @@ async function postToX(
 
 // ── Facebook poster ────────────────────────────────────────────────────────
 
+// ── Facebook poster ────────────────────────────────────────────────────────
+//
+// Endpoint routing matters: Facebook policy (#100 "Only owners of the URL
+// have the ability to specify the picture, name, thumbnail or description
+// params") blocks /feed with a `picture` param when the URL is on a
+// domain you don't own. The correct flow:
+//
+//   image  →  POST /{page}/photos?url=<media_url>&message=<text>
+//   video  →  POST /{page}/videos?file_url=<media_url>&description=<text>
+//   text   →  POST /{page}/feed?message=<text>
+//
+// Daily throttle: FACEBOOK_DAILY_POST_LIMIT env var controls how many
+// FB posts are allowed per rolling 24h window. Default = 1 (safe-by-
+// default after the May 2026 page-suspension incident — too many posts
+// triggers Meta's spam classifier and demotes reach). Set to 0 to
+// disable. Throttle check uses a single COUNT(*) on marketing_posts.
+
 async function postToFacebook(
   account: PlatformAccount,
   text: string,
@@ -686,22 +703,62 @@ async function postToFacebook(
     };
   }
 
-  try {
-    const graphUrl = `https://graph.facebook.com/v19.0/${pageId}/feed`;
-    const payload: Record<string, unknown> = {
-      message: text,
-      access_token: accessToken,
-    };
-
-    if (mediaUrl) {
-      payload.picture = mediaUrl;
-      payload.link = mediaUrl;
+  // Daily throttle.
+  const limitRaw = process.env.FACEBOOK_DAILY_POST_LIMIT;
+  const dailyLimit = limitRaw === undefined ? 1 : Number.parseInt(limitRaw, 10);
+  if (Number.isFinite(dailyLimit) && dailyLimit > 0) {
+    try {
+      const sql = getDb();
+      const rows = (await sql`
+        SELECT COUNT(*)::int AS count
+        FROM marketing_posts
+        WHERE platform = 'facebook'
+          AND status = 'posted'
+          AND posted_at > NOW() - INTERVAL '24 hours'
+      `) as unknown as { count: number }[];
+      const recentCount = rows[0]?.count ?? 0;
+      if (recentCount >= dailyLimit) {
+        console.warn(
+          `[facebook] THROTTLED: ${recentCount}/${dailyLimit} posts in last 24h — skipping. Raise FACEBOOK_DAILY_POST_LIMIT to lift.`,
+        );
+        return {
+          success: false,
+          error: `Facebook daily post limit reached (${recentCount}/${dailyLimit} in last 24h)`,
+        };
+      }
+    } catch (err) {
+      // Throttle check failed — better to over-post than be silently blocked
+      // by a transient DB issue.
+      console.error("[facebook] Throttle check failed, allowing post:", err);
     }
+  }
 
-    const res = await fetch(graphUrl, {
+  // Route to the right Graph endpoint based on media type.
+  const isVideo =
+    !!mediaUrl && (mediaUrl.includes(".mp4") || mediaUrl.toLowerCase().includes("video"));
+  const graphBase = `https://graph.facebook.com/v21.0/${pageId}`;
+  let endpoint: string;
+  const params: Record<string, string> = { access_token: accessToken };
+
+  if (mediaUrl && isVideo) {
+    endpoint = `${graphBase}/videos`;
+    params.file_url = mediaUrl;
+    params.description = text;
+  } else if (mediaUrl) {
+    endpoint = `${graphBase}/photos`;
+    params.url = mediaUrl;
+    params.message = text;
+  } else {
+    endpoint = `${graphBase}/feed`;
+    params.message = text;
+  }
+
+  try {
+    const res = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams(payload as Record<string, string>).toString(),
+      body: new URLSearchParams(params).toString(),
+      signal: AbortSignal.timeout(60_000),
     });
 
     if (!res.ok) {
@@ -712,14 +769,25 @@ async function postToFacebook(
       };
     }
 
-    const data = (await res.json()) as { id?: string };
-    const postId = data.id;
+    const data = (await res.json()) as { id?: string; post_id?: string };
+    const postId = data.post_id ?? data.id;
 
-    return {
-      success: true,
-      platformPostId: postId,
-      platformUrl: postId ? `https://facebook.com/${postId}` : undefined,
-    };
+    // Build the right public URL for the post type.
+    let platformUrl: string | undefined;
+    if (postId) {
+      if (isVideo) {
+        platformUrl = `https://www.facebook.com/${pageId}/videos/${postId.replace(`${pageId}_`, "")}`;
+      } else if (mediaUrl) {
+        platformUrl = `https://www.facebook.com/photo/?fbid=${postId.replace(`${pageId}_`, "")}`;
+      } else if (postId.includes("_")) {
+        const [pgId, pId] = postId.split("_");
+        platformUrl = `https://www.facebook.com/${pgId}/posts/${pId}`;
+      } else {
+        platformUrl = `https://facebook.com/${postId}`;
+      }
+    }
+
+    return { success: true, platformPostId: postId, platformUrl };
   } catch (err) {
     return {
       success: false,
