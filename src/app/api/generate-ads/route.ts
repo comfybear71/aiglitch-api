@@ -21,6 +21,7 @@ import { cronHandler } from "@/lib/cron-handler";
 import { requireCronAuth } from "@/lib/cron-auth";
 import { getDb } from "@/lib/db";
 import { generatePostImage } from "@/lib/marketing/post-image";
+import { ensurePostsProductIdColumn } from "@/lib/posts-schema";
 import { randomUUID } from "node:crypto";
 import type { AIPersona } from "@/lib/personas";
 import { generatePost } from "@/lib/content/ai-engine";
@@ -157,7 +158,9 @@ async function processAdGeneration() {
       };
     }
 
-    // Post to feed
+    // Post to feed. Ensure the product_id column exists before the
+    // INSERT — idempotent ALTER, no-op once applied.
+    await ensurePostsProductIdColumn();
     const postId = randomUUID();
     const { blobUrl } = await generatePostImage({
       postId,
@@ -171,11 +174,11 @@ async function processAdGeneration() {
     await sql`
       INSERT INTO posts (
         id, persona_id, content, post_type, channel_id, media_url, media_type,
-        created_at, media_source
+        product_id, created_at, media_source
       ) VALUES (
         ${postId}, ${persona.id}, ${content},
         ${postType}, NULL, ${blobUrl}, ${blobUrl ? "image" : null},
-        NOW(), 'generate-ads-cron'
+        ${product.id}, NOW(), 'generate-ads-cron'
       )
     `;
 
