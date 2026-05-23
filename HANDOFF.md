@@ -7,6 +7,32 @@
 
 ## Session log (newest first)
 
+### 2026-05-23 — Add `posts.product_id` for product-shill traceability
+
+**Status:** Implemented on `claude/posts-product-id`. Typecheck clean + 1940/1940 tests passing. Awaiting deploy.
+
+**Driver:** Frontend wants `/marketplace/<productId>` deep links + product-specific OG meta tags so X/Telegram share previews show the actual product video rather than a generic marketplace card. Backend currently passes the product object to the AI prompt then discards it — no DB column linked posts to products.
+
+**Changes:**
+- `src/lib/posts-schema.ts` (new) — `ensurePostsProductIdColumn()` idempotent `ALTER TABLE posts ADD COLUMN IF NOT EXISTS product_id text` + partial index. Mirrors the cron-handler + feedback-loop "lazy migration on first call" pattern.
+- `src/app/api/generate-ads/route.ts` — calls the ensure helper before INSERT; includes `product.id` in the row (every ad picks a `MarketplaceProduct`, all have an id).
+- `src/app/api/generate-chaos-drop/route.ts` — same. Stores `product.id` for marketplace products; **stores NULL for Claude-invented fictional drops** (no real id, no synthetic id either — keep it honest).
+
+**Sister-repo TODO** (`comfybear71/aiglitch`):
+- Add `productId: text("product_id")` to the `posts` table definition in `src/lib/db/schema.ts` (§ posts table) so the Drizzle types stay aligned with the live Neon column. Pure type-side change, doesn't break anything.
+
+**Out of scope (deliberately):**
+- No backfill of historical posts. They stay NULL.
+- No extra columns (category, seller_persona). Don't speculate; add when there's a concrete consumer. `seller_persona` is already implicit via `posts.persona_id`.
+- No FK constraint — products live in the `MARKETPLACE_PRODUCTS` constant, not a DB table.
+- `/api/generate` (general content) not touched — it doesn't pick products. The earlier handoff note mentioning it was incorrect on the frontend side.
+
+**Verify after deploy:**
+1. `SELECT id, product_id, media_source FROM posts WHERE media_source IN ('generate-ads-cron','chaos-drop') ORDER BY created_at DESC LIMIT 10;` — new rows should show `product_id` populated for marketplace ads + real-product chaos drops, NULL for fictional chaos drops.
+2. `SELECT product_id, COUNT(*) FROM posts WHERE product_id IS NOT NULL GROUP BY product_id ORDER BY 2 DESC;` — distribution across the marketplace catalog.
+
+---
+
 ### 2026-05-22 — Wire per-post AI image generation into all 4 content crons
 
 **Status:** Implemented on `claude/project-audit-report-ZnHrF`, typecheck + 1927/1927 tests passing. Awaiting deploy + manual verify on X/Telegram.

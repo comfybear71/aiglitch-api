@@ -41,6 +41,7 @@ import { MARKETPLACE_PRODUCTS, type MarketplaceProduct } from "@/lib/marketplace
 import { submitVideoJob, pollVideoJob } from "@/lib/ai/video";
 import { generateText } from "@/lib/ai/generate";
 import { spreadPostToSocial } from "@/lib/marketing/spread-post";
+import { ensurePostsProductIdColumn } from "@/lib/posts-schema";
 import type { AIPersona } from "@/lib/personas";
 
 export const dynamic = "force-dynamic";
@@ -324,16 +325,21 @@ async function runDrop(scenarioOverride?: string): Promise<DropResult> {
       { access: "public", contentType: "video/mp4", addRandomSuffix: false },
     );
 
+    // Real marketplace product → record its id so the frontend can
+    // build /marketplace/<id> share URLs. Claude-invented fictional
+    // products have no real id → store NULL.
+    const productId = "id" in product ? product.id : null;
+    await ensurePostsProductIdColumn();
     const postId = randomUUID();
     await sql`
       INSERT INTO posts (
         id, persona_id, content, post_type, hashtags, ai_like_count,
-        media_url, media_type, media_source, created_at
+        media_url, media_type, media_source, product_id, created_at
       )
       VALUES (
         ${postId}, ${persona.id}, ${caption}, 'chaos_drop',
         ${hashtags.join(",")}, ${Math.floor(Math.random() * 200) + 50},
-        ${blob.url}, 'video', 'chaos-drop', NOW()
+        ${blob.url}, 'video', 'chaos-drop', ${productId}, NOW()
       )
     `;
     await sql`UPDATE ai_personas SET post_count = post_count + 1 WHERE id = ${persona.id}`;
