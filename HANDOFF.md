@@ -7,6 +7,35 @@
 
 ## Session log (newest first)
 
+### 2026-05-23 — Delete dead director-movies pipeline (~2,500 LOC)
+
+**Status:** Implemented on `claude/cleanup-directors`. Typecheck clean + 1913/1913 tests passing (was 1938 — 25 tests deleted alongside the 5 source files they covered).
+
+**Driver:** Confirmed with user that the legacy directors UI is deprecated — channels admin page handles movie/Studios content generation now, going through the newer `ai-engine.generateMovieTrailers` pipeline. The elaborate `director-movies` chain (pipeline, screenplay, constants, utils + slim directors registry + the admin/screenplay route I just ported) had zero live consumers. Pure dead-code deletion.
+
+**Deleted (11 files):**
+- `src/lib/content/director-pipeline.ts` + `.test.ts` — `submitDirectorFilm`, multi_clip_jobs scheduler. No callers.
+- `src/lib/content/director-screenplay.ts` + `.test.ts` — `generateDirectorScreenplay` scene-prompt builder. Only called by the now-deleted admin/screenplay route.
+- `src/lib/content/director-constants.ts` + `.test.ts` — full DIRECTOR profiles (style, visualOverride etc.) + CHANNEL_VISUAL_STYLE + CHANNEL_BRANDING + CHANNEL_TITLE_PREFIX. The CHANNEL_TITLE_PREFIX consumer (admin/channels/route.ts) had already inlined its own local copy.
+- `src/lib/content/director-utils.ts` + `.test.ts` — MovieBible/DirectorScreenplay/DirectorScene types + pickGenre/pickDirector/castActors/buildContinuityPrompt.
+- `src/lib/content/directors.ts` — slim DIRECTORS registry. Zero importers.
+- `src/app/api/admin/screenplay/route.ts` + `.test.ts` — ported earlier today (v1.13.0) before user confirmed directors were deprecated. Cold endpoint — no admin UI calls it.
+
+**Frontend follow-up needed:**
+- `aiglitch/next.config.ts` has a `beforeFiles` entry for `/api/admin/screenplay` (added when v1.13.0 shipped). Remove it so `aiglitch.app/api/admin/screenplay` falls through to the legacy 404 instead of the new-backend 404. Tiny prompt to follow.
+
+**Stale comments left in place (separate cleanup, not blocking):**
+- `src/app/api/admin/channels/route.ts` mentions `director-movies` lib in a doc comment
+- `src/app/api/admin/prompts/route.ts` placeholder text mentions ports that never happened
+- `src/app/api/admin/director-prompts/route.ts` mentions the legacy `director-movies` import path
+- `src/lib/ai/xai-extras.ts` references the dead `director-movies`
+- `src/lib/media/multi-clip.ts` references `director-movies pipeline`
+- `src/lib/migration/backlog.ts` lists `director-movies-lib` as a blocker for routes that will never be ported (entire blocker concept is moot now)
+
+These don't affect any logic — pure documentation rot. Worth a dedicated cleanup PR when convenient.
+
+---
+
 ### 2026-05-23 — Add `posts.product_id` for product-shill traceability
 
 **Status:** Implemented on `claude/posts-product-id`. Typecheck clean + 1940/1940 tests passing. Awaiting deploy.
