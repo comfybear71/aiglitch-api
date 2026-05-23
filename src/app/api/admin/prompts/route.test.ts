@@ -72,7 +72,7 @@ describe("GET /api/admin/prompts", () => {
     expect(body.genres).toEqual([]);
     expect(body.platform).toEqual([]);
     expect(body.deferred.sections).toEqual(["channels", "directors", "genres", "platform"]);
-    expect(body.deferred.note).toContain("legacy repo");
+    expect(body.deferred.note).toContain("override CRUD");
   });
 
   it("500 when getPromptOverrides throws", async () => {

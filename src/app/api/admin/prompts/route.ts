@@ -2,23 +2,19 @@
  * Admin prompt override editor.
  *
  *   GET  — lists every prompt override currently in DB, plus an empty
- *          `deferred` block listing the static catalogs (channels,
- *          directors, genres) that aren't available yet because their
- *          source data (`@/lib/bible/constants`, `@/lib/content/director-movies`,
- *          `@/lib/media/multi-clip`) still lives in the legacy repo.
- *
- *          Legacy returned a fully-assembled catalog merging static
- *          defaults with DB overrides. We defer that until those libs
- *          port over — the override CRUD alone is the useful half.
+ *          `deferred` block where the static catalog (channels, genres)
+ *          dashboard view used to plug in. The catalog merge isn't
+ *          implemented in this repo — the override CRUD alone is the
+ *          useful half. The deferred block stays so the existing UI
+ *          contract doesn't break.
  *
  *   POST — two actions:
  *     { action: "save",  category, key, label?, value } — upsert
  *     { action: "reset", category, key }                — delete
  *
- *   The same `category`/`key` pairs that will eventually back the
- *   static catalog already work today — admin can save an override
- *   by any key and downstream `getPrompt(cat, key, default)` calls
- *   will pick it up immediately.
+ *   `getPrompt(cat, key, default)` callers downstream pick up any
+ *   (category, key) saved here regardless of whether a static catalog
+ *   exists for that pair.
  */
 
 import { type NextRequest, NextResponse } from "next/server";
@@ -33,7 +29,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const DEFERRED_NOTE =
-  "Static catalogs (channels, directors, genres) haven't been ported from the legacy repo yet. The override CRUD below works today — save or reset any (category, key) pair and `getPrompt()` callers will pick it up. The dashboard's grouped catalog view lands when @/lib/bible/constants, @/lib/content/director-movies, and @/lib/media/multi-clip port over.";
+  "The override CRUD below works today — save or reset any (category, key) pair and `getPrompt()` callers will pick it up. The dashboard's grouped static-catalog view (channels, genres) is not currently rendered from this endpoint.";
 
 export async function GET(request: NextRequest) {
   if (!(await isAdminAuthenticated(request))) {

@@ -15,11 +15,12 @@
  *            director_movies; otherwise deletes from
  *            director_movie_prompts.
  *
- *   DIRECTORS lookup (legacy: `@/lib/content/director-movies`) is
- *   stubbed to `{}` here until that content lib ports over. Effect:
- *   `?director=` currently no-ops on style injection — the rest of
- *   the generator (title, concept, twist, genre) works identically.
- *   One-line swap when the lib lands.
+ *   DIRECTORS lookup is stubbed to `{}` here — the legacy director-
+ *   movies pipeline has been deprecated (channels admin handles
+ *   movie/Studios content generation now). Effect: `?director=`
+ *   no-ops on style injection. Title/concept/twist/genre generation
+ *   still works identically. Drop this stub when the surrounding
+ *   prompt-overrides surface is itself refactored or retired.
  */
 
 import { randomUUID } from "node:crypto";

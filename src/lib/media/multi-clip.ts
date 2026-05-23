@@ -654,8 +654,9 @@ interface PollResult extends Record<string, unknown> {
  * No-op when the multi_clip tables don't exist yet (fresh env).
  *
  * Director-movie jobs (linked via `director_movies.multi_clip_job_id`)
- * are excluded so the director-movies pipeline can do its own
- * triple-post stitching.
+ * are excluded — that table is a holdover from the deprecated
+ * director-movies pipeline and rows there should not be processed
+ * by this generic stitcher.
  */
 export async function pollMultiClipJobs(): Promise<PollResult> {
   const result: PollResult = { polled: 0, completed: 0, stitched: [] };

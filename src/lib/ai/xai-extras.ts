@@ -8,19 +8,19 @@
  * (long-form Grok with reasoning model selection, async video jobs) lives
  * in this file.
  *
- * Consumers (incoming ports):
- *   - `lib/content/director-movies` → `generateWithGrok` + `submitVideoJob`
- *   - `lib/content/elon-campaign`   → `submitVideoJob`
- *   - admin video routes            → `submitVideoJob`
+ * Consumers (current):
+ *   - `lib/content/ai-engine` → `generateWithGrok` + `submitVideoJob`
+ *     (movie trailers + breaking-news video pipeline)
+ *   - `lib/chaos-drops` driver in `/api/generate-chaos-drop` → `submitVideoJob`
+ *   - admin video routes (extend-video, animate-persona, etc.) → `submitVideoJob`
  *
  * Deferrals:
  *   - Kie.ai fallback for video submit (legacy `tryKieFallback`) — needs
  *     `lib/media/free-video-gen` ported first. For now, when Grok auth or
  *     network fails, we return `provider: "none"` with the error and let
  *     the caller decide what to do.
- *   - Image generation, multi-agent conversation, video extension — not
- *     director-movies-critical; ports separately when those consumers
- *     migrate over.
+ *   - Image generation, multi-agent conversation, video extension —
+ *     ported separately when their specific consumers need them.
  */
 
 import { canProceed, recordFailure, recordSuccess } from "@/lib/ai/circuit-breaker";

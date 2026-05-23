@@ -12,7 +12,6 @@ describe("PENDING_ROUTES catalogue", () => {
       "phase-8",
       "phase-9",
       "marketing-lib",
-      "director-movies-lib",
       "telegram-bot-engine",
       "permanent-legacy",
       "external-dep",

@@ -26,8 +26,8 @@
  *   • Dropped `syncChannelsFromConstants` sync-on-GET (depended on
  *     the unported `CHANNELS` seed constant from the bible).
  *     Channels already persist in the shared Neon instance.
- *   • `CHANNEL_TITLE_PREFIX` inlined (24 entries) instead of pulled
- *     from the unported `director-movies` lib.
+ *   • `CHANNEL_TITLE_PREFIX` inlined (24 entries) — was previously
+ *     in the now-deleted `director-movies` lib.
  *   • `ensureDbReady` dropped; schema assumed live.
  *   • Added admin-auth to POST/PATCH/DELETE (legacy had none on
  *     those; only GET was gated). Matches CLAUDE.md "admin routes

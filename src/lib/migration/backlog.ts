@@ -14,7 +14,6 @@ export type Blocker =
   | "phase-8" // Trading/wallet/Solana — explicit greenlight per CLAUDE.md #6
   | "phase-9" // OAuth callbacks — last per CLAUDE.md #7
   | "marketing-lib" // Needs @/lib/marketing/* port (3036 lines)
-  | "director-movies-lib" // Needs @/lib/content/director-movies port (1626 lines)
   | "telegram-bot-engine" // Needs persona-mode + content-handler libs
   | "permanent-legacy" // Stays on legacy domain by design
   | "external-dep" // Needs new npm dep
@@ -303,62 +302,6 @@ export const PENDING_ROUTES: PendingRoute[] = [
     prereqs: ["@/lib/marketing/*"],
   },
 
-  // ── Director-movies lib needed ─────────────────────────────
-  {
-    path: "/api/admin/screenplay",
-    methods: ["GET", "POST"],
-    blocker: "director-movies-lib",
-    sessions: 1,
-    complexity: "medium",
-    notes: "Standalone screenplay generation tool.",
-    prereqs: ["@/lib/content/director-movies"],
-  },
-  {
-    path: "/api/admin/generate-news",
-    methods: ["POST"],
-    blocker: "director-movies-lib",
-    sessions: 1,
-    complexity: "medium",
-    notes: "Breaking-news video generator.",
-    prereqs: ["@/lib/content/director-movies"],
-  },
-  {
-    path: "/api/admin/generate-channel-video",
-    methods: ["POST"],
-    blocker: "director-movies-lib",
-    sessions: 1,
-    complexity: "large",
-    notes: "Multi-clip channel video.",
-    prereqs: ["@/lib/content/director-movies", "@/lib/media/multi-clip"],
-  },
-  {
-    path: "/api/admin/channels/generate-content",
-    methods: ["POST"],
-    blocker: "director-movies-lib",
-    sessions: 1,
-    complexity: "large",
-    notes: "Full multi-scene channel video generation.",
-    prereqs: ["@/lib/content/director-movies"],
-  },
-  {
-    path: "/api/generate-director-movie",
-    methods: ["GET", "POST"],
-    blocker: "director-movies-lib",
-    sessions: 1,
-    complexity: "large",
-    notes: "Cron — director-led movie production pipeline.",
-    prereqs: ["@/lib/content/director-movies"],
-  },
-  {
-    path: "/api/generate-persona-content",
-    methods: ["GET", "POST"],
-    blocker: "director-movies-lib",
-    sessions: 1,
-    complexity: "large",
-    notes:
-      "Persona content generation — multi-clip + director-movie polling.",
-    prereqs: ["@/lib/content/director-movies", "@/lib/media/multi-clip"],
-  },
   // ── Telegram bot engine ────────────────────────────────────
   // (All telegram bot engine routes ported — this section is empty.)
 
@@ -381,21 +324,6 @@ export const PENDING_ROUTES: PendingRoute[] = [
     notes: "Same as image-proxy — IG can't fetch Blob videos.",
   },
 
-  // ── Chunky single-session ──────────────────────────────────
-  {
-    path: "/api/admin/elon-campaign",
-    methods: ["GET", "POST"],
-    blocker: "chunky-single",
-    sessions: 2,
-    complexity: "huge",
-    notes:
-      "Daily Elon-bait campaign (711 lines). Needs ELON_CAMPAIGN constant, mp4-concat lib, multi-clip lib, marketing/spread-post. Chunky even with deferrals.",
-    prereqs: [
-      "@/lib/bible/constants#ELON_CAMPAIGN",
-      "@/lib/media/mp4-concat",
-      "@/lib/media/multi-clip",
-    ],
-  },
 ];
 
 /** Group pending routes by their blocker for the dashboard. */
@@ -411,7 +339,6 @@ export const BLOCKER_LABELS: Record<Blocker, string> = {
   "phase-8": "Phase 8 — Trading / Wallet / Solana (needs greenlight)",
   "phase-9": "Phase 9 — OAuth callbacks (last per migration plan)",
   "marketing-lib": "Marketing library port required (3036 lines)",
-  "director-movies-lib": "Director-movies library port required (1626 lines)",
   "telegram-bot-engine": "Telegram bot engine port required",
   "permanent-legacy": "Permanent legacy — stays on aiglitch.app by design",
   "external-dep": "Needs new npm dependency",
