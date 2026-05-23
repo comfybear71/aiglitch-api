@@ -226,14 +226,17 @@ describe("postToPlatform — X", () => {
 });
 
 describe("postToPlatform — deferred platforms", () => {
-  it("returns success:false with deferral message for instagram", async () => {
+  it("instagram rejects when no media URL is supplied", async () => {
+    // Instagram is now wired through postToInstagram; it requires a
+    // media URL up-front and rejects text-only attempts before ever
+    // touching the Graph API.
     const result: PostResult = await postToPlatform(
       "instagram",
       { ...X_ACCOUNT, platform: "instagram" },
       "x",
     );
     expect(result.success).toBe(false);
-    expect(result.error).toContain("DEFERRED");
+    expect(result.error?.toLowerCase()).toContain("instagram");
   });
 
   it("returns success:false with deferral message for facebook", async () => {
