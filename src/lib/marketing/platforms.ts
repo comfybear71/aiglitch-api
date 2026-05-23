@@ -20,6 +20,8 @@
 import { getDb } from "@/lib/db";
 import { buildOAuth1Header, getAppCredentials } from "@/lib/x-oauth";
 import { sendTelegramPhoto } from "@/lib/telegram";
+import { put } from "@vercel/blob";
+import { randomUUID } from "node:crypto";
 import sharp from "sharp";
 import type { MarketingPlatform, PlatformAccount } from "./types";
 
@@ -260,10 +262,12 @@ export async function postToPlatform(
         result = await postToFacebook(account, text, mediaUrl);
         break;
       case "instagram":
+        result = await postToInstagram(account, text, mediaUrl);
+        break;
       case "youtube":
         result = {
           success: false,
-          error: `${platform} poster not yet ported — DEFERRED to follow-up session`,
+          error: "youtube poster not yet ported — DEFERRED to follow-up session",
         };
         break;
     }
@@ -797,6 +801,237 @@ async function postToTelegram(
     return {
       success: false,
       error: `Telegram error: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+// ── Instagram poster ───────────────────────────────────────────────────────
+//
+// Two-step Graph API v21.0 flow:
+//   1. POST /{ig_user_id}/media — creates a media container (image_url or
+//      video_url + caption). Container ID returned.
+//   2. POST /{ig_user_id}/media_publish?creation_id={containerId} — publishes
+//      the container as a real post.
+//
+// For VIDEOS, the container goes through Instagram-side processing — we
+// poll the container's status until status_code === "FINISHED" (or
+// "ERROR" / timeout) before publishing. ~5-30s typical.
+//
+// Two reasons we don't hand Instagram raw Vercel Blob URLs:
+//   • For images: Instagram occasionally fails to fetch from
+//     *.blob.vercel-storage.com. Safer to re-encode + re-upload as
+//     1080×1080 JPEG to a stable `instagram/<uuid>.jpg` blob.
+//   • For videos: Instagram requires a public URL it can range-fetch.
+//     The legacy `/api/video-proxy` lives permanently on the
+//     aiglitch.app domain (per CLAUDE.md migration rule #5: "Instagram
+//     proxies must remain reachable"). We wrap the blob URL through it.
+//
+// Env vars used:
+//   INSTAGRAM_ACCESS_TOKEN  — long-lived page access token (Graph API)
+//   INSTAGRAM_USER_ID       — Instagram Business Account ID (numeric)
+//   INSTAGRAM_PROXY_BASE    — optional override; defaults to https://aiglitch.app
+
+const INSTAGRAM_GRAPH_BASE = "https://graph.facebook.com/v21.0";
+const INSTAGRAM_VIDEO_POLL_MS = 5_000;
+const INSTAGRAM_VIDEO_POLL_TIMEOUT_MS = 90_000;
+const INSTAGRAM_IMAGE_SETTLE_MS = 2_000;
+
+function instagramProxyBase(): string {
+  return process.env.INSTAGRAM_PROXY_BASE ?? "https://aiglitch.app";
+}
+
+async function uploadInstagramJpeg(sourceUrl: string): Promise<string> {
+  const imgRes = await fetch(sourceUrl, { signal: AbortSignal.timeout(15_000) });
+  if (!imgRes.ok) {
+    throw new Error(`Image fetch failed: HTTP ${imgRes.status} for ${sourceUrl}`);
+  }
+  const inputBuffer = Buffer.from(await imgRes.arrayBuffer());
+  const jpegBuffer = await sharp(inputBuffer)
+    .resize(1080, 1080, { fit: "cover", position: "centre" })
+    .jpeg({ quality: 90 })
+    .toBuffer();
+
+  const blob = await put(`instagram/${randomUUID()}.jpg`, jpegBuffer, {
+    access: "public",
+    contentType: "image/jpeg",
+    addRandomSuffix: false,
+  });
+  return blob.url;
+}
+
+async function pollInstagramContainerReady(
+  containerId: string,
+  accessToken: string,
+): Promise<{ ready: boolean; error?: string }> {
+  const start = Date.now();
+  while (Date.now() - start < INSTAGRAM_VIDEO_POLL_TIMEOUT_MS) {
+    await new Promise((r) => setTimeout(r, INSTAGRAM_VIDEO_POLL_MS));
+    try {
+      const statusRes = await fetch(
+        `${INSTAGRAM_GRAPH_BASE}/${containerId}?fields=status_code&access_token=${accessToken}`,
+        { signal: AbortSignal.timeout(10_000) },
+      );
+      if (!statusRes.ok) continue;
+      const data = (await statusRes.json()) as { status_code?: string };
+      console.log(
+        `[instagram] container ${containerId} status: ${data.status_code}`,
+      );
+      if (data.status_code === "FINISHED") return { ready: true };
+      if (data.status_code === "ERROR") {
+        return {
+          ready: false,
+          error: "IG video processing failed (status: ERROR)",
+        };
+      }
+    } catch {
+      // Transient — keep polling.
+    }
+  }
+  return {
+    ready: false,
+    error: `IG video processing timed out after ${INSTAGRAM_VIDEO_POLL_TIMEOUT_MS / 1000}s`,
+  };
+}
+
+async function postToInstagram(
+  account: PlatformAccount,
+  text: string,
+  mediaUrl?: string | null,
+): Promise<PostResult> {
+  try {
+    // Env var is the sole source of truth for the IG user id (matches
+    // the legacy contract). Falls through to extra_config / account_id
+    // so an admin-created DB account still works.
+    let extraIgId: string | undefined;
+    try {
+      const config = JSON.parse(account.extra_config || "{}") as {
+        instagram_user_id?: string;
+      };
+      extraIgId = config.instagram_user_id;
+    } catch {
+      // bad JSON — ignore
+    }
+    const igUserId =
+      process.env.INSTAGRAM_USER_ID ?? extraIgId ?? account.account_id;
+    if (!igUserId) {
+      return {
+        success: false,
+        error: "INSTAGRAM_USER_ID not configured (env or account.extra_config)",
+      };
+    }
+    if (!account.access_token) {
+      return { success: false, error: "INSTAGRAM_ACCESS_TOKEN not configured" };
+    }
+
+    if (!mediaUrl) {
+      return { success: false, error: "Instagram requires media content" };
+    }
+
+    const isVideo =
+      mediaUrl.includes(".mp4") || mediaUrl.toLowerCase().includes("video");
+
+    // Prepare the URL IG will fetch. Images get re-encoded + re-uploaded
+    // as JPEG to a stable blob path. Videos get proxied through
+    // aiglitch.app/api/video-proxy (permanent legacy endpoint).
+    let igMediaUrl: string;
+    if (isVideo) {
+      const proxyBase = instagramProxyBase();
+      igMediaUrl = mediaUrl.startsWith(proxyBase)
+        ? mediaUrl
+        : `${proxyBase}/api/video-proxy?url=${encodeURIComponent(mediaUrl)}`;
+      console.log(
+        `[instagram] proxying video through: ${igMediaUrl.slice(0, 120)}`,
+      );
+    } else {
+      try {
+        igMediaUrl = await uploadInstagramJpeg(mediaUrl);
+        console.log(
+          `[instagram] re-encoded image → blob: ${igMediaUrl.slice(0, 120)}`,
+        );
+      } catch (err) {
+        // Fall back to image-proxy if JPEG conversion fails.
+        const proxyBase = instagramProxyBase();
+        igMediaUrl = mediaUrl.startsWith(proxyBase)
+          ? mediaUrl
+          : `${proxyBase}/api/image-proxy?url=${encodeURIComponent(mediaUrl)}`;
+        console.warn(
+          `[instagram] JPEG conversion failed (${err instanceof Error ? err.message : err}); using image-proxy ${igMediaUrl.slice(0, 120)}`,
+        );
+      }
+    }
+
+    // Step 1: create container.
+    const containerParams: Record<string, string> = {
+      caption: text,
+      access_token: account.access_token,
+    };
+    if (isVideo) {
+      containerParams.media_type = "REELS";
+      containerParams.video_url = igMediaUrl;
+    } else {
+      containerParams.image_url = igMediaUrl;
+    }
+
+    const containerRes = await fetch(
+      `${INSTAGRAM_GRAPH_BASE}/${igUserId}/media`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams(containerParams),
+        signal: AbortSignal.timeout(30_000),
+      },
+    );
+    if (!containerRes.ok) {
+      const errBody = await containerRes.text().catch(() => "(unreadable)");
+      return {
+        success: false,
+        error: `IG container failed (${containerRes.status}): ${errBody.slice(0, 300)}`,
+      };
+    }
+
+    const containerData = (await containerRes.json()) as { id?: string };
+    const containerId = containerData.id;
+    if (!containerId) {
+      return { success: false, error: "IG container creation returned no id" };
+    }
+
+    // Step 2: wait for container to be ready.
+    if (isVideo) {
+      const polled = await pollInstagramContainerReady(
+        containerId,
+        account.access_token,
+      );
+      if (!polled.ready) {
+        return { success: false, error: polled.error };
+      }
+    } else {
+      await new Promise((r) => setTimeout(r, INSTAGRAM_IMAGE_SETTLE_MS));
+    }
+
+    // Step 3: publish.
+    const publishRes = await fetch(
+      `${INSTAGRAM_GRAPH_BASE}/${igUserId}/media_publish?creation_id=${containerId}&access_token=${encodeURIComponent(account.access_token)}`,
+      { method: "POST", signal: AbortSignal.timeout(30_000) },
+    );
+    if (!publishRes.ok) {
+      const errBody = await publishRes.text().catch(() => "(unreadable)");
+      return {
+        success: false,
+        error: `IG publish failed (${publishRes.status}): ${errBody.slice(0, 300)}`,
+      };
+    }
+
+    const publishData = (await publishRes.json()) as { id?: string };
+    const postId = publishData.id;
+    return {
+      success: true,
+      platformPostId: postId,
+      platformUrl: postId ? `https://www.instagram.com/p/${postId}/` : undefined,
+    };
+  } catch (err) {
+    return {
+      success: false,
+      error: `Instagram error: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
 }
