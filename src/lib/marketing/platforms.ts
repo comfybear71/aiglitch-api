@@ -286,23 +286,59 @@ export async function postToPlatform(
 
 // ── X poster (with media upload) ────────────────────────────────────────
 
+const X_UPLOAD_URL = "https://upload.twitter.com/1.1/media/upload.json";
+// X recommends max chunk size of 5 MB for APPEND. Stay just under to
+// leave headroom for multipart envelope overhead.
+const X_CHUNK_BYTES = 4 * 1024 * 1024;
+// X rejects single-image uploads over 5 MB at INIT — we recompress
+// images that approach the cap. Videos are NOT recompressed (sharp
+// can't re-encode video) — they get chunked instead, up to X's
+// 512 MB per-video limit.
+const X_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+// Hard ceiling on STATUS polling for async-processed videos.
+const X_STATUS_MAX_ATTEMPTS = 30;
+const X_STATUS_MAX_WAIT_SEC = 120;
+
+interface XProcessingInfo {
+  state: "pending" | "in_progress" | "succeeded" | "failed";
+  check_after_secs?: number;
+  progress_percent?: number;
+  error?: { code?: number; name?: string; message?: string };
+}
+
+interface XInitResponse {
+  media_id_string?: string;
+  processing_info?: XProcessingInfo;
+  error?: string;
+}
+
+interface XFinalizeResponse {
+  media_id_string?: string;
+  processing_info?: XProcessingInfo;
+  error?: string;
+}
+
+interface XStatusResponse {
+  media_id_string?: string;
+  processing_info?: XProcessingInfo;
+}
+
 async function uploadMediaToX(
   creds: ReturnType<typeof getAppCredentials>,
   mediaUrl: string,
 ): Promise<{ mediaId: string | null; error?: string }> {
   try {
-    // Validate URL format
     if (!mediaUrl.startsWith("http")) {
       return { mediaId: null, error: "Invalid media URL" };
     }
 
     console.log(`[uploadMediaToX] Starting upload for ${mediaUrl.slice(0, 80)}...`);
 
-    // Download media with timeout
+    // ── Download ────────────────────────────────────────────────────────
     let mediaBuffer: Buffer;
     let mediaType: string;
     try {
-      const imgRes = await fetch(mediaUrl, { signal: AbortSignal.timeout(15000) });
+      const imgRes = await fetch(mediaUrl, { signal: AbortSignal.timeout(30000) });
       if (!imgRes.ok) {
         return {
           mediaId: null,
@@ -311,7 +347,9 @@ async function uploadMediaToX(
       }
       mediaBuffer = Buffer.from(await imgRes.arrayBuffer());
       mediaType = imgRes.headers.get("content-type") || "image/jpeg";
-      console.log(`[uploadMediaToX] Downloaded ${mediaBuffer.length} bytes (${mediaType})`);
+      console.log(
+        `[uploadMediaToX] Downloaded ${mediaBuffer.length} bytes (${mediaType})`,
+      );
     } catch (err) {
       return {
         mediaId: null,
@@ -319,12 +357,14 @@ async function uploadMediaToX(
       };
     }
 
-    // X caps image uploads at 5,242,880 bytes. xAI PNGs + any legacy
-    // oversized post media routinely blow past that, so re-encode to
-    // JPEG quality 85 whenever the source approaches the cap. Catches
-    // old fallback PNGs without having to migrate them in storage.
-    const X_MAX_BYTES = 5 * 1024 * 1024;
-    if (mediaBuffer.length > X_MAX_BYTES * 0.9) {
+    const isVideo = mediaType.startsWith("video/");
+    const mediaCategory = isVideo ? "tweet_video" : undefined;
+
+    // ── Image recompress (images only — never videos) ──────────────────
+    // xAI PNGs + legacy oversized blob fallbacks routinely exceed 5 MB.
+    // sharp can't re-encode video frames, so this path only runs for
+    // image types.
+    if (!isVideo && mediaBuffer.length > X_IMAGE_MAX_BYTES * 0.9) {
       try {
         const recompressed = await sharp(mediaBuffer)
           .jpeg({ quality: 85, mozjpeg: true })
@@ -342,11 +382,12 @@ async function uploadMediaToX(
       }
     }
 
-    // INIT: Start chunked upload
-    const initUrl = new URL("https://upload.twitter.com/1.1/media/upload.json");
+    // ── INIT ────────────────────────────────────────────────────────────
+    const initUrl = new URL(X_UPLOAD_URL);
     initUrl.searchParams.set("command", "INIT");
     initUrl.searchParams.set("total_bytes", mediaBuffer.length.toString());
     initUrl.searchParams.set("media_type", mediaType);
+    if (mediaCategory) initUrl.searchParams.set("media_category", mediaCategory);
 
     const initAuth = buildOAuth1Header("POST", initUrl.toString(), creds);
     const initRes = await fetch(initUrl.toString(), {
@@ -363,10 +404,7 @@ async function uploadMediaToX(
       };
     }
 
-    const initData = (await initRes.json()) as {
-      media_id_string?: string;
-      error?: string;
-    };
+    const initData = (await initRes.json()) as XInitResponse;
     const mediaId = initData.media_id_string;
     if (!mediaId) {
       return {
@@ -374,61 +412,92 @@ async function uploadMediaToX(
         error: `INIT returned no media_id: ${JSON.stringify(initData)}`,
       };
     }
-    console.log(`[uploadMediaToX] INIT OK, media_id=${mediaId}`);
+    console.log(
+      `[uploadMediaToX] INIT OK, media_id=${mediaId}, isVideo=${isVideo}, category=${mediaCategory ?? "none"}`,
+    );
 
-    // APPEND: Upload media data as multipart/form-data. X requires the
-    // raw bytes in a field literally named `media`; sending raw
-    // application/octet-stream returns code 38 "media parameter is missing".
-    const appendUrl = new URL("https://upload.twitter.com/1.1/media/upload.json");
-    appendUrl.searchParams.set("command", "APPEND");
-    appendUrl.searchParams.set("media_id", mediaId);
-    appendUrl.searchParams.set("segment_index", "0");
+    // ── APPEND (chunked) ────────────────────────────────────────────────
+    // Single-segment for small uploads (any image, video ≤ 4 MB),
+    // multi-segment for larger videos. Each chunk uses multipart/
+    // form-data with the bytes in a field literally named `media`
+    // — raw octet-stream returns X code 38 "media parameter is missing".
+    const totalSegments = Math.max(
+      1,
+      Math.ceil(mediaBuffer.length / X_CHUNK_BYTES),
+    );
+    for (let segmentIndex = 0; segmentIndex < totalSegments; segmentIndex++) {
+      const start = segmentIndex * X_CHUNK_BYTES;
+      const end = Math.min(start + X_CHUNK_BYTES, mediaBuffer.length);
+      const chunk = mediaBuffer.subarray(start, end);
 
-    let appendSuccess = false;
-    let appendError = "";
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        const appendAuth = buildOAuth1Header("POST", appendUrl.toString(), creds);
-        const appendForm = new FormData();
-        appendForm.append(
-          "media",
-          new Blob([new Uint8Array(mediaBuffer)], { type: mediaType }),
-        );
-        const appendRes = await fetch(appendUrl.toString(), {
-          method: "POST",
-          headers: { Authorization: appendAuth },
-          body: appendForm,
-          signal: AbortSignal.timeout(20000),
-        });
+      const appendUrl = new URL(X_UPLOAD_URL);
+      appendUrl.searchParams.set("command", "APPEND");
+      appendUrl.searchParams.set("media_id", mediaId);
+      appendUrl.searchParams.set("segment_index", segmentIndex.toString());
 
-        if (!appendRes.ok) {
-          appendError = `${appendRes.status}: ${await appendRes.text()}`;
-          console.warn(
-            `[uploadMediaToX] APPEND attempt ${attempt + 1} failed: ${appendError.slice(0, 100)}`
+      let appendSuccess = false;
+      let appendError = "";
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const appendAuth = buildOAuth1Header(
+            "POST",
+            appendUrl.toString(),
+            creds,
           );
-          if (attempt < 2) await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
-          continue;
+          const appendForm = new FormData();
+          appendForm.append(
+            "media",
+            new Blob([new Uint8Array(chunk)], { type: mediaType }),
+          );
+          const appendRes = await fetch(appendUrl.toString(), {
+            method: "POST",
+            headers: { Authorization: appendAuth },
+            body: appendForm,
+            signal: AbortSignal.timeout(30000),
+          });
+
+          if (!appendRes.ok) {
+            appendError = `${appendRes.status}: ${await appendRes.text()}`;
+            console.warn(
+              `[uploadMediaToX] APPEND seg=${segmentIndex} attempt ${attempt + 1} failed: ${appendError.slice(0, 100)}`,
+            );
+            if (attempt < 2)
+              await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+            continue;
+          }
+          appendSuccess = true;
+          console.log(
+            `[uploadMediaToX] APPEND seg=${segmentIndex}/${totalSegments - 1} OK (attempt ${attempt + 1}, ${chunk.length} bytes)`,
+          );
+          break;
+        } catch (err) {
+          appendError = err instanceof Error ? err.message : String(err);
+          console.warn(
+            `[uploadMediaToX] APPEND seg=${segmentIndex} attempt ${attempt + 1} exception: ${appendError}`,
+          );
+          if (attempt < 2)
+            await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
         }
-        appendSuccess = true;
-        console.log(`[uploadMediaToX] APPEND OK (attempt ${attempt + 1})`);
-        break;
-      } catch (err) {
-        appendError = err instanceof Error ? err.message : String(err);
-        console.warn(`[uploadMediaToX] APPEND attempt ${attempt + 1} exception: ${appendError}`);
-        if (attempt < 2) await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+      }
+
+      if (!appendSuccess) {
+        return {
+          mediaId: null,
+          error: `APPEND seg=${segmentIndex} failed after 3 attempts: ${appendError}`,
+        };
       }
     }
 
-    if (!appendSuccess) {
-      return { mediaId: null, error: `APPEND failed after 3 attempts: ${appendError}` };
-    }
-
-    // FINALIZE: Complete upload
-    const finalizeUrl = new URL("https://upload.twitter.com/1.1/media/upload.json");
+    // ── FINALIZE ────────────────────────────────────────────────────────
+    const finalizeUrl = new URL(X_UPLOAD_URL);
     finalizeUrl.searchParams.set("command", "FINALIZE");
     finalizeUrl.searchParams.set("media_id", mediaId);
 
-    const finalizeAuth = buildOAuth1Header("POST", finalizeUrl.toString(), creds);
+    const finalizeAuth = buildOAuth1Header(
+      "POST",
+      finalizeUrl.toString(),
+      creds,
+    );
     const finalizeRes = await fetch(finalizeUrl.toString(), {
       method: "POST",
       headers: { Authorization: finalizeAuth },
@@ -443,7 +512,79 @@ async function uploadMediaToX(
       };
     }
 
-    console.log(`[uploadMediaToX] FINALIZE OK, upload complete`);
+    const finalizeData = (await finalizeRes.json()) as XFinalizeResponse;
+    console.log(
+      `[uploadMediaToX] FINALIZE OK, processing_info=${finalizeData.processing_info?.state ?? "none"}`,
+    );
+
+    // ── STATUS poll (only if async processing required) ────────────────
+    // X returns `processing_info` for videos (and large images) when
+    // the media isn't immediately ready for use in a tweet. Tweet
+    // creation with an unprocessed media_id returns
+    // "Your media IDs are invalid" — the exact error we caught on
+    // chaos-drop videos before this fix.
+    let info = finalizeData.processing_info;
+    if (info) {
+      const startMs = Date.now();
+      for (let attempt = 0; attempt < X_STATUS_MAX_ATTEMPTS; attempt++) {
+        const waitSec = Math.min(info.check_after_secs ?? 1, 10);
+        await new Promise((r) => setTimeout(r, waitSec * 1000));
+
+        if ((Date.now() - startMs) / 1000 > X_STATUS_MAX_WAIT_SEC) {
+          return {
+            mediaId: null,
+            error: `STATUS poll exceeded ${X_STATUS_MAX_WAIT_SEC}s (last state=${info.state})`,
+          };
+        }
+
+        const statusUrl = new URL(X_UPLOAD_URL);
+        statusUrl.searchParams.set("command", "STATUS");
+        statusUrl.searchParams.set("media_id", mediaId);
+
+        const statusAuth = buildOAuth1Header(
+          "GET",
+          statusUrl.toString(),
+          creds,
+        );
+        const statusRes = await fetch(statusUrl.toString(), {
+          method: "GET",
+          headers: { Authorization: statusAuth },
+          signal: AbortSignal.timeout(10000),
+        });
+
+        if (!statusRes.ok) {
+          return {
+            mediaId: null,
+            error: `STATUS failed (${statusRes.status})`,
+          };
+        }
+
+        const statusData = (await statusRes.json()) as XStatusResponse;
+        info = statusData.processing_info;
+        if (!info) break;
+
+        console.log(
+          `[uploadMediaToX] STATUS attempt ${attempt + 1}: state=${info.state} progress=${info.progress_percent ?? "?"}%`,
+        );
+
+        if (info.state === "succeeded") break;
+        if (info.state === "failed") {
+          return {
+            mediaId: null,
+            error: `Async processing failed: ${info.error?.message ?? "unknown"}`,
+          };
+        }
+      }
+
+      if (info && info.state !== "succeeded") {
+        return {
+          mediaId: null,
+          error: `STATUS poll exhausted ${X_STATUS_MAX_ATTEMPTS} attempts (last state=${info.state})`,
+        };
+      }
+    }
+
+    console.log(`[uploadMediaToX] media_id=${mediaId} ready for tweet`);
     return { mediaId };
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);

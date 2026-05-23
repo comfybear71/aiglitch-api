@@ -94,7 +94,10 @@ export async function sendTelegramPhoto(
     const res = await fetch(`${TELEGRAM_API}/bot${botToken}/sendPhoto`, {
       method: "POST",
       body: form,
-      signal: AbortSignal.timeout(30_000),
+      // Bumped from 30s → 60s after recurring chaos-drop spread
+      // timeouts. Vercel cold start + blob download + multipart upload
+      // can exceed 30s under load.
+      signal: AbortSignal.timeout(60_000),
     });
     const data = (await res.json()) as {
       ok: boolean;
