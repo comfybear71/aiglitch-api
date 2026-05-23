@@ -70,10 +70,6 @@
       "schedule": "0 8,20 * * *"
     },
     {
-      "path": "/api/admin/elon-campaign",
-      "schedule": "0 12 * * *"
-    },
-    {
       "path": "/api/admin/budju-trading",
       "schedule": "*/10 * * * *"
     },

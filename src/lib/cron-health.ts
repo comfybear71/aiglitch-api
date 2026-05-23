@@ -40,7 +40,7 @@ export interface CronHealth {
   };
 }
 
-const ACTIVE_CRON_COUNT = 21; // Matches the vercel.json `crons` array length.
+const ACTIVE_CRON_COUNT = 20; // Matches the vercel.json `crons` array length.
 
 async function safeCount(
   fn: () => Promise<unknown[]>,
