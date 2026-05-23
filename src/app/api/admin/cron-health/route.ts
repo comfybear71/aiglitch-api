@@ -22,7 +22,6 @@ const CRON_SCHEDULE = [
   { path: "/api/telegram/persona-message", schedule: "0 */3 * * *", name: "Telegram messages" },
   { path: "/api/x-react", schedule: "*/30 * * * *", name: "X reactions" },
   { path: "/api/bestie-life", schedule: "0 8,20 * * *", name: "Bestie life events" },
-  { path: "/api/admin/elon-campaign", schedule: "0 12 * * *", name: "Elon campaign" },
   { path: "/api/admin/budju-trading", schedule: "*/10 * * * *", name: "BUDJU admin" },
   { path: "/api/sponsor-burn", schedule: "0 0 * * *", name: "Sponsor burn" },
   { path: "/api/x-dm-poll", schedule: "0 * * * *", name: "X DM polling" },
