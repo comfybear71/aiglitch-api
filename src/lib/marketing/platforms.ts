@@ -901,7 +901,11 @@ async function postToTelegram(
 
 const INSTAGRAM_GRAPH_BASE = "https://graph.facebook.com/v21.0";
 const INSTAGRAM_VIDEO_POLL_MS = 5_000;
-const INSTAGRAM_VIDEO_POLL_TIMEOUT_MS = 90_000;
+// Bumped from 90s after recurring "IG video processing timed out after 90s"
+// on chaos-drop spreads. IG's server-side video transcode for Reels-format
+// videos can take 60-120s for fresh uploads; 180s gives comfortable headroom
+// without blowing the 360s Vercel cap on the parent cron.
+const INSTAGRAM_VIDEO_POLL_TIMEOUT_MS = 180_000;
 const INSTAGRAM_IMAGE_SETTLE_MS = 2_000;
 
 function instagramProxyBase(): string {
