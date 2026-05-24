@@ -20,15 +20,34 @@
 #
 # Re-running creates duplicate issues — only run once.
 
-set -euo pipefail
+set -uo pipefail
 
 REPO="comfybear71/aiglitch-meta"
+
+# Build set of existing titles so re-runs skip already-created issues
+# (lets you re-run the same one-liner after a network blip)
+echo "Fetching existing issue titles from $REPO..."
+EXISTING=$(gh issue list --repo "$REPO" --limit 500 --state all --json title --jq '.[].title' || echo "")
+
+FAILURES=0
+CREATED=0
+SKIPPED=0
 
 create_issue() {
   local title="$1"
   local body="$2"
+  if printf '%s\n' "$EXISTING" | grep -Fxq "$title"; then
+    echo "Skip (exists): $title"
+    SKIPPED=$((SKIPPED+1))
+    return
+  fi
   echo "Creating: $title"
-  gh issue create --repo "$REPO" --title "$title" --body "$body"
+  if gh issue create --repo "$REPO" --title "$title" --body "$body"; then
+    CREATED=$((CREATED+1))
+  else
+    echo "  ✗ FAILED — re-run script to retry" >&2
+    FAILURES=$((FAILURES+1))
+  fi
 }
 
 # ─── Phase 8 — Trading / Solana ──────────────────────────────────────────────
@@ -824,5 +843,9 @@ EOF
 )"
 
 echo ""
-echo "✓ All 30 issues created in $REPO"
+echo "Done. Created: $CREATED | Skipped (already exist): $SKIPPED | Failed: $FAILURES"
+if [ "$FAILURES" -gt 0 ]; then
+  echo "Re-run the same command to retry failed issues — already-created ones will be skipped."
+  exit 1
+fi
 echo "Next: open the project board and bulk-add the new issues."
