@@ -7,6 +7,33 @@
 
 ## Session log (newest first)
 
+### 2026-05-25 — Port /api/admin/wallet-auth (Phantom-signature admin login)
+
+**Status:** Implemented on `claude/port-admin-wallet-auth`. Typecheck clean + 1989/1989 tests passing (+15 new).
+
+**Driver:** Phase 7 admin route. Alternate admin login flow for iPad/mobile sessions — admin scans a QR on iPad with their Phantom-enabled iPhone, signs a challenge with the admin wallet's keypair, server verifies the Ed25519 signature and issues a session token. No password typing. Already used by `aiglitch/src/app/admin/trading/page.tsx`.
+
+Audit verdict: zero on-chain interaction, zero treasury key usage, zero signing — pure HMAC + Phantom signature verification. Decision #6's "trading" lock doesn't apply; this is standard Phase 7 admin work.
+
+**Changes:**
+- `src/app/api/admin/wallet-auth/route.ts` (new) — GET (3 modes: mint challenge / poll status / validate session), POST (verify signed challenge + issue session), PUT (return message for signing). Same TTLs as legacy (300s challenge, 86400s session).
+- `src/app/api/admin/wallet-auth/route.test.ts` (new) — 15 specs covering challenge minting, poll states, session validation, signature verification with REAL Ed25519 sigs (Node's native `crypto.sign` via DER-wrapped Solana keypair seed — same primitive the route uses for verify).
+- `package.json` — added `bs58 ^6.0.0` as a direct dep. Was previously transitive via `@solana/web3.js` (^4.0.1) but used directly here for base58 sig decode. Explicit dep matches legacy's version + makes the dependency intent clear.
+
+**Cleanup vs legacy:**
+- Dropped the dynamic `await import("bs58")` + `await import("crypto")` inside `verifySignature` — both are top-level imports now (same pattern as the admin/nfts cleanup).
+- Dropped the `await` on synchronous `cache.get`/`cache.set` calls (no-ops in legacy, slightly misleading).
+- Added env-var fallback to `NEXT_PUBLIC_ADMIN_WALLET` (aiglitch-api's bible default) on top of legacy's `ADMIN_WALLET_PUBKEY || ADMIN_WALLET` chain.
+
+**Preserved-as-is parity gotcha (documented in route comment):** the cache writes go to L1 in-memory only (no Redis backing). If the QR flow's 3 HTTP calls land on different Vercel instances, the challenge will appear expired. Legacy has the exact same shape; in practice it works because Vercel keeps instances warm during the ~10s flow. Documented in the route's header comment as a future improvement (extend `cache.ts` with Redis-backed setPersistent/getPersistent if it becomes a real problem).
+
+**Out of scope (sister-repo PR follow-up):**
+1. Add `/api/admin/wallet-auth` to `aiglitch/next.config.ts` `beforeFiles`.
+2. Delete the legacy handler.
+3. No UI changes — `admin/trading/page.tsx` calling `/api/admin/wallet-auth` continues working transparently.
+
+---
+
 ### 2026-05-25 — Port /api/admin/nfts (Phase 7 admin — first real consumer of v1.19.0 Solana foundation)
 
 **Status:** Implemented on `claude/port-admin-nfts`. Typecheck clean + 1974/1974 tests passing (+23 new).
