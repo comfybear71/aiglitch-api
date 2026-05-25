@@ -13,8 +13,7 @@
 export type Blocker =
   | "phase-8" // Trading/wallet/Solana — explicit greenlight per CLAUDE.md #6
   | "phase-9" // OAuth callbacks — last per CLAUDE.md #7
-  | "marketing-lib" // Needs @/lib/marketing/* port (3036 lines)
-  | "director-movies-lib" // Needs @/lib/content/director-movies port (1626 lines)
+  | "dead-code" // Depends on retired pipeline — delete from legacy, do NOT port
   | "telegram-bot-engine" // Needs persona-mode + content-handler libs
   | "permanent-legacy" // Stays on legacy domain by design
   | "external-dep" // Needs new npm dep
@@ -46,23 +45,25 @@ export const PENDING_ROUTES: PendingRoute[] = [
     sessions: 2,
     complexity: "large",
     notes:
-      "AI personas trading SOL/BUDJU. Touches Solana RPC + budju-trading lib.",
+      "AI personas trading SOL/BUDJU. Touches Solana RPC + budju-trading lib. Audit 2026-05-25: zero on-chain signing — pure DB simulation, could ship with standard approval ceremony.",
   },
   {
     path: "/api/budju-trading",
     methods: ["GET", "POST"],
     blocker: "phase-8",
-    sessions: 2,
-    complexity: "large",
-    notes: "BUDJU token trading. Solana RPC + market simulator.",
+    sessions: 1,
+    complexity: "small",
+    notes:
+      "BUDJU token trading user-facing endpoint. Audit 2026-05-25: 59 LOC stub — pure DB ledger, no real signing.",
   },
   {
     path: "/api/admin/budju-trading",
     methods: ["GET", "POST"],
     blocker: "phase-8",
-    sessions: 1,
-    complexity: "medium",
-    notes: "Admin BUDJU trading controls.",
+    sessions: 2,
+    complexity: "large",
+    notes:
+      "Admin BUDJU trading controls. Audit 2026-05-25: 990 LOC, 28 sign calls, real treasury-key SPL transfers. This is the genuine high-risk one — per-endpoint decision-#6 approval needed.",
     prereqs: ["/api/budju-trading"],
   },
   {
@@ -71,7 +72,8 @@ export const PENDING_ROUTES: PendingRoute[] = [
     blocker: "phase-8",
     sessions: 1,
     complexity: "medium",
-    notes: "Cross-chain bridge.",
+    notes:
+      "Cross-chain bridge. Audit 2026-05-25: pure DB ledger, no real signing.",
   },
   {
     path: "/api/exchange",
@@ -79,15 +81,17 @@ export const PENDING_ROUTES: PendingRoute[] = [
     blocker: "phase-8",
     sessions: 1,
     complexity: "medium",
-    notes: "GLITCH/SOL/USDC exchange.",
+    notes:
+      "GLITCH/SOL/USDC exchange. Audit 2026-05-25: pure DB ledger, no real signing.",
   },
   {
     path: "/api/otc-swap",
     methods: ["GET", "POST"],
     blocker: "phase-8",
-    sessions: 1,
-    complexity: "medium",
-    notes: "OTC swap matching engine.",
+    sessions: 2,
+    complexity: "large",
+    notes:
+      "OTC swap matching engine. Audit 2026-05-25: 689 LOC, 4 sign calls, 9 chain reads — REAL treasury-side SPL transfers. Genuine high-risk per-endpoint decision-#6 approval needed.",
   },
   {
     path: "/api/persona-trade",
@@ -95,7 +99,8 @@ export const PENDING_ROUTES: PendingRoute[] = [
     blocker: "phase-8",
     sessions: 1,
     complexity: "medium",
-    notes: "Buy/sell shares in AI personas.",
+    notes:
+      "Buy/sell shares in AI personas. Audit 2026-05-25: pure DB simulation, no real signing.",
   },
   {
     path: "/api/solana",
@@ -103,7 +108,8 @@ export const PENDING_ROUTES: PendingRoute[] = [
     blocker: "phase-8",
     sessions: 1,
     complexity: "medium",
-    notes: "Generic Solana RPC proxy.",
+    notes:
+      "Legacy ?action=-based Solana proxy. /balance + /token-balance already split out in v1.18.0. Remaining actions: link_phantom, validate_transfer, claim_airdrop, mode, elonbot_status — mostly DB simulation.",
   },
   {
     path: "/api/trading",
@@ -119,7 +125,8 @@ export const PENDING_ROUTES: PendingRoute[] = [
     blocker: "phase-8",
     sessions: 2,
     complexity: "large",
-    notes: "Wallet state + balance + tx history.",
+    notes:
+      "Wallet state + balance + tx history. Simulated wallet table — generates fake base58 addresses, NOT real keypairs (per legacy design).",
   },
   {
     path: "/api/wallet/verify",
@@ -143,7 +150,8 @@ export const PENDING_ROUTES: PendingRoute[] = [
     blocker: "phase-8",
     sessions: 1,
     complexity: "large",
-    notes: "Hatch persona + mint NFT (Solana). Marketing dep too.",
+    notes:
+      "Hatch persona + mint NFT (Solana). Phase 4 deferred per decision #9 (iOS).",
   },
   {
     path: "/api/admin/init-persona",
@@ -151,15 +159,8 @@ export const PENDING_ROUTES: PendingRoute[] = [
     blocker: "phase-8",
     sessions: 1,
     complexity: "medium",
-    notes: "Initialise persona + Solana wallet + GLITCH balance.",
-  },
-  {
-    path: "/api/admin/nfts",
-    methods: ["GET", "POST"],
-    blocker: "phase-8",
-    sessions: 1,
-    complexity: "medium",
-    notes: "Admin NFT reconciliation, Solana RPC for tx lookup.",
+    notes:
+      "Initialise persona + Solana wallet + GLITCH balance. Also depends on AI image-gen — partially blocked beyond Phase 8.",
   },
   {
     path: "/api/admin/personas/generate-missing-wallets",
@@ -167,31 +168,17 @@ export const PENDING_ROUTES: PendingRoute[] = [
     blocker: "phase-8",
     sessions: 1,
     complexity: "small",
-    notes: "Generate Solana wallets for personas missing them.",
-  },
-  {
-    path: "/api/admin/personas/refresh-wallet-balances",
-    methods: ["POST"],
-    blocker: "phase-8",
-    sessions: 1,
-    complexity: "small",
-    notes: "Refresh on-chain balances for persona wallets.",
+    notes:
+      "Generate Solana wallets for personas missing them. System-custodial of *persona* keypairs (same model as treasury/ElonBot — not user-custodial). Needs decision-#6 approval.",
   },
   {
     path: "/api/admin/token-metadata",
     methods: ["POST"],
     blocker: "phase-8",
-    sessions: 1,
+    sessions: 2,
     complexity: "medium",
-    notes: "Metaplex on-chain metadata for §GLITCH token.",
-  },
-  {
-    path: "/api/admin/wallet-auth",
-    methods: ["GET", "POST"],
-    blocker: "phase-8",
-    sessions: 1,
-    complexity: "medium",
-    notes: "Admin wallet QR auth flow.",
+    notes:
+      "Metaplex on-chain metadata writes for §GLITCH token. 439 LOC, real mint-authority signing — genuine high-risk decision-#6 approval needed.",
   },
   {
     path: "/api/auth/sign-tx",
@@ -292,75 +279,57 @@ export const PENDING_ROUTES: PendingRoute[] = [
     notes: "YouTube OAuth callback.",
   },
 
-  // ── Marketing lib needed ───────────────────────────────────
-  {
-    path: "/api/generate-ads",
-    methods: ["GET", "POST"],
-    blocker: "marketing-lib",
-    sessions: 1,
-    complexity: "large",
-    notes: "Sponsored ad generation cron.",
-    prereqs: ["@/lib/marketing/*"],
-  },
-
-  // ── Director-movies lib needed ─────────────────────────────
+  // ── Dead code (depends on retired director-movies pipeline) ─
+  // These routes import @/lib/content/director-movies which was
+  // intentionally deleted from aiglitch-api in v1.13.1. They will
+  // never be ported — they'll be deleted from the legacy aiglitch
+  // repo as part of Phase 10 cleanup.
   {
     path: "/api/admin/screenplay",
     methods: ["GET", "POST"],
-    blocker: "director-movies-lib",
-    sessions: 1,
-    complexity: "medium",
-    notes: "Standalone screenplay generation tool.",
-    prereqs: ["@/lib/content/director-movies"],
+    blocker: "dead-code",
+    sessions: 0,
+    complexity: "small",
+    notes: "Director-movies-dependent. Delete from legacy.",
+    prereqs: ["@/lib/content/director-movies (retired)"],
   },
   {
     path: "/api/admin/generate-news",
     methods: ["POST"],
-    blocker: "director-movies-lib",
-    sessions: 1,
-    complexity: "medium",
-    notes: "Breaking-news video generator.",
-    prereqs: ["@/lib/content/director-movies"],
+    blocker: "dead-code",
+    sessions: 0,
+    complexity: "small",
+    notes: "Director-movies-dependent. Delete from legacy.",
+    prereqs: ["@/lib/content/director-movies (retired)"],
   },
   {
     path: "/api/admin/generate-channel-video",
     methods: ["POST"],
-    blocker: "director-movies-lib",
-    sessions: 1,
-    complexity: "large",
-    notes: "Multi-clip channel video.",
-    prereqs: ["@/lib/content/director-movies", "@/lib/media/multi-clip"],
+    blocker: "dead-code",
+    sessions: 0,
+    complexity: "small",
+    notes: "Director-movies-dependent. Delete from legacy.",
+    prereqs: ["@/lib/content/director-movies (retired)"],
   },
   {
     path: "/api/admin/channels/generate-content",
     methods: ["POST"],
-    blocker: "director-movies-lib",
-    sessions: 1,
-    complexity: "large",
-    notes: "Full multi-scene channel video generation.",
-    prereqs: ["@/lib/content/director-movies"],
+    blocker: "dead-code",
+    sessions: 0,
+    complexity: "small",
+    notes: "Director-movies-dependent. Delete from legacy.",
+    prereqs: ["@/lib/content/director-movies (retired)"],
   },
   {
     path: "/api/generate-director-movie",
     methods: ["GET", "POST"],
-    blocker: "director-movies-lib",
-    sessions: 1,
-    complexity: "large",
-    notes: "Cron — director-led movie production pipeline.",
-    prereqs: ["@/lib/content/director-movies"],
-  },
-  {
-    path: "/api/generate-persona-content",
-    methods: ["GET", "POST"],
-    blocker: "director-movies-lib",
-    sessions: 1,
-    complexity: "large",
+    blocker: "dead-code",
+    sessions: 0,
+    complexity: "small",
     notes:
-      "Persona content generation — multi-clip + director-movie polling.",
-    prereqs: ["@/lib/content/director-movies", "@/lib/media/multi-clip"],
+      "Cron — director-led movie production pipeline. Delete from legacy (cron entry already removed in v1.13.1).",
+    prereqs: ["@/lib/content/director-movies (retired)"],
   },
-  // ── Telegram bot engine ────────────────────────────────────
-  // (All telegram bot engine routes ported — this section is empty.)
 
   // ── Permanent legacy ───────────────────────────────────────
   {
@@ -380,22 +349,6 @@ export const PENDING_ROUTES: PendingRoute[] = [
     complexity: "small",
     notes: "Same as image-proxy — IG can't fetch Blob videos.",
   },
-
-  // ── Chunky single-session ──────────────────────────────────
-  {
-    path: "/api/admin/elon-campaign",
-    methods: ["GET", "POST"],
-    blocker: "chunky-single",
-    sessions: 2,
-    complexity: "huge",
-    notes:
-      "Daily Elon-bait campaign (711 lines). Needs ELON_CAMPAIGN constant, mp4-concat lib, multi-clip lib, marketing/spread-post. Chunky even with deferrals.",
-    prereqs: [
-      "@/lib/bible/constants#ELON_CAMPAIGN",
-      "@/lib/media/mp4-concat",
-      "@/lib/media/multi-clip",
-    ],
-  },
 ];
 
 /** Group pending routes by their blocker for the dashboard. */
@@ -410,8 +363,7 @@ export function groupByBlocker(): Record<Blocker, PendingRoute[]> {
 export const BLOCKER_LABELS: Record<Blocker, string> = {
   "phase-8": "Phase 8 — Trading / Wallet / Solana (needs greenlight)",
   "phase-9": "Phase 9 — OAuth callbacks (last per migration plan)",
-  "marketing-lib": "Marketing library port required (3036 lines)",
-  "director-movies-lib": "Director-movies library port required (1626 lines)",
+  "dead-code": "Dead code — depends on retired pipeline, delete from legacy",
   "telegram-bot-engine": "Telegram bot engine port required",
   "permanent-legacy": "Permanent legacy — stays on aiglitch.app by design",
   "external-dep": "Needs new npm dependency",
