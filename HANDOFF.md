@@ -7,6 +7,23 @@
 
 ## Session log (newest first)
 
+### 2026-05-25 — Port /api/admin/personas/refresh-wallet-balances (second Solana foundation consumer)
+
+**Status:** Implemented on `claude/port-refresh-wallet-balances`. Typecheck clean + 1999/1999 tests passing (+10 new).
+
+**Driver:** Phase 7 admin route. Reads on-chain SOL + BUDJU + USDC + GLITCH balances and caches them in `budju_wallets.{sol,budju,usdc,glitch}_balance` for fast admin-dashboard reads. Read-only chain interaction (only `getBalance` + `getTokenAccountBalance` calls). Second real consumer of the v1.19.0 Solana foundation after admin/nfts — uses `getBudjuTokenMint()` + `getGlitchTokenMint()` lazy PublicKey helpers from solana-config.
+
+**Changes:**
+- `src/app/api/admin/personas/refresh-wallet-balances/route.ts` (new) — GET (list eligible personas), POST (single-persona refresh or batch all). Same throttle (300ms between wallets in batch), same DB write surface (only the 4 balance columns + updated_at), same response shapes as legacy. Direct 1:1 port — no cleanup needed beyond the implicit `ensureDbReady()` drop.
+- `src/app/api/admin/personas/refresh-wallet-balances/route.test.ts` (new) — 10 vitest specs covering auth, list shape (asserts no private-key columns leak in even if joined), single-persona happy path + 404 (no wallet) + 400 (invalid address) + 500 (db write failure), missing-ATA-as-0 vs unexpected-rpc-error-surfacing, batch mode with mixed success/failure under fake timers (so the 300ms throttle doesn't slow the test).
+
+**Out of scope (sister-repo PR follow-up):**
+1. Add `/api/admin/personas/refresh-wallet-balances` to `aiglitch/next.config.ts` `beforeFiles`.
+2. Delete the legacy handler.
+3. No UI changes — the admin personas page's per-card refresh button continues working transparently.
+
+---
+
 ### 2026-05-25 — Port /api/admin/wallet-auth (Phantom-signature admin login)
 
 **Status:** Implemented on `claude/port-admin-wallet-auth`. Typecheck clean + 1989/1989 tests passing (+15 new).
