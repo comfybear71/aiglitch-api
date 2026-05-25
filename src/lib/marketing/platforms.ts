@@ -903,9 +903,12 @@ const INSTAGRAM_GRAPH_BASE = "https://graph.facebook.com/v21.0";
 const INSTAGRAM_VIDEO_POLL_MS = 5_000;
 // Bumped from 90s after recurring "IG video processing timed out after 90s"
 // on chaos-drop spreads. IG's server-side video transcode for Reels-format
-// videos can take 60-120s for fresh uploads; 180s gives comfortable headroom
-// without blowing the 360s Vercel cap on the parent cron.
-const INSTAGRAM_VIDEO_POLL_TIMEOUT_MS = 180_000;
+// videos can take 60-120s for fresh uploads; 240s gives comfortable headroom
+// without blowing the 360s Vercel cap on the parent cron. Bumped from 180s
+// after 2026-05-25 /status showed 3-4 daily "IG video processing timed out
+// after 180s" failures — IG transcode tail occasionally crosses 3min on
+// peak load.
+const INSTAGRAM_VIDEO_POLL_TIMEOUT_MS = 240_000;
 const INSTAGRAM_IMAGE_SETTLE_MS = 2_000;
 
 function instagramProxyBase(): string {
