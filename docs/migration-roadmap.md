@@ -1,65 +1,41 @@
 # Migration roadmap
 
-Written 2026-04-20 after session 24. Updates as decisions are made.
+Written 2026-04-20 after session 24. **Refreshed 2026-05-25** after the Solana 8a-1 + Studios by-genre + `/api/auth/admin` strangler-flip sweep — Phase 3 is now done and the dependency map for the remaining work has been recomputed against the live codebase.
 
 ## Where we are
 
-**16 endpoints live** on aiglitch-api:
+**62 endpoints flipped through the strangler** on `aiglitch.app` (i.e. real user traffic served by `aiglitch-api`). All consumer paths in `aiglitch/next.config.ts` `beforeFiles` are backed by a real handler in this repo — no phantom 404s.
 
-| | Endpoint |
-|---|---|
-| Health / ops | `/api/health`, `/status`, `/docs` |
-| Feed | `/api/feed` (default / cursor / following / breaking / premieres + genre / premiere_counts / following_list) |
-| Content reads | `/api/post/[id]`, `/api/trending`, `/api/search`, `/api/profile` |
-| User reads | `/api/likes`, `/api/bookmarks`, `/api/notifications` GET |
-| Channels | `/api/channels` GET + POST |
-| Interact | `/api/interact` POST (9 actions: like, bookmark, share, view, follow, react, comment, comment_like, subscribe) |
-| Community | `/api/events` GET + POST |
-| Notifications | `/api/notifications` POST (mark_read / mark_all_read) |
+**64 admin routes ported and active** in `aiglitch-api/src/app/api/admin/*`, 62 of them flipped (the two unflipped — `admin/swaps`, `admin/trading` — are Phase 8 trading-locked per decision #6).
 
-**Consumer status:** only `/api/feed` is consumer-flipped — `aiglitch.app` frontend has a `beforeFiles` rewrite. Every other migrated endpoint is reachable via `api.aiglitch.app/...` but `aiglitch.app/...` still serves from the legacy handler. Flipping each needs a separate decision + frontend commit.
+**Consumer status:** consumer flips have stopped being a separate ceremony — every recent port (Solana read-only, Studios by-genre, `/api/auth/admin`) has been paired with the corresponding sister-repo `beforeFiles` PR in the same hand-off, so the "consumer flip backlog" section that used to live at the bottom of this doc is no longer meaningful.
 
-## What's left — 5 categories
+## What's left
 
-### 1. Phase 3 extras: small public / session endpoints (~20 routes)
+### 1. ~~Phase 3 extras~~ — ✅ COMPLETE (2026-05-25)
 
-Read-heavy, low-risk, no new infrastructure required. Can be done any time in any order.
+Every Phase 3 card from the original list has shipped + flipped + verified end-to-end:
 
-**Public reads:**
-- `/api/personas` (list all active)
-- `/api/personas/:id/wallet-balance` (cached wallet snapshot — touches Solana config, read-only)
-- `/api/channels/feed` (channel-specific feed — reuses feed logic)
-- `/api/movies` (director movie list)
-- `/api/hatchery` (public persona hatchery listing)
-- `/api/meatlab` GET (gallery + creator profiles)
-- `/api/token/*` (7 small routes — metadata / logo / token-list / verification / dexscreener — mostly static or cached)
-- `/api/nft/image/:productId` (SVG render)
-- `/api/nft/metadata/:mint` (on-chain metadata read)
-- `/api/sponsor/inquiry` POST (public form)
-- `/api/suggest-feature` POST (creates GitHub issue via GITHUB_TOKEN)
-- `/api/activity` (cron job activity monitor — read)
+- All public reads (`personas`, `personas/:id/wallet-balance`, `channels/feed`, `movies`, `hatchery`, `meatlab`, `token/*`, `nft/image/:productId`, `nft/metadata/:mint`, `sponsor/inquiry`, `suggest-feature`, `activity`, `channels/aiglitch-studios/by-genre`)
+- All session reads/writes (`coins`, `friends`, `friend-shares`, `activity-throttle`)
 
-**Session reads/writes:**
-- `/api/coins` GET + POST (GLITCH balance + manual transactions — builds on users.awardCoins we already have)
-- `/api/friends` (list + add friend)
-- `/api/friend-shares` (share posts with friends)
-- `/api/activity-throttle` (pause/resume cron — session-gated for now, admin-gated later)
+Nothing left in Phase 3. Tag history: `v1.9.0` → `v1.10.0` → `v1.18.1`.
 
-**Scope per endpoint:** 50–150 LOC including tests. Most ship in one session.
+### 2. Phase 4: Bestie + iOS glue — DEFERRED per locked decision #9
 
-### 2. Phase 4: Bestie + iOS glue (6 routes, some blocked on AI engine)
+iOS is deferred until web cutover is stable. Phase 4 routes either depend on Phase 5 (AI engine) or serve the iOS app:
 
-- `/api/bestie-health` GET + POST (decay/death/resurrection/feeding system — big but mostly DB-side)
-- `/api/messages` GET/PATCH/POST (**bestie AI chat — BLOCKED on AI engine port**)
-- `/api/partner/bestie` GET (mobile-app bestie data)
-- `/api/partner/briefing` GET (daily briefing)
-- `/api/partner/push-token` POST (register push notification device)
-- `/api/hatch` GET + POST (user-initiated persona hatching — may need AI engine)
-- `/api/hatch/telegram` DELETE + POST (Telegram bot hatching)
+- `/api/bestie-health` GET + POST — DB-side, but only the iOS app consumes the partner endpoints below
+- `/api/messages` GET/PATCH/POST — **🔒 blocked on Phase 5** (bestie AI chat)
+- `/api/partner/bestie`, `/api/partner/briefing`, `/api/partner/push-token` — iOS-only
+- `/api/hatch`, `/api/hatch/telegram` — depends on Phase 5 for hatch-time content generation
 
-### 3. Phase 5: AI engine port (the big deferred item)
+Honest assessment: nothing in Phase 4 ships until Phase 5 lands, except possibly `/api/bestie-health` (which is mostly a DB scheduler) — but with no iOS consumer hitting it, there's no urgency.
 
-One unlock, many downstream consumers. Covers:
+### 3. Phase 5: AI engine port — THE remaining big lift
+
+Unchanged from the prior plan. **Now the highest-leverage unblocker.** Covers:
+
 - xAI client (OpenAI-compatible SDK against Grok)
 - Anthropic SDK client
 - AI routing (85% Grok / 15% Claude per audit)
@@ -67,113 +43,76 @@ One unlock, many downstream consumers. Covers:
 - Cost tracking ledger (writes to `ai_cost_log` table)
 - `generateReplyToHuman`, `generateAIInteraction`, `generateBeefPost`, plus prompt templates
 
-**Estimated scope:** 400–800 LOC across 5 files depending on how much we port vs stub.
+**Estimated scope:** 400–800 LOC across 5 files. **Estimated sessions:** 2–3, sliceable as `(session 1: xAI client + cost ledger)`, `(session 2: Anthropic client + router)`, `(session 3: circuit breaker + integration tests)`.
 
-**Unblocks:**
-- `/api/interact` AI auto-reply trigger (deferred from Slice 4)
+**Unblocks once landed:**
+- `/api/interact` AI auto-reply trigger
 - `/api/messages` bestie chat
-- All cron content generation (Phase 6)
+- 2 remaining Phase 6 crons (`bestie-life`, `messages-process` or equivalent)
+- 3 admin routes (`admin/channels/generate-content`, `admin/generate-channel-video`, `admin/init-persona`)
 
-**Why we've deferred it:** needs focused time + no blocker for existing migrated endpoints.
+### 4. Phase 6: Cron fleet — 19/21 active crons ported
 
-### 4. Phase 6: Cron fleet (21 routes, blocked on AI engine)
+Per v1.10.0 ("90% cron coverage achieved") and follow-ups. Remaining 2 are blocked on Phase 5. Don't flip them individually — flip after Phase 5 along with the AI-dependent admin routes, in one coordinated deploy. (The cohort-flip risk is double-running vs stop-running content gen.)
 
-Shouldn't ship individually — they share infrastructure (AI engine, Vercel cron scheduler) and the migration must flip the cron schedule as a cohort, else we either double-run (waste $) or stop running (lose content).
+### 5. Phase 7: Admin panel — 64/77 ported, 13 truly remaining
 
-**Cron endpoints:**
-- Content generation (9): `/api/generate`, `/api/generate-topics`, `/api/generate-persona-content`, `/api/generate-ads`, `/api/generate-avatars`, `/api/generate-director-movie`, `/api/generate-movies`, `/api/generate-videos`, `/api/generate-series`, `/api/generate-breaking-videos`
-- Engagement (3): `/api/persona-comments`, `/api/x-react`, `/api/x-dm-poll`
-- Marketing (3): `/api/marketing-post`, `/api/marketing-metrics`, `/api/feedback-loop`
-- Bestie (1): `/api/bestie-life`
-- Admin utility (4): `/api/sponsor-burn`, `/api/telegram/credit-check`, `/api/telegram/status`, `/api/telegram/persona-message`
-- Telegram (2): `/api/telegram/webhook`, `/api/telegram/notify`
+The Phase 7 cohort is **further along than the original roadmap suggested**. Verified by cross-checking `aiglitch-api/src/app/api/admin/*` against `aiglitch/src/app/api/admin/*`. Of the 13 unported admin routes, most are blocked or dead:
 
-**Cutover:** remove cron schedule from `aiglitch`, add equivalent to `aiglitch-api`, verify first execution on preview. One coordinated deploy per job, or flip them all in one deploy after each has been smoke-tested.
-
-### 5. Phase 7: Admin panel (~85 routes — biggest category)
-
-Gated by `ADMIN_PASSWORD` or `ADMIN_TOKEN`. Key decision: port admin auth layer first (1 small route: `/api/auth/admin`), then ship admin routes in thematic groups rather than individually.
-
-**Suggested groupings (not rigid):**
-
-| Group | Routes | Notes |
+| Route | LOC | Status |
 |---|---|---|
-| Persona admin | `/api/admin/personas`, `.../generate-missing-wallets`, `.../refresh-wallet-balances`, `.../set-bot-token`, `.../generate-persona`, `.../persona-avatar`, `.../batch-avatars`, `.../animate-persona`, `.../chibify`, `.../init-persona` | Some blocked on AI engine |
-| Content admin | `.../posts`, `.../channels`, `.../channels/flush`, `.../channels/generate-content` `.../channels/generate-promo`, `.../channels/generate-title`, `.../generate-channel-video`, `.../director-prompts`, `.../generate-news`, `.../generate-og-images`, `.../screenplay`, `.../extend-video` | AI-heavy |
-| Users / settings | `.../users`, `.../settings`, `.../stats`, `.../health`, `.../costs`, `.../cron-control`, `.../coins`, `.../events`, `.../announce`, `.../action`, `.../briefing`, `.../prompts`, `.../snapshot` | Mostly DB-side |
-| Media | `.../media`, `.../media/*`, `.../blob-upload`, `.../blob-upload/upload` | Vercel Blob client |
-| Meatlab | `.../meatlab` | Moderation queue |
-| Marketing / sponsors | `.../merch`, `.../mktg`, `.../spread`, `.../contacts`, `.../emails`, `.../email-outreach`, `.../x-dm`, `.../tiktok-blaster`, `.../sponsors`, `.../sponsors/:id/ads`, `.../ad-campaigns`, `.../spec-ads`, `.../sponsor-clip`, `.../grokify-sponsor`, `.../elon-campaign`, `.../promote-glitchcoin`, `.../token-metadata` | Large group; integrates with social platforms |
-| NFT | `.../nfts`, `.../nft-marketplace` | SPL + metadata writes |
-| Hatching | `.../hatchery`, `.../hatch-admin` | Persona onboarding |
-| Wallet auth | `.../wallet-auth` | QR flow for admin |
-| Trading admin | `.../trading`, `.../budju-trading`, `.../swaps` | **Locked decision #6 — written confirmation per endpoint** |
-| Telegram admin | `.../telegram/re-register-bots` | Bot management |
+| `admin/blob-manager` | 972 | **Flag for DELETION, not migration.** Was a one-off migration/rename tool, now redundant. Sister-repo PR should drop the handler + the `/admin/blob-manager` page. |
+| `admin/budju-trading` | 990 | 🔒 Phase 8 locked |
+| `admin/channels/generate-content` | — | 🔒 Blocked on Phase 5 |
+| `admin/elon-campaign` | — | ☠️ Deprecated (director-movies pipeline deleted in v1.13.1) |
+| `admin/generate-channel-video` | 289 | 🔒 Blocked on Phase 5 |
+| `admin/generate-news` | 148 | ☠️ Depends on deleted `director-movies` lib |
+| `admin/init-persona` | 280 | 🔒 Blocked on Phase 5 (xai) + Phase 8 (Solana Keypair) |
+| `admin/nfts` | 247 | 🔒 Phase 8 (`getServerSolanaConnection`) |
+| `admin/personas/generate-missing-wallets` | 234 | 🔒 Phase 8 (Solana writes) |
+| `admin/personas/refresh-wallet-balances` | 278 | 🔒 Phase 8 (Solana reads) |
+| `admin/screenplay` | — | ☠️ Already deleted in v1.13.1 |
+| `admin/token-metadata` | 439 | 🔒 Phase 8 (token mint writes) |
+| `admin/wallet-auth` | 213 | 🔒 Phase 8 (Solana wallet sigs) |
 
-**Cutover plan:** after admin auth ships, each group gets its own frontend rewrite (targeting just that path prefix). Zero-downtime flips.
+**Translation:** there are no unblocked admin routes left to port that aren't gated by Phase 5 (AI engine) or Phase 8 (Solana deps + per-endpoint approval) — Phase 7 is effectively done from this repo's side until one of those unlocks.
 
-### 6. Phase 8: Trading / wallet / Solana (~15 routes)
+### 6. Phase 8: Trading / wallet / Solana
 
-Locked decision #6: **explicit written confirmation required per endpoint** before migration.
+**Card 8a-1 — Solana read-only routes** ✅ Shipped 2026-05-25 (v1.18.0). Two routes: `/api/solana/balance` (full parity with legacy `?action=balance`), `/api/solana/token-balance` (pure on-chain SPL slice). Helius-only, no `@solana/web3.js` deps added.
 
-**User-facing trading:** `/api/trading`, `/api/ai-trading`, `/api/budju-trading`, `/api/persona-trade`, `/api/wallet`, `/api/wallet/verify`, `/api/solana`, `/api/exchange`, `/api/otc-swap`, `/api/bridge`
-**Admin trading:** `/api/admin/trading`, `/api/admin/budju-trading`, `/api/admin/swaps`
+**Card 8a-2 — Wallet create/import** 🔒 Locked. Requires written approval per locked decision #6 before either side touches it. Keypair generation + encrypted seed storage involved.
 
-**Concerns:**
-- Real money / real on-chain Solana transactions
-- Private keys in env vars (`TREASURY_PRIVATE_KEY`, `BUDJU_WALLET_SECRET`)
-- Circuit breaker coordination with trading bots (cron-side)
-- Anti-bubble-map randomisation: 65% Jupiter / 35% Raydium split, staggered wallet distribution
+**Card 8a-3 — SOL + SPL transfers** 🔒 Locked. On-chain writes — highest-risk slice. Written approval required.
 
-Do not touch without per-endpoint user approval.
+**Phase 8b/8c (ai-trading, budju-trading, persona-trade, exchange, OTC, bridge, wallet/verify, marketplace)** — all 🔒 Locked per decision #6.
+
+**Foundation work that could land without trading approval:** add `@solana/web3.js` + `@solana/spl-token` to `package.json` and port `getServerSolanaConnection()` + `Keypair` helpers into `solana-config.ts`. Doesn't unlock anything user-visible on its own, but removes the dep-blocker for 5 admin routes (`nfts`, `init-persona`, `personas/generate-missing-wallets`, `personas/refresh-wallet-balances`, `token-metadata`) — though those still need Phase 8 trading approval per-endpoint after the deps are in.
 
 ### 7. Phase 9: OAuth callbacks (12 routes — final phase)
 
-Locked decision #7. Requires updating 6 OAuth provider dashboards so callback URLs point at `api.aiglitch.app` instead of `aiglitch.app`:
-- Google, GitHub, X/Twitter, YouTube — active
-- TikTok — deprecated per audit
-- Telegram — bot webhooks
+Unchanged from prior plan. Requires updating 6 OAuth provider dashboards so callback URLs point at `api.aiglitch.app`. Providers: Google, GitHub, X/Twitter, YouTube (active), TikTok (deprecated), Telegram (bot webhooks). Cutover risk: login breaks during the dashboard-update gap. Plan a maintenance window or dual-register where supported.
 
-**Cutover risk:** login breaks for all users during the gap between updating the code and updating the provider dashboards. Plan a maintenance window or dual-register callback URLs if providers support it.
+Routes: `/api/auth/google`, `/api/auth/callback/google`, `/api/auth/github`, `/api/auth/callback/github`, `/api/auth/twitter`, `/api/auth/callback/twitter`, `/api/auth/tiktok`, `/api/auth/callback/tiktok`, `/api/auth/youtube`, `/api/auth/callback/youtube`, `/api/auth/wallet-qr`, `/api/auth/sign-tx`.
 
-**Routes:** `/api/auth/human`, `/api/auth/admin`, `/api/auth/google`, `/api/auth/callback/google`, `/api/auth/github`, `/api/auth/callback/github`, `/api/auth/twitter`, `/api/auth/callback/twitter`, `/api/auth/tiktok`, `/api/auth/callback/tiktok`, `/api/auth/youtube`, `/api/auth/callback/youtube`, `/api/auth/wallet-qr`, `/api/auth/sign-tx`, `/api/auth/webauthn/register`, `/api/auth/webauthn/login`
-
-### Test/dev routes (migrate any time, no priority)
-
-`/api/test-grok-image`, `/api/test-grok-video`, `/api/test-media`, `/api/test-premiere-post`, `/api/content/*`. Low-traffic, won't block anything.
+Already ported (auth side, not OAuth callbacks): `/api/auth/human`, `/api/auth/admin`, `/api/auth/webauthn/register`, `/api/auth/webauthn/login`.
 
 ### Permanent exceptions — Instagram proxies
 
-- `/api/image-proxy`, `/api/video-proxy` — audit rule 5: Instagram cannot fetch Vercel Blob URLs. These must stay reachable at `aiglitch.app`-prefixed URLs because Instagram posts reference them directly. Strangler fallback handles this automatically; consider migrating to `aiglitch-api` but keeping `aiglitch.app` forwarding in place permanently OR porting + maintaining a stable URL regardless of which backend serves them.
+`/api/image-proxy`, `/api/video-proxy` — Instagram can't fetch Vercel Blob URLs. These must stay reachable at `aiglitch.app`-prefixed URLs because IG posts reference them directly. Strangler fallback handles this — keep on legacy permanently per CLAUDE.md migration rule #5.
 
-## Recommended priority order
+## Recommended priority order (refreshed)
 
-1. **Finish Phase 3** — small public / session reads, fast wins, no dependencies. (~20 routes)
-2. **Admin auth layer** — 1 route, unblocks the admin backlog without porting every admin route yet.
-3. **Phase 5 AI engine** — the big unlock. After this, Phases 4 and 6 become straightforward. Also closes the AI auto-reply TODO on `/api/interact`.
-4. **Phase 6 cron fleet** — flip as a cohort once AI engine is stable.
-5. **Phase 4 bestie / iOS** — now unblocked by AI engine.
-6. **Phase 7 admin routes in thematic groups** — after admin auth layer ships, do groups one at a time.
-7. **Phase 8 trading** — per-endpoint approval. Expect this to be its own multi-session workstream.
-8. **Phase 9 OAuth** — final. Coordinated provider-dashboard updates.
-9. **Phase 10 cleanup** — delete legacy handlers, remove strangler fallback, retire aiglitch project (or keep as permanent Instagram proxy).
-
-## Consumer flip backlog
-
-Currently flipped: `/api/feed`. Flip each migrated endpoint in batches when they've baked for a stability window. Candidates ready for flip any time:
-
-- `/api/post/[id]`
-- `/api/channels` (GET only — POST flip implies consumer confidence in write paths)
-- `/api/interact` (all 9 actions except AI auto-reply — see Phase 5 note; worth waiting for AI engine port)
-- `/api/likes`, `/api/bookmarks`
-- `/api/notifications`
-- `/api/trending`, `/api/search`, `/api/profile`, `/api/events`
-
-Consumer flip is a frontend commit to add each path to `beforeFiles` in `next.config.ts` of the `aiglitch` repo. Should be done when the new backend has been stable for at least a few days of no errors.
+1. **Phase 5 AI engine** — the single highest-leverage unblock. Unfreezes `/interact` AI auto-reply, bestie chat, the last 2 crons, and 3 admin routes. 2-3 sessions.
+2. **Cohort flip for Phase 6 last 2 crons + 3 AI admin routes** — after Phase 5 lands. One coordinated deploy.
+3. **Phase 9 OAuth** — only when ready for the provider-dashboard maintenance window.
+4. **Phase 8 cards 8a-2 / 8a-3** — only with explicit written per-endpoint approval per decision #6.
+5. **Sister-repo cleanup of `blob-manager`** — delete the legacy handler + `/admin/blob-manager` page once nothing depends on it.
+6. **Phase 10 cleanup** — delete legacy handlers for everything that's been strangler-flipped, retire the strangler entries, decide whether to keep `aiglitch` alive purely as the Instagram-proxy host.
 
 ## Open decisions for next session
 
-1. **Admin auth migration timing** — is it urgent enough to interrupt Phase 3, or is it fine to finish Phase 3 small routes first?
-2. **Instagram proxy port** — migrate now (with dual-URL strategy) or leave on legacy forever?
-3. **AI engine — stub vs full port** — is a minimum-viable port acceptable (skip circuit breaker + cost ledger) to unblock comments, or should we do the full thing?
-4. **Trading green-lights** — when you're ready to start Phase 8, which endpoint first? `/api/wallet` GET (read-only) would be the safest entry point.
+1. **Phase 5 slicing:** start with `(session 1 = xAI client + cost ledger)` or with `(session 1 = circuit breaker + Redis primitives)`? The first lets us see real costs flowing into the ledger early; the second lets us de-risk the fail-open behavior before any real AI traffic. Recommend xAI-first — costs ledger is the bigger downstream dependency.
+2. **AI engine — stub vs full port:** minimum-viable port (skip circuit breaker + cost ledger) could unblock `/api/interact` AI auto-reply in 1 session instead of 3. Is the partial unblock worth the tech debt?
+3. **Phase 8 foundation deps:** add `@solana/web3.js` + `@solana/spl-token` opportunistically (no-route-port commit) so they're ready when written approval lands on 8a-2/8a-3? Or wait until then?
+4. **`blob-manager` retirement:** does anything in `aiglitch.app` still reference it, or is it truly safe to delete handler + page?
