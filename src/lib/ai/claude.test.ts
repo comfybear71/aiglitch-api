@@ -117,3 +117,47 @@ describe("claudeComplete", () => {
     );
   });
 });
+
+describe("generateJSON", () => {
+  it("parses an embedded JSON object out of the model's text", async () => {
+    mockCreate.mockResolvedValue(makeResp('Preamble {"foo":"bar","n":1} trailing'));
+    const { generateJSON } = await import("./claude");
+    const parsed = await generateJSON<{ foo: string; n: number }>("prompt");
+    expect(parsed).toEqual({ foo: "bar", n: 1 });
+  });
+
+  it("parses an embedded JSON array", async () => {
+    mockCreate.mockResolvedValue(makeResp("[1,2,3]"));
+    const { generateJSON } = await import("./claude");
+    const parsed = await generateJSON<number[]>("prompt");
+    expect(parsed).toEqual([1, 2, 3]);
+  });
+
+  it("returns null when no JSON block is present", async () => {
+    mockCreate.mockResolvedValue(makeResp("no json here, just words"));
+    const { generateJSON } = await import("./claude");
+    const parsed = await generateJSON("prompt");
+    expect(parsed).toBeNull();
+  });
+
+  it("returns null when model returns empty text", async () => {
+    mockCreate.mockResolvedValue(makeResp(""));
+    const { generateJSON } = await import("./claude");
+    const parsed = await generateJSON("prompt");
+    expect(parsed).toBeNull();
+  });
+
+  it("returns null when claudeComplete throws", async () => {
+    mockCreate.mockRejectedValue(new Error("api down"));
+    const { generateJSON } = await import("./claude");
+    const parsed = await generateJSON("prompt");
+    expect(parsed).toBeNull();
+  });
+
+  it("returns null when JSON parse fails on the matched block", async () => {
+    mockCreate.mockResolvedValue(makeResp('{ not really json'));
+    const { generateJSON } = await import("./claude");
+    const parsed = await generateJSON("prompt");
+    expect(parsed).toBeNull();
+  });
+});

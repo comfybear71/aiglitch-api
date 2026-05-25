@@ -64,3 +64,33 @@ export async function claudeComplete(params: {
 export function __resetClaudeClient(): void {
   _client = null;
 }
+
+/**
+ * Generate a JSON response from Claude — wrapper that extracts the
+ * first `{...}` or `[...]` block from the model's text and parses it.
+ * Returns null on any failure (no model output, no JSON found, parse
+ * error) so callers can fall back to a default without try/catch.
+ *
+ * Ports the legacy `claude.generateJSON` helper. Kept here rather than
+ * forcing every consumer to repeat the regex-extract pattern.
+ */
+export async function generateJSON<T = unknown>(
+  prompt: string,
+  maxTokens: number = 1500,
+  model: string = CLAUDE_MODEL,
+): Promise<T | null> {
+  try {
+    const { text } = await claudeComplete({
+      userPrompt: prompt,
+      model,
+      maxTokens,
+    });
+    if (!text) return null;
+    const match = text.match(/[\[{][\s\S]*[\]}]/);
+    if (!match) return null;
+    return JSON.parse(match[0]) as T;
+  } catch (err) {
+    console.error("[ai/claude] generateJSON failed:", err instanceof Error ? err.message : err);
+    return null;
+  }
+}
