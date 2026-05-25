@@ -7,6 +7,36 @@
 
 ## Session log (newest first)
 
+### 2026-05-25 — Port Solana read-only routes (Phase 8a-1)
+
+**Status:** Implemented on `claude/exciting-wozniak-MMYZB`. Typecheck clean + 1921/1921 tests passing (was 1913 — added 8).
+
+**Driver:** aiglitch-meta issue #4 — first card of Phase 8 (Solana subset). Two read-only endpoints, pre-approved per locked decision #6 because they're the lowest-risk slice of the cohort. Legacy has one combined handler at `aiglitch/src/app/api/solana/route.ts` keyed on `?action=balance`; this PR splits it into clean path-style routes that the sister-repo strangler can flip.
+
+**Changes:**
+- `src/lib/solana-config.ts` — extended (additive only) with `BUDJU_TOKEN_MINT_STR`, `USDC_MINT_STR`, `HELIUS_API_KEY`, `getHeliusApiUrl()`, `hasValidTokenMint()`, `isValidSolanaAddress()`. The two existing consumers (`nft/route.ts`, `nft/metadata/[mint]/route.ts`) keep working unchanged.
+- `src/lib/solana-balance.ts` (new) — `getWalletBalances(walletAddress)` using Helius `/v0/addresses/{address}/balances` with an 8s timeout. Returns zeros on Helius failure/missing key; callers surface a `helius_enabled` flag so consumers can disambiguate "empty wallet" from "we can't see it right now".
+- `src/app/api/solana/balance/route.ts` (new) — 1:1 shape parity with legacy `?action=balance`: returns `{ real_mode, helius_enabled, wallet_address, sol_balance, glitch_balance, onchain_glitch_balance, app_glitch_balance, budju_balance, usdc_balance, token_mint }`. Honours `session_id` and merges the user's app-side §GLITCH balance from `glitch_coins` via `Math.max(...)`, same as legacy.
+- `src/app/api/solana/token-balance/route.ts` (new) — pure on-chain SPL slice. No DB merge, no envelope. Flat shape: `{ wallet_address, sol_balance, glitch_balance, budju_balance, usdc_balance, token_mint }`. `session_id` is intentionally ignored (test asserts no DB call).
+- Tests: 8 new (5 for `/balance`, 3 for `/token-balance`) — Helius success path, missing/invalid wallet validation, DB max-merge with `session_id`, Helius unreachable returns zeros + honest flag, flat shape doesn't leak envelope fields, `/token-balance` does no DB lookup.
+
+**Helius-only by design.** The legacy code falls back to standard Solana RPC + `@solana/web3.js` + `@solana/spl-token` when Helius is unavailable. Skipped that path on purpose to avoid adding two heavy deps to this still-young repo — production has Helius configured, so the fallback was cold code anyway. If we ever need it (local dev without a key, or a real outage backstop), drop `@solana/web3.js` + `@solana/spl-token` into `package.json` and port the fallback block; `getWalletBalances`'s public shape doesn't need to change.
+
+**Out of scope (sister-repo PR follow-up):**
+1. Add `/api/solana/balance` + `/api/solana/token-balance` to the `beforeFiles` rewrites in `aiglitch/next.config.ts` so `aiglitch.app/api/solana/balance` proxies here.
+2. Migrate the four consumer call sites (`marketplace`, `me`, `wallet`, `exchange` pages) from `/api/solana?action=balance` to `/api/solana/balance`. Until that happens both old (action-based, still in legacy) and new (path-based, here) routes co-exist — the legacy route is untouched.
+
+**Recommended verify after the sister-repo flip lands:**
+```bash
+# Should hit aiglitch-api and return the parity shape
+curl -s 'https://aiglitch.app/api/solana/balance?wallet_address=<known-wallet>' | jq
+
+# Pure on-chain slice
+curl -s 'https://aiglitch.app/api/solana/token-balance?wallet_address=<known-wallet>' | jq
+```
+
+---
+
 ### 2026-05-23 — Tighten residual marketing failures (IG video poll + TG photo retry)
 
 **Status:** Implemented on `claude/ig-video-timeout-tg-retry`. Typecheck clean + 1913/1913 tests passing.
