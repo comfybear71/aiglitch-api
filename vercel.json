@@ -80,6 +80,10 @@
     {
       "path": "/api/x-dm-poll",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/admin/elon-campaign?action=cron",
+      "schedule": "0 12 * * *"
     }
   ]
 }

@@ -7,6 +7,43 @@
 
 ## Session log (newest first)
 
+### 2026-05-25 — Port /api/admin/elon-campaign + restore daily cron (reversing v1.13.1 "campaign won't return")
+
+**Status:** Implemented on `claude/port-elon-campaign-cron`. Typecheck clean + 1951/1951 tests passing (was 1937 — added 14: 6 for `generateJSON`, 8 for the route).
+
+**Driver:** v1.13.1 (sister-repo PR #275 + this repo's f157447) disabled the elon-campaign daily cron and flagged the campaign as "deprecated" alongside the director-movies pipeline retirement. The user wants the daily campaign running again. Cleanest path is **port to aiglitch-api** rather than restoring the legacy cron — the route doesn't actually depend on director-movies (it stands on its own with claude + xAI video + MP4 concat + spread-post), and crons belong on the backend per the migration's architectural intent.
+
+**Changes:**
+- `src/lib/ai/claude.ts` — added `generateJSON<T>(prompt, maxTokens, model)` helper. Wraps `claudeComplete`, extracts the first `{...}` or `[...]` block from the model's text, returns `null` on any failure so callers don't need try/catch. Port of legacy `claude.generateJSON`.
+- `src/lib/bible/constants.ts` — appended `ELON_CAMPAIGN` constant (persona ID, hashtags, 7-day theme array). Direct port.
+- `src/app/api/admin/elon-campaign/route.ts` (new) — POST (manual admin trigger) + GET (history / `action=cron` / `action=reset` / `action=preview_prompt`). Shared `runCampaignDay()` helper used by both POST and the cron path. Drops the legacy `ensureDbReady()` per CLAUDE.md migration rule #4. Auth: admin-only except `action=cron` which accepts admin OR `requireCronAuth()` (CRON_SECRET bearer).
+- `src/app/api/admin/elon-campaign/route.test.ts` (new) — 8 vitest specs covering admin gating, cron-or-admin gating, idempotency (`action=cron` short-circuits when today's row exists), `preview_prompt` returns assembled prompt, `reset` deletes campaigns + posts, history default response shape, POST screenplay-failure path.
+- `vercel.json` — added `{ path: "/api/admin/elon-campaign?action=cron", schedule: "0 12 * * *" }` (recovered exact schedule from sister-repo commit 5f32438 — the v1.13.1 cron removal).
+
+**API differences from legacy worth noting:**
+- Legacy `submitVideoJob(prompt, duration, aspectRatio)` → aiglitch-api `submitVideoJob({ prompt, taskType, duration, aspectRatio })`. Used `taskType: "video_generation"`. Also wrapped each submission in try/catch so one bad clip doesn't fail the whole day — legacy returned `requestId` even on failure.
+- Legacy `claude.generateJSON()` was a member of a `claude` namespace object; aiglitch-api exposes it as a top-level export.
+- Legacy `checkCronAuth()` (returns boolean) → aiglitch-api `requireCronAuth()` (returns `null` on success, `NextResponse` on failure). Adapted the cron branch to call admin-check first, then fall through to cron-check.
+
+**Out of scope (sister-repo PR follow-up):**
+1. Add `/api/admin/elon-campaign` to `aiglitch/next.config.ts` `beforeFiles` so consumers (manual button in `admin/personas/page.tsx`) hit the new backend.
+2. Delete the legacy handler at `aiglitch/src/app/api/admin/elon-campaign/route.ts` (rollback path no longer needed — new handler is live + has tests).
+3. Confirm no leftover elon-campaign cron entry in `aiglitch/vercel.json` (was removed in PR #275, just double-check).
+
+**Recommended verify after sister-repo flip:**
+```bash
+# Backend live check
+curl -s 'https://api.aiglitch.app/api/admin/elon-campaign?action=preview_prompt' \
+  -H 'Cookie: aiglitch-admin-token=<your-token>'
+# Strangler-flipped check (same response)
+curl -s 'https://aiglitch.app/api/admin/elon-campaign?action=preview_prompt' \
+  -H 'Cookie: aiglitch-admin-token=<your-token>'
+```
+
+Cron will start firing at 12:00 UTC the day after this deploys.
+
+---
+
 ### 2026-05-25 — Port /api/channels/aiglitch-studios/by-genre (Phase 3 mop-up)
 
 **Status:** Implemented on `claude/studios-by-genre-port`. Typecheck clean + 1929/1929 tests passing (was 1921 — added 8).
