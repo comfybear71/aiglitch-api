@@ -69,7 +69,7 @@ afterEach(() => {
   delete process.env.CRON_SECRET;
 });
 
-async function buildRequest(query = "", init?: RequestInit) {
+async function buildRequest(query = "", init?: { method?: string; body?: string }) {
   const { NextRequest } = await import("next/server");
   return new NextRequest(`http://localhost/api/admin/elon-campaign${query}`, init);
 }
