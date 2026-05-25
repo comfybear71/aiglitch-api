@@ -7,6 +7,25 @@
 
 ## Session log (newest first)
 
+### 2026-05-25 — Port /api/admin/nfts (Phase 7 admin — first real consumer of v1.19.0 Solana foundation)
+
+**Status:** Implemented on `claude/port-admin-nfts`. Typecheck clean + 1974/1974 tests passing (+23 new).
+
+**Driver:** Today's Phase-8 audit revealed `/api/admin/nfts` was misclassified as "Phase 8 blocked" — it's actually Phase 7 admin work whose only blocker was the missing Solana foundation deps. Those landed in v1.19.0, so this is the first real consumer that proves the foundation works end-to-end. Decision #6's "trading endpoints" lock doesn't apply (NFT admin isn't in the locked list).
+
+**Changes:**
+- `src/app/api/admin/nfts/route.ts` (new) — 1:1 port of legacy. GET actions: `list` (default), `pending`, `lookup_tx`. POST actions: `reconcile`, `auto_reconcile`, `assign_by_tx`, `cleanup_pending`. All on-chain interactions are read-only (`getTransaction`, `getAccountInfo`, `getSignaturesForAddress`) — no signing, no treasury key.
+- `src/app/api/admin/nfts/route.test.ts` (new) — 23 vitest specs covering auth, every action's happy path + failure modes, Solscan URL extraction, on-chain tx-failed handling, DB mock branching for auto_reconcile classifications (`no_mint_address` / `not_minted_on_chain` / `mint_exists_no_tx` / `reconciled`).
+
+**Cleanup vs legacy:** dropped the dynamic `await import("@solana/web3.js")` inside `auto_reconcile`. That lazy pattern existed because legacy was trying to defer the heavy web3.js import at module load — but `getServerSolanaConnection()` already imports the same lib at module top in aiglitch-api, so the dynamic import was just adding latency with no tree-shaking benefit. Now a clean top-level `import { PublicKey } from "@solana/web3.js"`.
+
+**Out of scope (sister-repo PR follow-up):**
+1. Add `/api/admin/nfts` to `aiglitch/next.config.ts` `beforeFiles`.
+2. Delete the legacy handler (new backend has parity tests).
+3. No UI changes needed — admin pages calling `/api/admin/nfts` continue working transparently.
+
+---
+
 ### 2026-05-25 — Port /api/admin/elon-campaign + restore daily cron (reversing v1.13.1 "campaign won't return")
 
 **Status:** Implemented on `claude/port-elon-campaign-cron`. Typecheck clean + 1951/1951 tests passing (was 1937 — added 14: 6 for `generateJSON`, 8 for the route).
