@@ -11,8 +11,7 @@ describe("PENDING_ROUTES catalogue", () => {
     const valid: Blocker[] = [
       "phase-8",
       "phase-9",
-      "marketing-lib",
-      "director-movies-lib",
+      "dead-code",
       "telegram-bot-engine",
       "permanent-legacy",
       "external-dep",

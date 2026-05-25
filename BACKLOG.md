@@ -2,65 +2,45 @@
 
 > Auto-generated from `src/lib/migration/backlog.ts`. Do not edit by hand — update the source-of-truth catalogue and regen this file.
 
-**41 routes left** • estimated **~43 sessions** at current pace.
+**35 routes left** • estimated **~33 sessions** at current pace.
 
 Pick a blocker category, then attack one route at a time. Each route lists its prereqs (libs / other routes) so you know what to port first.
 
-## Director-movies library port required (1626 lines)
+## Dead code — depends on retired pipeline, delete from legacy
 
-**6 routes** • ~6 sessions
-
-| Route | Methods | Sessions | Complexity | Notes |
-|---|---|---|---|---|
-| `/api/admin/channels/generate-content` | POST | 1 | large | Full multi-scene channel video generation. <br>**Prereqs:** `@/lib/content/director-movies` |
-| `/api/admin/generate-channel-video` | POST | 1 | large | Multi-clip channel video. <br>**Prereqs:** `@/lib/content/director-movies`, `@/lib/media/multi-clip` |
-| `/api/admin/generate-news` | POST | 1 | medium | Breaking-news video generator. <br>**Prereqs:** `@/lib/content/director-movies` |
-| `/api/admin/screenplay` | GET, POST | 1 | medium | Standalone screenplay generation tool. <br>**Prereqs:** `@/lib/content/director-movies` |
-| `/api/generate-director-movie` | GET, POST | 1 | large | Cron — director-led movie production pipeline. <br>**Prereqs:** `@/lib/content/director-movies` |
-| `/api/generate-persona-content` | GET, POST | 1 | large | Persona content generation — multi-clip + director-movie polling. <br>**Prereqs:** `@/lib/content/director-movies`, `@/lib/media/multi-clip` |
-
-## Marketing library port required (3036 lines)
-
-**1 routes** • ~1 sessions
+**5 routes** • ~0 sessions
 
 | Route | Methods | Sessions | Complexity | Notes |
 |---|---|---|---|---|
-| `/api/generate-ads` | GET, POST | 1 | large | Sponsored ad generation cron. <br>**Prereqs:** `@/lib/marketing/*` |
-
-## Chunky single-session port (1-2 sessions)
-
-**1 routes** • ~2 sessions
-
-| Route | Methods | Sessions | Complexity | Notes |
-|---|---|---|---|---|
-| `/api/admin/elon-campaign` | GET, POST | 2 | huge | Daily Elon-bait campaign (711 lines). Needs ELON_CAMPAIGN constant, mp4-concat lib, multi-clip lib, marketing/spread-post. Chunky even with deferrals. <br>**Prereqs:** `@/lib/bible/constants#ELON_CAMPAIGN`, `@/lib/media/mp4-concat`, `@/lib/media/multi-clip` |
+| `/api/admin/channels/generate-content` | POST | 0 | small | Director-movies-dependent. Delete from legacy. <br>**Prereqs:** `@/lib/content/director-movies (retired)` |
+| `/api/admin/generate-channel-video` | POST | 0 | small | Director-movies-dependent. Delete from legacy. <br>**Prereqs:** `@/lib/content/director-movies (retired)` |
+| `/api/admin/generate-news` | POST | 0 | small | Director-movies-dependent. Delete from legacy. <br>**Prereqs:** `@/lib/content/director-movies (retired)` |
+| `/api/admin/screenplay` | GET, POST | 0 | small | Director-movies-dependent. Delete from legacy. <br>**Prereqs:** `@/lib/content/director-movies (retired)` |
+| `/api/generate-director-movie` | GET, POST | 0 | small | Cron — director-led movie production pipeline. Delete from legacy (cron entry already removed in v1.13.1). <br>**Prereqs:** `@/lib/content/director-movies (retired)` |
 
 ## Phase 8 — Trading / Wallet / Solana (needs greenlight)
 
-**21 routes** • ~24 sessions
+**18 routes** • ~23 sessions
 
 | Route | Methods | Sessions | Complexity | Notes |
 |---|---|---|---|---|
-| `/api/admin/budju-trading` | GET, POST | 1 | medium | Admin BUDJU trading controls. <br>**Prereqs:** `/api/budju-trading` |
-| `/api/admin/init-persona` | POST | 1 | medium | Initialise persona + Solana wallet + GLITCH balance. |
-| `/api/admin/nfts` | GET, POST | 1 | medium | Admin NFT reconciliation, Solana RPC for tx lookup. |
-| `/api/admin/personas/generate-missing-wallets` | POST | 1 | small | Generate Solana wallets for personas missing them. |
-| `/api/admin/personas/refresh-wallet-balances` | POST | 1 | small | Refresh on-chain balances for persona wallets. |
-| `/api/admin/token-metadata` | POST | 1 | medium | Metaplex on-chain metadata for §GLITCH token. |
-| `/api/admin/wallet-auth` | GET, POST | 1 | medium | Admin wallet QR auth flow. |
-| `/api/ai-trading` | GET, POST | 2 | large | AI personas trading SOL/BUDJU. Touches Solana RPC + budju-trading lib. |
+| `/api/admin/budju-trading` | GET, POST | 2 | large | Admin BUDJU trading controls. Audit 2026-05-25: 990 LOC, 28 sign calls, real treasury-key SPL transfers. This is the genuine high-risk one — per-endpoint decision-#6 approval needed. <br>**Prereqs:** `/api/budju-trading` |
+| `/api/admin/init-persona` | POST | 1 | medium | Initialise persona + Solana wallet + GLITCH balance. Also depends on AI image-gen — partially blocked beyond Phase 8. |
+| `/api/admin/personas/generate-missing-wallets` | POST | 1 | small | Generate Solana wallets for personas missing them. System-custodial of *persona* keypairs (same model as treasury/ElonBot — not user-custodial). Needs decision-#6 approval. |
+| `/api/admin/token-metadata` | POST | 2 | medium | Metaplex on-chain metadata writes for §GLITCH token. 439 LOC, real mint-authority signing — genuine high-risk decision-#6 approval needed. |
+| `/api/ai-trading` | GET, POST | 2 | large | AI personas trading SOL/BUDJU. Touches Solana RPC + budju-trading lib. Audit 2026-05-25: zero on-chain signing — pure DB simulation, could ship with standard approval ceremony. |
 | `/api/auth/sign-tx` | GET, POST | 1 | medium | Cross-device tx signing bridge (iPad QR → phone signs). |
 | `/api/auth/wallet-qr` | GET, POST | 1 | small | Public wallet QR auth (Ed25519 signature verify). |
-| `/api/bridge` | POST | 1 | medium | Cross-chain bridge. |
-| `/api/budju-trading` | GET, POST | 2 | large | BUDJU token trading. Solana RPC + market simulator. |
-| `/api/exchange` | GET, POST | 1 | medium | GLITCH/SOL/USDC exchange. |
-| `/api/hatch` | POST | 1 | large | Hatch persona + mint NFT (Solana). Marketing dep too. |
+| `/api/bridge` | POST | 1 | medium | Cross-chain bridge. Audit 2026-05-25: pure DB ledger, no real signing. |
+| `/api/budju-trading` | GET, POST | 1 | small | BUDJU token trading user-facing endpoint. Audit 2026-05-25: 59 LOC stub — pure DB ledger, no real signing. |
+| `/api/exchange` | GET, POST | 1 | medium | GLITCH/SOL/USDC exchange. Audit 2026-05-25: pure DB ledger, no real signing. |
+| `/api/hatch` | POST | 1 | large | Hatch persona + mint NFT (Solana). Phase 4 deferred per decision #9 (iOS). |
 | `/api/marketplace` | GET, POST | 1 | large | NFT marketplace purchase + Phantom signing. |
-| `/api/otc-swap` | GET, POST | 1 | medium | OTC swap matching engine. |
-| `/api/persona-trade` | GET, POST | 1 | medium | Buy/sell shares in AI personas. |
-| `/api/solana` | GET, POST | 1 | medium | Generic Solana RPC proxy. |
+| `/api/otc-swap` | GET, POST | 2 | large | OTC swap matching engine. Audit 2026-05-25: 689 LOC, 4 sign calls, 9 chain reads — REAL treasury-side SPL transfers. Genuine high-risk per-endpoint decision-#6 approval needed. |
+| `/api/persona-trade` | GET, POST | 1 | medium | Buy/sell shares in AI personas. Audit 2026-05-25: pure DB simulation, no real signing. |
+| `/api/solana` | GET, POST | 1 | medium | Legacy ?action=-based Solana proxy. /balance + /token-balance already split out in v1.18.0. Remaining actions: link_phantom, validate_transfer, claim_airdrop, mode, elonbot_status — mostly DB simulation. |
 | `/api/trading` | GET, POST | 1 | medium | Generic trading endpoint. |
-| `/api/wallet` | GET, POST | 2 | large | Wallet state + balance + tx history. |
+| `/api/wallet` | GET, POST | 2 | large | Wallet state + balance + tx history. Simulated wallet table — generates fake base58 addresses, NOT real keypairs (per legacy design). |
 | `/api/wallet/verify` | POST | 1 | small | Verify wallet signature for ownership proof. |
 
 ## Phase 9 — OAuth callbacks (last per migration plan)
