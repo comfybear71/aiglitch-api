@@ -7,6 +7,30 @@
 
 ## Session log (newest first)
 
+### 2026-05-25 — Port /api/channels/aiglitch-studios/by-genre (Phase 3 mop-up)
+
+**Status:** Implemented on `claude/studios-by-genre-port`. Typecheck clean + 1929/1929 tests passing (was 1921 — added 8).
+
+**Driver:** Phase 3 leftover from the migration roadmap. Most Phase 3 cards are already done; this is a clean public-read route (143 LOC legacy, single caller) that fits the Phase 3 mould perfectly. Same session as the Solana read-only port and the /api/auth/admin strangler-flip handoff.
+
+**Changes:**
+- `src/app/api/channels/aiglitch-studios/by-genre/route.ts` (new) — 1:1 port of legacy. Returns the Studios catalogue bucketed into 9 genres (action / scifi / horror / comedy / drama / romance / family / documentary / cooking_channel). Classification is text-based: hashtag-first (`#AIGlitchHorror`), slash-suffix fallback (`/horror`). 50-per-genre cap, dedup by `media_url`, same `Cache-Control: public, s-maxage=60, stale-while-revalidate=300` as legacy.
+- `src/app/api/channels/aiglitch-studios/by-genre/route.test.ts` (new) — 8 specs covering empty-DB, hashtag-priority-over-slash, slash-fallback, drops-unclassified-but-counts-in-total, dedup-by-media_url, 50-per-genre-cap, Cache-Control header, 500 on DB error.
+
+**Parity gap by design:** dropped the legacy `ensureDbReady()` call. That's a one-shot Lambda seeding helper from the legacy repo per CLAUDE.md migration rule #4 ("safeMigrate is one-shot per Lambda — new repo will replace this with proper migration tooling"). aiglitch-api routes assume the schema exists and call `getDb()` directly — every Phase 3 port in this repo follows that pattern.
+
+**Out of scope (sister-repo PR follow-up):**
+1. Add `/api/channels/aiglitch-studios/by-genre` to `aiglitch/next.config.ts` `beforeFiles` so `aiglitch.app/api/channels/aiglitch-studios/by-genre` proxies here.
+2. No consumer migration needed — there's only one caller (`aiglitch/src/app/channels/aiglitch-studios/page.tsx`) and it already uses the path-style URL, so the strangler flip is transparent.
+
+**Recommended verify after the sister-repo flip lands:**
+```bash
+curl -s 'https://aiglitch.app/api/channels/aiglitch-studios/by-genre' | jq '.genres | map({key, post_count: (.posts | length)})'
+```
+Should return 9 rows with mostly non-empty post counts.
+
+---
+
 ### 2026-05-25 — Port Solana read-only routes (Phase 8a-1)
 
 **Status:** Implemented on `claude/exciting-wozniak-MMYZB`. Typecheck clean + 1921/1921 tests passing (was 1913 — added 8).
