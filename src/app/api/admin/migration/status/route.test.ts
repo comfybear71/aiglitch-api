@@ -49,6 +49,43 @@ describe("GET /api/admin/migration/status", () => {
     expect(body.summary.percent_done).toBeLessThanOrEqual(100);
   });
 
+  it("summary splits pending into to_port + to_delete + permanent buckets", async () => {
+    const res = await call();
+    const body = (await res.json()) as {
+      pending: { blocker: string }[];
+      summary: {
+        ported_count: number;
+        pending_count: number;
+        to_port_count: number;
+        to_delete_count: number;
+        permanent_count: number;
+        portable_total: number;
+        percent_done: number;
+      };
+    };
+    expect(body.summary.to_delete_count).toBe(
+      body.pending.filter((r) => r.blocker === "dead-code").length,
+    );
+    expect(body.summary.permanent_count).toBe(
+      body.pending.filter((r) => r.blocker === "permanent-legacy").length,
+    );
+    expect(
+      body.summary.to_port_count +
+        body.summary.to_delete_count +
+        body.summary.permanent_count,
+    ).toBe(body.summary.pending_count);
+    expect(body.summary.portable_total).toBe(
+      body.summary.ported_count + body.summary.to_port_count,
+    );
+    // percent_done is based on portable routes only, ignoring dead-code +
+    // permanent-legacy entries. Today's state: 100% (no real to-port left).
+    expect(body.summary.percent_done).toBe(
+      body.summary.portable_total === 0
+        ? 100
+        : Math.round((body.summary.ported_count / body.summary.portable_total) * 1000) / 10,
+    );
+  });
+
   it("groups are sorted by count descending", async () => {
     const res = await call();
     const body = (await res.json()) as {

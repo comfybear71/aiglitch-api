@@ -44,14 +44,31 @@ export async function GET(request: NextRequest) {
     }))
     .sort((a, b) => b.count - a.count);
 
+  // Three buckets — these are NOT the same kind of "pending":
+  //   • to_port  — real outstanding migration work
+  //   • to_delete — depends on a retired pipeline, sister-repo deletes
+  //                 from legacy. Never going to be ported.
+  //   • permanent — stays on aiglitch.app forever by design
+  //                 (image-proxy/video-proxy, etc).
+  // percent_done is the honest completion metric: it's based on routes
+  // that will ever be ported, ignoring the to_delete + permanent buckets.
+  const toDeleteCount = pending.filter((r) => r.blocker === "dead-code").length;
+  const permanentCount = pending.filter((r) => r.blocker === "permanent-legacy").length;
+  const toPortCount = pending.length - toDeleteCount - permanentCount;
+  const portableTotal = ported.length + toPortCount;
+
   const summary = {
     ported_count: ported.length,
     pending_count: pending.length,
+    to_port_count: toPortCount,
+    to_delete_count: toDeleteCount,
+    permanent_count: permanentCount,
     total_count: ported.length + pending.length,
+    portable_total: portableTotal,
     percent_done:
-      Math.round(
-        (ported.length / (ported.length + pending.length)) * 1000,
-      ) / 10,
+      portableTotal === 0
+        ? 100
+        : Math.round((ported.length / portableTotal) * 1000) / 10,
     by_blocker: Object.fromEntries(
       groups.map((g) => [g.blocker, { count: g.count, sessions: g.sessions_estimated }]),
     ),
