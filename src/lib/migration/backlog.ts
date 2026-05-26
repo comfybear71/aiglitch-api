@@ -39,15 +39,6 @@ export interface PendingRoute {
 export const PENDING_ROUTES: PendingRoute[] = [
   // ── Phase 8 — Trading / Wallet / Solana ────────────────────
   {
-    path: "/api/budju-trading",
-    methods: ["GET", "POST"],
-    blocker: "phase-8",
-    sessions: 1,
-    complexity: "small",
-    notes:
-      "BUDJU token trading user-facing endpoint. 59-LOC stub itself — but its lib (@/lib/trading/budju, 1762 LOC) has 18 sign calls + uses TREASURY_PRIVATE_KEY. Genuine on-chain — needs per-endpoint decision-#6 approval.",
-  },
-  {
     path: "/api/admin/budju-trading",
     methods: ["GET", "POST"],
     blocker: "phase-8",
