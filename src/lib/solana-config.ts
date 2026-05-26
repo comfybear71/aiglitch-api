@@ -131,6 +131,35 @@ export function isValidSolanaAddress(addr: string): boolean {
   return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr);
 }
 
+// Metaplex Token Metadata Program — the on-chain program that owns the
+// `name`/`symbol`/`uri`/`image` metadata Phantom and other wallets read.
+// Used by /api/admin/token-metadata to attach/update §GLITCH info.
+export const TOKEN_METADATA_PROGRAM_ID_STR =
+  "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s";
+
+let _tokenMetadataProgramId: PublicKey | null = null;
+export function getTokenMetadataProgramId(): PublicKey {
+  if (!_tokenMetadataProgramId) {
+    _tokenMetadataProgramId = new PublicKey(TOKEN_METADATA_PROGRAM_ID_STR);
+  }
+  return _tokenMetadataProgramId;
+}
+
+// Derive the Metaplex metadata PDA (program-derived address) for a mint.
+// Same byte layout as Metaplex's @metaplex-foundation/mpl-token-metadata
+// — kept inline to avoid pulling the whole MPL SDK for this single use.
+export function getMetadataPDA(mint: PublicKey): PublicKey {
+  const [pda] = PublicKey.findProgramAddressSync(
+    [
+      Buffer.from("metadata"),
+      getTokenMetadataProgramId().toBuffer(),
+      mint.toBuffer(),
+    ],
+    getTokenMetadataProgramId(),
+  );
+  return pda;
+}
+
 // True only when NEXT_PUBLIC_SOLANA_REAL_MODE='true' AND a non-placeholder
 // token mint is configured. Used to gate code paths that touch real
 // treasury keys (e.g. bridge claim → treasury service hand-off).

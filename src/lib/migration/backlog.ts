@@ -127,15 +127,6 @@ export const PENDING_ROUTES: PendingRoute[] = [
       "Hatch persona + mint NFT (Solana). Phase 4 deferred per decision #9 (iOS).",
   },
   {
-    path: "/api/admin/token-metadata",
-    methods: ["POST"],
-    blocker: "phase-8",
-    sessions: 2,
-    complexity: "medium",
-    notes:
-      "Metaplex on-chain metadata writes for §GLITCH token. 439 LOC, real mint-authority signing — genuine high-risk decision-#6 approval needed.",
-  },
-  {
     path: "/api/auth/sign-tx",
     methods: ["GET", "POST"],
     blocker: "phase-8",
