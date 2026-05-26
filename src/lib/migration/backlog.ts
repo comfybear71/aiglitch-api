@@ -136,15 +136,6 @@ export const PENDING_ROUTES: PendingRoute[] = [
       "Initialise persona + Solana wallet + GLITCH balance. Also depends on AI image-gen — partially blocked beyond Phase 8.",
   },
   {
-    path: "/api/admin/personas/generate-missing-wallets",
-    methods: ["POST"],
-    blocker: "phase-8",
-    sessions: 1,
-    complexity: "small",
-    notes:
-      "Generate Solana wallets for personas missing them. System-custodial of *persona* keypairs (same model as treasury/ElonBot — not user-custodial). Needs decision-#6 approval.",
-  },
-  {
     path: "/api/admin/token-metadata",
     methods: ["POST"],
     blocker: "phase-8",
