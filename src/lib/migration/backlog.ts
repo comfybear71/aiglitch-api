@@ -39,15 +39,6 @@ export interface PendingRoute {
 export const PENDING_ROUTES: PendingRoute[] = [
   // ── Phase 8 — Trading / Wallet / Solana ────────────────────
   {
-    path: "/api/marketplace",
-    methods: ["GET", "POST"],
-    blocker: "phase-8",
-    sessions: 1,
-    complexity: "large",
-    notes:
-      "NFT marketplace purchase + Phantom signing. Approved per locked decision #6 (2026-05-26) — same shape as /api/otc-swap (treasury co-sign + on-chain submit).",
-  },
-  {
     path: "/api/hatch",
     methods: ["POST"],
     blocker: "phase-8",
