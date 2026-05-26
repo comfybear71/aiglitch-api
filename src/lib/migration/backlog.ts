@@ -39,21 +39,13 @@ export interface PendingRoute {
 export const PENDING_ROUTES: PendingRoute[] = [
   // ── Phase 8 — Trading / Wallet / Solana ────────────────────
   {
-    path: "/api/exchange",
-    methods: ["GET", "POST"],
-    blocker: "phase-8",
-    sessions: 1,
-    complexity: "medium",
-    notes:
-      "GLITCH/SOL/USDC exchange. Audit 2026-05-26: pure DB ledger + Jupiter price API (read-only). Last route in the Phase 8 simulation batch under existing approval.",
-  },
-  {
     path: "/api/marketplace",
     methods: ["GET", "POST"],
     blocker: "phase-8",
     sessions: 1,
     complexity: "large",
-    notes: "NFT marketplace purchase + Phantom signing.",
+    notes:
+      "NFT marketplace purchase + Phantom signing. Approved per locked decision #6 (2026-05-26) — same shape as /api/otc-swap (treasury co-sign + on-chain submit).",
   },
   {
     path: "/api/hatch",
@@ -62,23 +54,7 @@ export const PENDING_ROUTES: PendingRoute[] = [
     sessions: 1,
     complexity: "large",
     notes:
-      "Hatch persona + mint NFT (Solana). Phase 4 deferred per decision #9 (iOS).",
-  },
-  {
-    path: "/api/auth/sign-tx",
-    methods: ["GET", "POST"],
-    blocker: "phase-8",
-    sessions: 1,
-    complexity: "medium",
-    notes: "Cross-device tx signing bridge (iPad QR → phone signs).",
-  },
-  {
-    path: "/api/auth/wallet-qr",
-    methods: ["GET", "POST"],
-    blocker: "phase-8",
-    sessions: 1,
-    complexity: "small",
-    notes: "Public wallet QR auth (Ed25519 signature verify).",
+      "Hatch persona + mint NFT (Solana). Approved per locked decision #6 (2026-05-26). Note: Phase 4 iOS context still deferred per decision #9 — web flow only.",
   },
 
   // ── Dead code (depends on retired director-movies pipeline) ─
