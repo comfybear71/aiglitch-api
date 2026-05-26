@@ -53,8 +53,10 @@ async function call(body: unknown, authed = true) {
 
 function seedTableCreate() {
   fake.results.push([]); // CREATE TABLE
-  fake.results.push([]); // INDEX
-  fake.results.push([]); // INDEX
+  fake.results.push([]); // ALTER TABLE (source column)
+  fake.results.push([]); // INDEX created_at
+  fake.results.push([]); // INDEX path
+  fake.results.push([]); // INDEX source
 }
 
 describe("POST /api/admin/migration/test", () => {
