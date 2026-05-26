@@ -70,7 +70,7 @@
       "schedule": "0 8,20 * * *"
     },
     {
-      "path": "/api/admin/budju-trading",
+      "path": "/api/admin/budju-trading?action=process_distribution",
       "schedule": "*/10 * * * *"
     },
     {
