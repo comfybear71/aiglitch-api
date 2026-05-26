@@ -37,17 +37,6 @@ export interface PendingRoute {
 }
 
 export const PENDING_ROUTES: PendingRoute[] = [
-  // ── Phase 8 — Trading / Wallet / Solana ────────────────────
-  {
-    path: "/api/hatch",
-    methods: ["POST"],
-    blocker: "phase-8",
-    sessions: 1,
-    complexity: "large",
-    notes:
-      "Hatch persona + mint NFT (Solana). Approved per locked decision #6 (2026-05-26). Note: Phase 4 iOS context still deferred per decision #9 — web flow only.",
-  },
-
   // ── Dead code (depends on retired director-movies pipeline) ─
   // These routes import @/lib/content/director-movies which was
   // intentionally deleted from aiglitch-api in v1.13.1. They will
