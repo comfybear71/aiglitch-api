@@ -259,7 +259,7 @@ const BLOCKER_COLOUR: Record<Blocker, string> = {
 // ── Main component ────────────────────────────────────────────────
 
 export default function MigrationClient() {
-  const [tab, setTab] = useState<"status" | "test" | "logs" | "metrics">(
+  const [tab, setTab] = useState<"status" | "docs" | "test" | "logs" | "metrics">(
     "status",
   );
   const [status, setStatus] = useState<StatusResponse | null>(null);
@@ -301,6 +301,9 @@ export default function MigrationClient() {
         <button style={styles.tab(tab === "status")} onClick={() => setTab("status")}>
           Status
         </button>
+        <button style={styles.tab(tab === "docs")} onClick={() => setTab("docs")}>
+          Docs
+        </button>
         <button style={styles.tab(tab === "test")} onClick={() => setTab("test")}>
           Test
         </button>
@@ -325,6 +328,8 @@ export default function MigrationClient() {
         <div style={styles.card}>Loading…</div>
       ) : tab === "status" ? (
         <StatusTab status={status} />
+      ) : tab === "docs" ? (
+        <DocsTab status={status} />
       ) : tab === "test" ? (
         <TestTab status={status} />
       ) : tab === "logs" ? (
@@ -575,6 +580,342 @@ function StatusTab({ status }: { status: StatusResponse }) {
       </div>
     </>
   );
+}
+
+// ── Docs tab ──────────────────────────────────────────────────────
+//
+// Read-only documentation view. Reuses the same route catalogue from
+// /api/admin/migration/status and the same `/api/admin/migration/route-hint`
+// fetcher as the Test tab — but renders the result as docs (no inputs,
+// no Send button). Routes with curated `route-hints.ts` entries get rich
+// per-method docs; routes without fall back to the file's top JSDoc.
+
+function DocsTab({ status }: { status: StatusResponse }) {
+  const [selected, setSelected] = useState<string | null>(null);
+  const [hint, setHint] = useState<HintResponse | null>(null);
+  const [hintLoading, setHintLoading] = useState(false);
+  const [filter, setFilter] = useState("");
+
+  useEffect(() => {
+    if (!selected) {
+      setHint(null);
+      return;
+    }
+    setHintLoading(true);
+    setHint(null);
+    fetch(`/api/admin/migration/route-hint?path=${encodeURIComponent(selected)}`)
+      .then((res) => res.json())
+      .then((data: HintResponse) => setHint(data))
+      .catch(() => setHint(null))
+      .finally(() => setHintLoading(false));
+  }, [selected]);
+
+  const filtered = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    if (!q) return status.ported;
+    return status.ported.filter((r) => r.path.toLowerCase().includes(q));
+  }, [status.ported, filter]);
+
+  return (
+    <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
+      {/* Left rail — route picker */}
+      <div style={{ width: 340, flexShrink: 0 }}>
+        <input
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder={`Filter ${status.ported.length} routes…`}
+          style={{ ...styles.input, marginBottom: 8 }}
+        />
+        <div
+          style={{
+            border: "1px solid #e5e7eb",
+            borderRadius: 6,
+            maxHeight: "70vh",
+            overflowY: "auto",
+            background: "#fff",
+          }}
+        >
+          {filtered.length === 0 && (
+            <div
+              style={{
+                padding: 12,
+                fontSize: 13,
+                color: "#6b7280",
+                fontStyle: "italic",
+              }}
+            >
+              No routes match.
+            </div>
+          )}
+          {filtered.map((r) => (
+            <button
+              key={r.path}
+              onClick={() => setSelected(r.path)}
+              style={{
+                width: "100%",
+                textAlign: "left",
+                padding: "8px 12px",
+                border: "none",
+                borderBottom: "1px solid #f3f4f6",
+                background:
+                  selected === r.path ? "#eff6ff" : "transparent",
+                cursor: "pointer",
+                fontSize: 13,
+                fontFamily: "ui-monospace, Menlo, monospace",
+                color: selected === r.path ? "#1e3a8a" : "#111",
+              }}
+            >
+              <div style={{ fontWeight: 500 }}>{r.path}</div>
+              <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>
+                {r.methods.join(" · ")}
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Right pane — selected route's docs */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        {!selected && (
+          <div style={styles.card}>
+            <strong>Pick a route on the left.</strong>
+            <div style={{ marginTop: 6, fontSize: 13, color: "#6b7280" }}>
+              Routes with curated examples in
+              {" "}
+              <code style={styles.code}>src/lib/migration/route-hints.ts</code>
+              {" "}
+              show rich per-method docs. Routes without one show the file&apos;s
+              top JSDoc comment. Use the Test tab to fire requests.
+            </div>
+          </div>
+        )}
+
+        {selected && hintLoading && (
+          <div style={styles.card}>Loading docs for {selected}…</div>
+        )}
+
+        {selected && !hintLoading && hint && (
+          <RouteDocsPanel path={selected} hint={hint} status={status} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function RouteDocsPanel({
+  path,
+  hint,
+  status,
+}: {
+  path: string;
+  hint: HintResponse;
+  status: StatusResponse;
+}) {
+  const ported = status.ported.find((r) => r.path === path);
+
+  return (
+    <div>
+      <div style={{ marginBottom: 16 }}>
+        <h2 style={{ margin: 0, fontFamily: "ui-monospace, Menlo, monospace", fontSize: 18 }}>
+          {path}
+        </h2>
+        <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
+          {ported?.methods.join(" · ") || "(no methods detected)"}
+          {ported && (
+            <>
+              {" — "}
+              <code style={styles.code}>{ported.file}</code>
+            </>
+          )}
+        </div>
+      </div>
+
+      {hint.source === "curated" && (
+        <>
+          {Object.entries(hint.methods).map(([method, m]) => (
+            <div key={method} style={styles.card}>
+              <div style={{ marginBottom: 8 }}>
+                <span
+                  style={{
+                    display: "inline-block",
+                    padding: "2px 8px",
+                    background: methodColor(method).bg,
+                    color: methodColor(method).fg,
+                    borderRadius: 4,
+                    fontSize: 12,
+                    fontWeight: 600,
+                    fontFamily: "ui-monospace, Menlo, monospace",
+                  }}
+                >
+                  {method}
+                </span>
+                {m.needs_admin && (
+                  <span
+                    style={{
+                      display: "inline-block",
+                      marginLeft: 8,
+                      padding: "2px 8px",
+                      background: "#fef3c7",
+                      color: "#92400e",
+                      borderRadius: 4,
+                      fontSize: 11,
+                      fontWeight: 600,
+                    }}
+                  >
+                    🔒 Admin
+                  </span>
+                )}
+              </div>
+
+              <p style={{ margin: "8px 0", fontSize: 14, color: "#111" }}>
+                {m.description}
+              </p>
+
+              {m.setup_notes && (
+                <div
+                  style={{
+                    background: "#fefce8",
+                    border: "1px solid #fde047",
+                    borderRadius: 6,
+                    padding: 10,
+                    margin: "8px 0",
+                    fontSize: 13,
+                    color: "#713f12",
+                  }}
+                >
+                  <strong>⚠️ Heads up:</strong> {m.setup_notes}
+                </div>
+              )}
+
+              {m.query && (
+                <DocsCodeBlock label="Example query string" code={m.query} />
+              )}
+
+              {m.body !== undefined && (
+                <DocsCodeBlock
+                  label="Example request body"
+                  code={JSON.stringify(m.body, null, 2)}
+                  language="json"
+                />
+              )}
+
+              {m.path_params && (
+                <DocsCodeBlock
+                  label="Path parameters"
+                  code={JSON.stringify(m.path_params, null, 2)}
+                  language="json"
+                />
+              )}
+            </div>
+          ))}
+        </>
+      )}
+
+      {hint.source === "jsdoc" && (
+        <div style={styles.card}>
+          <div
+            style={{
+              fontSize: 12,
+              color: "#6b7280",
+              fontStyle: "italic",
+              marginBottom: 8,
+            }}
+          >
+            No curated docs yet — showing the route&apos;s top JSDoc comment.
+            Add an entry to{" "}
+            <code style={styles.code}>src/lib/migration/route-hints.ts</code>
+            {" "}for richer per-method docs.
+          </div>
+          <pre
+            style={{
+              whiteSpace: "pre-wrap",
+              fontFamily: "ui-monospace, Menlo, monospace",
+              fontSize: 12,
+              color: "#374151",
+              background: "#fff",
+              border: "1px solid #e5e7eb",
+              borderRadius: 4,
+              padding: 12,
+              margin: 0,
+              overflowX: "auto",
+            }}
+          >
+            {hint.jsdoc}
+          </pre>
+        </div>
+      )}
+
+      {hint.source === "none" && (
+        <div style={styles.card}>
+          <strong>No documentation for this route yet.</strong>
+          <div style={{ marginTop: 6, fontSize: 13, color: "#6b7280" }}>
+            Add a top-of-file JSDoc comment to{" "}
+            <code style={styles.code}>{ported?.file}</code>
+            {" "}or curate per-method examples in{" "}
+            <code style={styles.code}>src/lib/migration/route-hints.ts</code>.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DocsCodeBlock({
+  label,
+  code,
+  language,
+}: {
+  label: string;
+  code: string;
+  language?: string;
+}) {
+  void language;
+  return (
+    <div style={{ margin: "8px 0" }}>
+      <div
+        style={{
+          fontSize: 11,
+          color: "#6b7280",
+          fontWeight: 600,
+          textTransform: "uppercase",
+          letterSpacing: 0.5,
+          marginBottom: 4,
+        }}
+      >
+        {label}
+      </div>
+      <pre
+        style={{
+          background: "#0f172a",
+          color: "#e2e8f0",
+          padding: 10,
+          borderRadius: 4,
+          margin: 0,
+          fontSize: 12,
+          fontFamily: "ui-monospace, Menlo, monospace",
+          overflowX: "auto",
+        }}
+      >
+        {code}
+      </pre>
+    </div>
+  );
+}
+
+function methodColor(method: string): { bg: string; fg: string } {
+  switch (method.toUpperCase()) {
+    case "GET":
+      return { bg: "#dbeafe", fg: "#1e3a8a" };
+    case "POST":
+      return { bg: "#dcfce7", fg: "#166534" };
+    case "PUT":
+    case "PATCH":
+      return { bg: "#fef3c7", fg: "#92400e" };
+    case "DELETE":
+      return { bg: "#fee2e2", fg: "#991b1b" };
+    default:
+      return { bg: "#f3f4f6", fg: "#374151" };
+  }
 }
 
 // ── Test tab ──────────────────────────────────────────────────────
