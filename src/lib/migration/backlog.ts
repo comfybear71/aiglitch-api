@@ -127,15 +127,6 @@ export const PENDING_ROUTES: PendingRoute[] = [
       "Hatch persona + mint NFT (Solana). Phase 4 deferred per decision #9 (iOS).",
   },
   {
-    path: "/api/admin/init-persona",
-    methods: ["POST"],
-    blocker: "phase-8",
-    sessions: 1,
-    complexity: "medium",
-    notes:
-      "Initialise persona + Solana wallet + GLITCH balance. Also depends on AI image-gen — partially blocked beyond Phase 8.",
-  },
-  {
     path: "/api/admin/token-metadata",
     methods: ["POST"],
     blocker: "phase-8",
