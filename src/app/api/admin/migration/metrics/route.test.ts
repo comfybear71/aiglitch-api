@@ -99,6 +99,7 @@ describe("GET /api/admin/migration/metrics", () => {
         total: 10,
         ok: 8,
         errors: 2,
+        unknown: 0,
         p50_ms: 120,
         p95_ms: 450,
         last_at: "2026-04-21T10:00:00Z",
@@ -106,14 +107,26 @@ describe("GET /api/admin/migration/metrics", () => {
     ]);
     const res = await call();
     const body = (await res.json()) as {
-      summary: { endpoint_count: number; total_calls: number; total_errors: number };
-      metrics: { path: string; methods: string[]; error_rate: number }[];
+      summary: {
+        endpoint_count: number;
+        total_calls: number;
+        total_errors: number;
+        total_unknown: number;
+      };
+      metrics: {
+        path: string;
+        methods: string[];
+        error_rate: number;
+        unknown: number;
+      }[];
     };
     expect(body.summary.endpoint_count).toBe(1);
     expect(body.summary.total_calls).toBe(10);
     expect(body.summary.total_errors).toBe(2);
+    expect(body.summary.total_unknown).toBe(0);
     expect(body.metrics[0]!.methods).toEqual(["GET"]);
-    expect(body.metrics[0]!.error_rate).toBe(20); // 2/10 = 20%
+    expect(body.metrics[0]!.error_rate).toBe(20); // 2 / (8 + 2) = 20%
+    expect(body.metrics[0]!.unknown).toBe(0);
   });
 
   it("handles zero-total endpoint without NaN", async () => {
@@ -125,14 +138,66 @@ describe("GET /api/admin/migration/metrics", () => {
         total: 0,
         ok: 0,
         errors: 0,
+        unknown: 0,
         p50_ms: null,
         p95_ms: null,
         last_at: "2026-04-21T10:00:00Z",
       },
     ]);
     const body = (await (await call()).json()) as {
-      metrics: { error_rate: number }[];
+      metrics: { error_rate: number; unknown: number }[];
     };
     expect(body.metrics[0]!.error_rate).toBe(0);
+    expect(body.metrics[0]!.unknown).toBe(0);
+  });
+
+  it("treats NULL-status rows as 'unknown', not errors — live-traffic case", async () => {
+    seedTable();
+    fake.results.push([
+      {
+        path: "/api/feed",
+        method_set: "GET",
+        total: 100,    // 100 live-traffic rows from middleware
+        ok: 0,          // none captured with status
+        errors: 0,
+        unknown: 100,   // all status=NULL
+        p50_ms: null,
+        p95_ms: null,
+        last_at: "2026-05-26T10:00:00Z",
+      },
+    ]);
+    const body = (await (await call()).json()) as {
+      summary: { total_errors: number; total_unknown: number };
+      metrics: { unknown: number; errors: number; error_rate: number }[];
+    };
+    // Pre-fix this would have reported 100% error rate. Now: 0% (no
+    // rows have status, so the rate is 0/0 → 0), 100 marked unknown.
+    expect(body.metrics[0]!.error_rate).toBe(0);
+    expect(body.metrics[0]!.errors).toBe(0);
+    expect(body.metrics[0]!.unknown).toBe(100);
+    expect(body.summary.total_errors).toBe(0);
+    expect(body.summary.total_unknown).toBe(100);
+  });
+
+  it("mixed ok + errors + unknown computes rate over ok+errors only", async () => {
+    seedTable();
+    fake.results.push([
+      {
+        path: "/api/x",
+        method_set: "GET",
+        total: 20,
+        ok: 7,
+        errors: 3,
+        unknown: 10,
+        p50_ms: 100,
+        p95_ms: 200,
+        last_at: "2026-05-26T10:00:00Z",
+      },
+    ]);
+    const body = (await (await call()).json()) as {
+      metrics: { error_rate: number }[];
+    };
+    // 3 errors / (7 ok + 3 errors) = 30%. The 10 unknown rows don't drag.
+    expect(body.metrics[0]!.error_rate).toBe(30);
   });
 });

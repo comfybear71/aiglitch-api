@@ -6,10 +6,22 @@
  *   • method_set    — comma-joined list of methods seen
  *   • total         — total calls
  *   • ok            — 2xx count
- *   • errors        — 4xx+ or network-error (status IS NULL) count
- *   • error_rate    — 0-100 float, 1dp
+ *   • errors        — 4xx+ count (NULL status excluded — see note)
+ *   • unknown       — count of rows with NULL status (no-handler-visibility,
+ *                     i.e. live-traffic middleware rows)
+ *   • error_rate    — 0-100 float, 1dp, computed over (ok + errors)
+ *                     so NULL-status rows don't inflate the rate
  *   • p50_ms / p95_ms — `percentile_cont` over `duration_ms`
  *   • last_at       — most-recent call timestamp
+ *
+ * **NULL status note.** v1 of the live-traffic middleware (Edge
+ * runtime) can't see route-handler responses, so it inserts rows
+ * with `status=NULL`. Pre-middleware versions of this endpoint
+ * counted NULL as an error and showed a misleading 100% error rate
+ * once the middleware shipped. The fix: treat NULL as "unknown" —
+ * not an error, not a success. A future commit can wrap routes
+ * with `withLogging()` to backfill status; until then the
+ * `unknown` column tells you how much of the volume is uncaptured.
  *
  * Rows sorted by total DESC. Use this for the Metrics tab.
  */
@@ -44,7 +56,8 @@ export async function GET(request: NextRequest) {
         STRING_AGG(DISTINCT method, ',' ORDER BY method) AS method_set,
         COUNT(*)::int AS total,
         COUNT(*) FILTER (WHERE status >= 200 AND status < 300)::int AS ok,
-        COUNT(*) FILTER (WHERE status >= 400 OR status IS NULL)::int AS errors,
+        COUNT(*) FILTER (WHERE status >= 400)::int AS errors,
+        COUNT(*) FILTER (WHERE status IS NULL)::int AS unknown,
         percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms)::int AS p50_ms,
         percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)::int AS p95_ms,
         MAX(created_at) AS last_at
@@ -60,7 +73,8 @@ export async function GET(request: NextRequest) {
         STRING_AGG(DISTINCT method, ',' ORDER BY method) AS method_set,
         COUNT(*)::int AS total,
         COUNT(*) FILTER (WHERE status >= 200 AND status < 300)::int AS ok,
-        COUNT(*) FILTER (WHERE status >= 400 OR status IS NULL)::int AS errors,
+        COUNT(*) FILTER (WHERE status >= 400)::int AS errors,
+        COUNT(*) FILTER (WHERE status IS NULL)::int AS unknown,
         percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms)::int AS p50_ms,
         percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)::int AS p95_ms,
         MAX(created_at) AS last_at
@@ -76,7 +90,8 @@ export async function GET(request: NextRequest) {
         STRING_AGG(DISTINCT method, ',' ORDER BY method) AS method_set,
         COUNT(*)::int AS total,
         COUNT(*) FILTER (WHERE status >= 200 AND status < 300)::int AS ok,
-        COUNT(*) FILTER (WHERE status >= 400 OR status IS NULL)::int AS errors,
+        COUNT(*) FILTER (WHERE status >= 400)::int AS errors,
+        COUNT(*) FILTER (WHERE status IS NULL)::int AS unknown,
         percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms)::int AS p50_ms,
         percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)::int AS p95_ms,
         MAX(created_at) AS last_at
@@ -92,27 +107,37 @@ export async function GET(request: NextRequest) {
     total: number;
     ok: number;
     errors: number;
+    unknown: number;
     p50_ms: number | null;
     p95_ms: number | null;
     last_at: string;
-  }[]).map((r) => ({
-    path: r.path,
-    methods: r.method_set.split(",").filter(Boolean),
-    total: r.total,
-    ok: r.ok,
-    errors: r.errors,
-    error_rate:
-      r.total > 0 ? Math.round((r.errors / r.total) * 1000) / 10 : 0,
-    p50_ms: r.p50_ms,
-    p95_ms: r.p95_ms,
-    last_at: r.last_at,
-  }));
+  }[]).map((r) => {
+    // Error rate is computed over rows-with-status only. NULL-status
+    // rows (live-traffic middleware) shouldn't drag the rate up.
+    const denom = r.ok + r.errors;
+    const error_rate = denom > 0
+      ? Math.round((r.errors / denom) * 1000) / 10
+      : 0;
+    return {
+      path: r.path,
+      methods: r.method_set.split(",").filter(Boolean),
+      total: r.total,
+      ok: r.ok,
+      errors: r.errors,
+      unknown: r.unknown,
+      error_rate,
+      p50_ms: r.p50_ms,
+      p95_ms: r.p95_ms,
+      last_at: r.last_at,
+    };
+  });
 
   const summary = {
     window,
     endpoint_count: metrics.length,
     total_calls: metrics.reduce((s, m) => s + m.total, 0),
     total_errors: metrics.reduce((s, m) => s + m.errors, 0),
+    total_unknown: metrics.reduce((s, m) => s + m.unknown, 0),
   };
 
   return NextResponse.json({ summary, metrics });
