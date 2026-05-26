@@ -180,3 +180,79 @@ export const ELON_CAMPAIGN = {
     },
   ],
 } as const;
+
+// ── Pagination ───────────────────────────────────────────────────────
+// Ported from legacy bible/constants.ts. Used by feed + trading +
+// activity endpoints to bound result sets.
+export const PAGINATION = {
+  defaultLimit: 20,
+  maxLimit: 50,
+  feedLimit: 30,
+  commentsPerPost: 20,
+  searchResultsPersonas: 10,
+  searchResultsPosts: 20,
+  searchResultsHashtags: 10,
+  trendingHashtags: 15,
+  trendingPersonas: 5,
+  notifications: 50,
+  transactions: 20,
+} as const;
+
+// ── AI Trading personality types (Phase 8 — DB-only simulation) ─────
+// Ported from legacy bible/constants.ts. Used by lib/trading/personalities
+// to map personas to bot trading behaviour. Pure simulation — no on-chain
+// signing, no treasury keys. Drives the SOL/GLITCH "market" inside the
+// ai_trades + token_balances tables.
+export type TradingStrategy =
+  | "whale" | "permabull" | "contrarian" | "chaos"
+  | "fomo" | "hodl" | "panic_seller" | "degen" | "swing";
+
+export type RiskLevel = "low" | "medium" | "high" | "yolo";
+
+export interface TradingStrategyConfig {
+  strategy: TradingStrategy;
+  riskLevel: RiskLevel;
+  tradeFrequency: number;    // 0-100, % chance of trading per cron run
+  maxTradePercent: number;    // max % of balance per trade
+  minTradeAmount: number;     // minimum GLITCH per trade
+  bias: number;               // -1.0 (always sell) to +1.0 (always buy)
+}
+
+/** Fallback personality for any persona without a specific config. */
+export const BASE_TRADING_PERSONALITY: TradingStrategyConfig = {
+  strategy: "swing",
+  riskLevel: "medium",
+  tradeFrequency: 35,
+  maxTradePercent: 10,
+  minTradeAmount: 100,
+  bias: 0,
+};
+
+/** Per-persona-type default trading strategies. */
+export const TRADING_TYPE_DEFAULTS: Record<string, Partial<TradingStrategyConfig>> = {
+  troll:             { strategy: "chaos",        riskLevel: "yolo",   tradeFrequency: 55, maxTradePercent: 20, bias: 0 },
+  chef:              { strategy: "swing",        riskLevel: "medium", tradeFrequency: 35, maxTradePercent: 10, bias: 0.1 },
+  philosopher:       { strategy: "swing",        riskLevel: "low",    tradeFrequency: 25, maxTradePercent: 8,  bias: 0.1 },
+  memer:             { strategy: "fomo",         riskLevel: "medium", tradeFrequency: 50, maxTradePercent: 15, bias: 0.3 },
+  fitness:           { strategy: "permabull",    riskLevel: "high",   tradeFrequency: 55, maxTradePercent: 15, bias: 0.5 },
+  gossip:            { strategy: "fomo",         riskLevel: "medium", tradeFrequency: 45, maxTradePercent: 12, bias: 0.2 },
+  artist:            { strategy: "hodl",         riskLevel: "low",    tradeFrequency: 20, maxTradePercent: 5,  bias: 0.2 },
+  news:              { strategy: "swing",        riskLevel: "medium", tradeFrequency: 40, maxTradePercent: 10, bias: 0 },
+  wholesome:         { strategy: "hodl",         riskLevel: "low",    tradeFrequency: 20, maxTradePercent: 5,  bias: 0.4 },
+  gamer:             { strategy: "swing",        riskLevel: "medium", tradeFrequency: 45, maxTradePercent: 15, bias: 0.2 },
+  conspiracy:        { strategy: "panic_seller", riskLevel: "high",   tradeFrequency: 45, maxTradePercent: 20, bias: -0.5 },
+  poet:              { strategy: "hodl",         riskLevel: "low",    tradeFrequency: 25, maxTradePercent: 5,  bias: 0.2 },
+  crypto:            { strategy: "permabull",    riskLevel: "high",   tradeFrequency: 65, maxTradePercent: 20, bias: 0.8 },
+  villain:           { strategy: "contrarian",   riskLevel: "high",   tradeFrequency: 50, maxTradePercent: 20, bias: -0.4 },
+  provocateur:       { strategy: "contrarian",   riskLevel: "high",   tradeFrequency: 45, maxTradePercent: 15, bias: -0.3 },
+  doomsday:          { strategy: "panic_seller", riskLevel: "yolo",   tradeFrequency: 50, maxTradePercent: 25, bias: -0.7 },
+  scientist:         { strategy: "swing",        riskLevel: "low",    tradeFrequency: 30, maxTradePercent: 8,  bias: 0.1 },
+  comedian:          { strategy: "fomo",         riskLevel: "medium", tradeFrequency: 40, maxTradePercent: 10, bias: 0.2 },
+  influencer:        { strategy: "permabull",    riskLevel: "medium", tradeFrequency: 55, maxTradePercent: 12, bias: 0.5 },
+  influencer_seller: { strategy: "permabull",    riskLevel: "high",   tradeFrequency: 65, maxTradePercent: 15, bias: 0.6 },
+  sigma:             { strategy: "hodl",         riskLevel: "low",    tradeFrequency: 35, maxTradePercent: 8,  bias: 0.6 },
+  reality_tv:        { strategy: "degen",        riskLevel: "high",   tradeFrequency: 55, maxTradePercent: 20, bias: 0.1 },
+  hype:              { strategy: "fomo",         riskLevel: "high",   tradeFrequency: 65, maxTradePercent: 18, bias: 0.5 },
+  anime:             { strategy: "hodl",         riskLevel: "low",    tradeFrequency: 30, maxTradePercent: 8,  bias: 0.3 },
+  surreal:           { strategy: "chaos",        riskLevel: "yolo",   tradeFrequency: 40, maxTradePercent: 25, bias: 0 },
+};

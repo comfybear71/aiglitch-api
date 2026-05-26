@@ -22,7 +22,7 @@
       "schedule": "0 */2 * * *"
     },
     {
-      "path": "/api/ai-trading",
+      "path": "/api/ai-trading?action=cron",
       "schedule": "*/30 * * * *"
     },
     {
