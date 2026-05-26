@@ -3,14 +3,17 @@
  *
  * Auto-creates `migration_request_log` on first use (legacy
  * one-shot-per-Lambda pattern — fine since this is admin-only
- * and rarely hit). Every row captures one request dispatched by
- * `/api/admin/migration/test` (the dashboard's request runner):
+ * and rarely hit). Every row captures one request:
  *
  *   id (UUID PK) | method | path | status | duration_ms |
  *   request_body (JSONB) | response_body (TEXT, truncated to 2KB) |
- *   error (TEXT) | session_id | created_at
+ *   error (TEXT) | session_id | source ('live' | 'test') | created_at
  *
- * Session 3 will read this for the Logs tab + metrics aggregation.
+ * Two writers:
+ *   - `/api/admin/migration/test`  → manual endpoint tester (source='test')
+ *   - `src/middleware.ts`          → every live `/api/*` request (source='live')
+ *
+ * The dashboard reads this for the Logs + Metrics tabs.
  */
 
 import { randomUUID } from "node:crypto";
@@ -35,8 +38,14 @@ export async function ensureRequestLogTable(): Promise<void> {
         response_body TEXT,
         error         TEXT,
         session_id    TEXT,
+        source        TEXT NOT NULL DEFAULT 'test',
         created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
+    `;
+    // Idempotent backfill for pre-existing installs that lack the column.
+    await sql`
+      ALTER TABLE migration_request_log
+      ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'test'
     `;
     await sql`
       CREATE INDEX IF NOT EXISTS idx_migration_request_log_created_at
@@ -45,6 +54,10 @@ export async function ensureRequestLogTable(): Promise<void> {
     await sql`
       CREATE INDEX IF NOT EXISTS idx_migration_request_log_path
       ON migration_request_log (path)
+    `;
+    await sql`
+      CREATE INDEX IF NOT EXISTS idx_migration_request_log_source_created_at
+      ON migration_request_log (source, created_at DESC)
     `;
   } catch {
     // best-effort — swallow so a transient CREATE failure doesn't
@@ -58,6 +71,8 @@ export function __resetRequestLogTableFlag(): void {
   tableEnsured = false;
 }
 
+export type LogSource = "live" | "test";
+
 export interface InsertLogInput {
   method: string;
   path: string;
@@ -67,6 +82,7 @@ export interface InsertLogInput {
   responseBody?: string;
   error?: string;
   sessionId?: string;
+  source?: LogSource;
 }
 
 export interface LogRow {
@@ -79,6 +95,7 @@ export interface LogRow {
   response_body: string | null;
   error: string | null;
   session_id: string | null;
+  source: LogSource;
   created_at: string;
 }
 
@@ -90,15 +107,16 @@ export async function insertRequestLog(
   const id = randomUUID();
   const bodyJson = input.requestBody ? JSON.stringify(input.requestBody) : null;
   const response = input.responseBody?.slice(0, 2048) ?? null;
+  const source: LogSource = input.source ?? "test";
   await sql`
     INSERT INTO migration_request_log (
       id, method, path, status, duration_ms,
-      request_body, response_body, error, session_id
+      request_body, response_body, error, session_id, source
     ) VALUES (
       ${id}, ${input.method}, ${input.path},
       ${input.status ?? null}, ${input.durationMs ?? null},
       ${bodyJson}::jsonb, ${response}, ${input.error ?? null},
-      ${input.sessionId ?? null}
+      ${input.sessionId ?? null}, ${source}
     )
   `;
   return id;
@@ -109,6 +127,7 @@ export interface ListLogOpts {
   offset?: number;
   pathFilter?: string;
   statusFilter?: "ok" | "error" | "any";
+  sourceFilter?: LogSource | "any";
 }
 
 export async function listRequestLog(

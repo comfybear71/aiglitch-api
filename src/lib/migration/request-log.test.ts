@@ -31,8 +31,10 @@ afterEach(() => {
 describe("insertRequestLog", () => {
   it("creates table on first call and inserts row", async () => {
     fake.results.push([]); // CREATE TABLE
+    fake.results.push([]); // ALTER TABLE (source column)
     fake.results.push([]); // CREATE INDEX (created_at)
     fake.results.push([]); // CREATE INDEX (path)
+    fake.results.push([]); // CREATE INDEX (source, created_at)
     fake.results.push([]); // INSERT
 
     const { getDb } = await import("@/lib/db");
@@ -65,10 +67,12 @@ describe("insertRequestLog", () => {
   });
 
   it("truncates response body to 2KB", async () => {
-    fake.results.push([]);
-    fake.results.push([]);
-    fake.results.push([]);
-    fake.results.push([]);
+    fake.results.push([]); // CREATE
+    fake.results.push([]); // ALTER
+    fake.results.push([]); // INDEX
+    fake.results.push([]); // INDEX
+    fake.results.push([]); // INDEX
+    fake.results.push([]); // INSERT
     const { getDb } = await import("@/lib/db");
     const { insertRequestLog } = await import("./request-log");
     const sql = getDb();
@@ -89,8 +93,10 @@ describe("insertRequestLog", () => {
 
   it("second insert skips CREATE TABLE (cached flag)", async () => {
     fake.results.push([]); // CREATE TABLE
-    fake.results.push([]); // CREATE INDEX
-    fake.results.push([]); // CREATE INDEX
+    fake.results.push([]); // ALTER TABLE
+    fake.results.push([]); // CREATE INDEX (created_at)
+    fake.results.push([]); // CREATE INDEX (path)
+    fake.results.push([]); // CREATE INDEX (source, created_at)
     fake.results.push([]); // INSERT 1
     fake.results.push([]); // INSERT 2
 
@@ -110,8 +116,10 @@ describe("insertRequestLog", () => {
 describe("listRequestLog", () => {
   it("default list with no filters", async () => {
     fake.results.push([]); // CREATE TABLE
-    fake.results.push([]); // INDEX
-    fake.results.push([]); // INDEX
+    fake.results.push([]); // ALTER TABLE
+    fake.results.push([]); // INDEX created_at
+    fake.results.push([]); // INDEX path
+    fake.results.push([]); // INDEX source
     fake.results.push([{ id: "a", method: "GET", path: "/api/x" }]); // SELECT
     const { getDb } = await import("@/lib/db");
     const { listRequestLog } = await import("./request-log");
@@ -123,9 +131,11 @@ describe("listRequestLog", () => {
   });
 
   it("path filter routes to path-only branch", async () => {
-    fake.results.push([]);
-    fake.results.push([]);
-    fake.results.push([]);
+    fake.results.push([]); // CREATE
+    fake.results.push([]); // ALTER
+    fake.results.push([]); // INDEX
+    fake.results.push([]); // INDEX
+    fake.results.push([]); // INDEX
     fake.results.push([]); // SELECT
     const { getDb } = await import("@/lib/db");
     const { listRequestLog } = await import("./request-log");
@@ -136,10 +146,12 @@ describe("listRequestLog", () => {
   });
 
   it("path + status=error combines both filters", async () => {
-    fake.results.push([]);
-    fake.results.push([]);
-    fake.results.push([]);
-    fake.results.push([]);
+    fake.results.push([]); // CREATE
+    fake.results.push([]); // ALTER
+    fake.results.push([]); // INDEX
+    fake.results.push([]); // INDEX
+    fake.results.push([]); // INDEX
+    fake.results.push([]); // SELECT
     const { getDb } = await import("@/lib/db");
     const { listRequestLog } = await import("./request-log");
     await listRequestLog(getDb(), {
@@ -153,10 +165,12 @@ describe("listRequestLog", () => {
   });
 
   it("limit capped at 200", async () => {
-    fake.results.push([]);
-    fake.results.push([]);
-    fake.results.push([]);
-    fake.results.push([]);
+    fake.results.push([]); // CREATE
+    fake.results.push([]); // ALTER
+    fake.results.push([]); // INDEX
+    fake.results.push([]); // INDEX
+    fake.results.push([]); // INDEX
+    fake.results.push([]); // SELECT
     const { getDb } = await import("@/lib/db");
     const { listRequestLog } = await import("./request-log");
     await listRequestLog(getDb(), { limit: 9999 });
@@ -167,10 +181,12 @@ describe("listRequestLog", () => {
 
 describe("clearRequestLog", () => {
   it("returns count of deleted rows", async () => {
-    fake.results.push([]);
-    fake.results.push([]);
-    fake.results.push([]);
-    fake.results.push([{ id: "1" }, { id: "2" }]);
+    fake.results.push([]); // CREATE
+    fake.results.push([]); // ALTER
+    fake.results.push([]); // INDEX
+    fake.results.push([]); // INDEX
+    fake.results.push([]); // INDEX
+    fake.results.push([{ id: "1" }, { id: "2" }]); // DELETE RETURNING
     const { getDb } = await import("@/lib/db");
     const { clearRequestLog } = await import("./request-log");
     const n = await clearRequestLog(getDb());
