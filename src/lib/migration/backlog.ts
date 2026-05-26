@@ -67,15 +67,6 @@ export const PENDING_ROUTES: PendingRoute[] = [
       "GLITCH/SOL/USDC exchange. Audit 2026-05-26: pure DB ledger + Jupiter price API (read-only). Last route in the Phase 8 simulation batch under existing approval.",
   },
   {
-    path: "/api/otc-swap",
-    methods: ["GET", "POST"],
-    blocker: "phase-8",
-    sessions: 2,
-    complexity: "large",
-    notes:
-      "OTC swap matching engine. Audit 2026-05-25: 689 LOC, 4 sign calls, 9 chain reads — REAL treasury-side SPL transfers. Genuine high-risk per-endpoint decision-#6 approval needed.",
-  },
-  {
     path: "/api/solana",
     methods: ["GET", "POST"],
     blocker: "phase-8",
