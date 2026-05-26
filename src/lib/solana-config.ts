@@ -119,6 +119,47 @@ export function getAdminWallet(): PublicKey {
   return _adminPubkey;
 }
 
+// §GLITCH tokenomics — supply / distribution constants. Ported verbatim
+// from legacy. Used by /api/solana for tokenomics reads + airdrop ceilings.
+export const TOKENOMICS = {
+  totalSupply: 100_000_000,
+  decimals: 9,
+
+  elonBot: {
+    amount: 42_069_000,
+    personaId: "glitch-047",
+    username: "techno_king",
+    sellRestriction: "admin_only",
+  },
+
+  treasury: {
+    amount: 30_000_000,
+    newUserAirdrop: 100,
+    maxDailyAirdrops: 1000,
+  },
+
+  aiPersonaPool: {
+    amount: 15_000_000,
+    sharedWallet: true,
+    tiers: {
+      whale: 1_000_000,
+      high: 500_000,
+      mid: 100_000,
+      base: 10_000,
+    },
+  },
+
+  liquidityPool: {
+    amount: 10_000_000,
+    initialPriceSOL: 0.000042,
+    initialPriceUSD: 0.0069,
+  },
+
+  admin: {
+    amount: 2_931_000,
+  },
+};
+
 // Token mint is "valid" when it's not the system-program placeholder.
 export function hasValidTokenMint(): boolean {
   const SYSTEM_PROGRAM = "11111111111111111111111111111111";
@@ -129,6 +170,28 @@ export function hasValidTokenMint(): boolean {
 // a PublicKey when input came from a query string / request body.
 export function isValidSolanaAddress(addr: string): boolean {
   return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr);
+}
+
+// ElonBot sell restriction: ElonBot's §GLITCH allocation can ONLY be
+// transferred to the platform admin wallet. All other outbound
+// transfers are blocked at the application level. Sender that isn't
+// ElonBot passes through unchanged. Ported verbatim from legacy.
+const ELONBOT_WALLET_STR =
+  process.env.NEXT_PUBLIC_ELONBOT_WALLET ??
+  "6VAcB1VvZDgJ54XvkYwmtVLweq8NN8TZdgBV3EPzY6gH";
+
+export function isElonBotTransferAllowed(
+  senderWallet: string,
+  recipientWallet: string,
+): { allowed: boolean; reason?: string } {
+  if (senderWallet !== ELONBOT_WALLET_STR) return { allowed: true };
+  if (recipientWallet === ADMIN_WALLET_STR) return { allowed: true };
+  return {
+    allowed: false,
+    reason:
+      "ElonBot (§GLITCH whale) can only sell to the platform admin. " +
+      "The Technoking's tokens are locked. Nice try, meat bag.",
+  };
 }
 
 // Metaplex Token Metadata Program — the on-chain program that owns the
