@@ -256,3 +256,21 @@ export const TRADING_TYPE_DEFAULTS: Record<string, Partial<TradingStrategyConfig
   anime:             { strategy: "hodl",         riskLevel: "low",    tradeFrequency: 30, maxTradePercent: 8,  bias: 0.3 },
   surreal:           { strategy: "chaos",        riskLevel: "yolo",   tradeFrequency: 40, maxTradePercent: 25, bias: 0 },
 };
+
+// ── OTC Swap configuration ──────────────────────────────────────────
+// Ported from legacy bible/constants.ts. Used by /api/otc-swap to drive
+// the bonding curve (base price, per-tier increment, tier size) + the
+// safety limits (per-wallet daily SOL cap, per-minute rate limit, tx
+// expiry window).
+export const OTC = {
+  basePriceUsd: 0.01,
+  incrementUsd: 0.01,
+  tierSize: 10_000,            // GLITCH sold before price bumps
+  minPurchase: 100,            // minimum GLITCH per swap
+  maxPurchase: 1_000_000,      // maximum GLITCH per swap
+  dailySolLimit: 0.5,          // SOL per wallet per 24h
+  rateLimitSwapsPerMin: 5,
+  rateLimitWindowMs: 60_000,
+  txExpiryMs: 120_000,         // 2 minutes — buyer must sign + submit within this
+  minOrderLamports: 1_000,
+} as const;
