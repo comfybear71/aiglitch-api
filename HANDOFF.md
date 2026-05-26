@@ -7,6 +7,62 @@
 
 ## Session log (newest first)
 
+### 2026-05-26 (late evening) — Phase 9 OAuth flipped + Docs view + cleanup PRs
+
+**Status:** Migration is FULLY done end-to-end. 4 more PRs shipped tonight + Phase 9 OAuth strangler flipped on sister-repo (v1.8.0).
+
+**Tonight's additional tags shipped:**
+- `v1.40.1` — Migration dashboard "to port" copy fix (no more misleading 96.3%)
+- `v1.40.2` — `/api/coins` HOTFIX (wrong response shape was crashing `/me` page)
+- `v1.40.3` — Bumped GitHub Actions `checkout@v4` + `setup-node@v4` to `@v6` (beats June 2 2026 Node 20 deprecation)
+- `v1.41.0` — Docs tab on `/migration` (read-only API reference, reuses route-hints + JSDoc data)
+
+**Phase 9 OAuth strangler flipped (sister-repo v1.8.0):**
+
+| Provider | Backend | Frontend rewrite | End-to-end verified |
+|---|---|---|---|
+| Google | ✅ env vars synced | ✅ live | ✅ verified — required GOOGLE_CLIENT_ID swap (old client was deleted in Google Cloud Console; switched to active client `837829119225-rqri8ks97b...` which now serves both Google login + YouTube) |
+| GitHub | ✅ env vars synced | ✅ live | ✅ verified earlier today |
+| YouTube | ✅ env vars synced | ✅ live | ✅ admin login works (test-post failure is unrelated unported handler — sister-Claude tagged it DEFERRED in alert) |
+| X/Twitter | ✅ env vars rotated (new secret + client ID) | ✅ live | ⏳ provisional — config verified clean, but **X rate-limited the test account from too many login retries**. Will verify tomorrow when rate limit clears (typically 6-24h). |
+| TikTok | (deferred per CLAUDE.md migration rule #8) | (not flipped) | — |
+
+**Critical context for X tomorrow:**
+- All X config is correct on both ends. The PowerShell test (`Invoke-WebRequest /api/auth/twitter`) returned 307 to twitter.com with the right `client_id=RGp3dFBaV0s5RDNXULYxSmlyV2M6MTpjaQ`.
+- The "looping" the user observed was X re-prompting login because of rate limit, NOT our callback failing.
+- DON'T re-attempt X login tonight — every retry extends the rate limit.
+- Tomorrow: fresh incognito, log into x.com first, then test aiglitch.app/me → Sign in with X.
+- If it STILL fails after rate limit clears tomorrow, check the network tab on the `/api/auth/callback/twitter` request — the `location:` header's `?error=…` value pinpoints the exact failure mode.
+
+**OAuth env var lesson (preserve for future audits):**
+- The original `GOOGLE_CLIENT_ID` env var on Vercel pointed at a Google Cloud OAuth client that was DELETED at some point (got `Error 401: deleted_client`).
+- Fixed by reusing the active YouTube OAuth client (`837829119225-rqri8ks97b...`) for Google login too. Added `https://aiglitch.app/api/auth/callback/google` as a redirect URI on that client + `https://aiglitch.app` as a JS origin.
+- Both `GOOGLE_CLIENT_ID` and `YOUTUBE_CLIENT_ID` now point at the same active client on both Vercel projects.
+- `TWITTER_CLIENT_ID` was also stale; rotated to active value + new Client Secret. Both Vercel projects updated.
+
+**aiglitch-meta repo audit:**
+- Reviewed 29 open issues. Closed 17 stale ones (migration-done + governance-never-used). Kept 9 (4 Phase 10 cleanup + 5 admin-aiglitch future work).
+- Discussed long-term: aiglitch-meta survives as ADR/docs museum only. Don't add new automation/coordination tooling — CLAUDE.md + HANDOFF.md per repo is the actual coordination layer.
+
+**aiglitch-meta open issues (still tracked):**
+- Phase 10 cleanup (sister-repo): #25 delete legacy handlers, #26 retire strangler rewrites, #27 reduce aiglitch to pure-UI, #28 verify Instagram proxies post-cleanup
+- admin-aiglitch future project: #20-#24 (bootstrap scaffold, wire admin auth, move admin pages, delete from legacy)
+
+**Discussed but not done — for future session:**
+- Backfill `route-hints.ts` for the ~30 routes Stuart uses day-to-day (medium-tier docs effort). Currently 23/181 routes documented.
+- Cross-cutting concept docs ("how sessions work", "how coins flow", "how crons authenticate", "how treasury is gated", "OAuth flow architecture") as markdown in `docs/concepts/`.
+- Phase 10 cleanup on sister-repo (delete 5 dead-code routes that depend on retired `@/lib/content/director-movies` pipeline).
+
+**By the numbers today:**
+- 11 PRs merged on aiglitch-api (v1.36.0 through v1.41.0)
+- ~25 routes ported
+- 2238/2238 tests green (~100 new today)
+- Phase 8 (Trading/Wallet/Solana) structurally complete
+- Phase 9 (OAuth) 3/4 verified, 1 provisional
+- Phase 10 (cleanup) — sister-repo only, deferred
+
+---
+
 ### 2026-05-26 — Migration complete + v1.40.2 hotfix pending (GitHub Actions incident blocked merge)
 
 **Status:** Migration STRUCTURALLY COMPLETE. 8 PRs shipped today + 1 hotfix waiting on GitHub Actions recovery to merge. Next session reads this first.
