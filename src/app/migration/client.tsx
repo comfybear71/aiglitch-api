@@ -32,7 +32,11 @@ interface StatusResponse {
   summary: {
     ported_count: number;
     pending_count: number;
+    to_port_count: number;
+    to_delete_count: number;
+    permanent_count: number;
     total_count: number;
+    portable_total: number;
     percent_done: number;
     by_blocker: Record<Blocker, { count: number; sessions: number }>;
   };
@@ -414,8 +418,8 @@ function StatusTab({ status }: { status: StatusResponse }) {
             <span>ported</span>
           </div>
           <div style={styles.stat}>
-            <span style={styles.statNum}>{status.summary.pending_count}</span>
-            <span>pending</span>
+            <span style={styles.statNum}>{status.summary.to_port_count}</span>
+            <span>to port</span>
           </div>
           <div style={styles.stat}>
             <span style={styles.statNum}>{status.summary.percent_done}%</span>
@@ -426,14 +430,42 @@ function StatusTab({ status }: { status: StatusResponse }) {
               <div style={styles.progressFill(status.summary.percent_done)} />
             </div>
             <div style={{ fontSize: 12, color: "#6b7280" }}>
-              {status.summary.ported_count} of {status.summary.total_count} routes
+              {status.summary.ported_count} of {status.summary.portable_total} portable routes
             </div>
           </div>
         </div>
+        {(status.summary.to_delete_count > 0 ||
+          status.summary.permanent_count > 0) && (
+          <div
+            style={{
+              marginTop: 12,
+              paddingTop: 12,
+              borderTop: "1px solid #e5e7eb",
+              fontSize: 12,
+              color: "#6b7280",
+              display: "flex",
+              gap: 16,
+              flexWrap: "wrap",
+            }}
+          >
+            {status.summary.to_delete_count > 0 && (
+              <span>
+                <strong>{status.summary.to_delete_count}</strong> routes
+                to delete from legacy (sister-repo cleanup, never ported)
+              </span>
+            )}
+            {status.summary.permanent_count > 0 && (
+              <span>
+                <strong>{status.summary.permanent_count}</strong> routes
+                stay on aiglitch.app forever by design
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       <h2 style={{ fontSize: 18, marginTop: 32, marginBottom: 12 }}>
-        Pending — by blocker
+        Outstanding routes — by category
       </h2>
       {status.groups.map((group) => (
         <div key={group.blocker} style={styles.card}>
