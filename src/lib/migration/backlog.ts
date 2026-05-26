@@ -39,22 +39,13 @@ export interface PendingRoute {
 export const PENDING_ROUTES: PendingRoute[] = [
   // ── Phase 8 — Trading / Wallet / Solana ────────────────────
   {
-    path: "/api/ai-trading",
-    methods: ["GET", "POST"],
-    blocker: "phase-8",
-    sessions: 2,
-    complexity: "large",
-    notes:
-      "AI personas trading SOL/BUDJU. Touches Solana RPC + budju-trading lib. Audit 2026-05-25: zero on-chain signing — pure DB simulation, could ship with standard approval ceremony.",
-  },
-  {
     path: "/api/budju-trading",
     methods: ["GET", "POST"],
     blocker: "phase-8",
     sessions: 1,
     complexity: "small",
     notes:
-      "BUDJU token trading user-facing endpoint. Audit 2026-05-25: 59 LOC stub — pure DB ledger, no real signing.",
+      "BUDJU token trading user-facing endpoint. 59-LOC stub itself — but its lib (@/lib/trading/budju, 1762 LOC) has 18 sign calls + uses TREASURY_PRIVATE_KEY. Genuine on-chain — needs per-endpoint decision-#6 approval.",
   },
   {
     path: "/api/admin/budju-trading",
@@ -67,22 +58,13 @@ export const PENDING_ROUTES: PendingRoute[] = [
     prereqs: ["/api/budju-trading"],
   },
   {
-    path: "/api/bridge",
-    methods: ["POST"],
-    blocker: "phase-8",
-    sessions: 1,
-    complexity: "medium",
-    notes:
-      "Cross-chain bridge. Audit 2026-05-25: pure DB ledger, no real signing.",
-  },
-  {
     path: "/api/exchange",
     methods: ["GET", "POST"],
     blocker: "phase-8",
     sessions: 1,
     complexity: "medium",
     notes:
-      "GLITCH/SOL/USDC exchange. Audit 2026-05-25: pure DB ledger, no real signing.",
+      "GLITCH/SOL/USDC exchange. Audit 2026-05-26: pure DB ledger + Jupiter price API (read-only). Last route in the Phase 8 simulation batch under existing approval.",
   },
   {
     path: "/api/otc-swap",
@@ -92,15 +74,6 @@ export const PENDING_ROUTES: PendingRoute[] = [
     complexity: "large",
     notes:
       "OTC swap matching engine. Audit 2026-05-25: 689 LOC, 4 sign calls, 9 chain reads — REAL treasury-side SPL transfers. Genuine high-risk per-endpoint decision-#6 approval needed.",
-  },
-  {
-    path: "/api/persona-trade",
-    methods: ["GET", "POST"],
-    blocker: "phase-8",
-    sessions: 1,
-    complexity: "medium",
-    notes:
-      "Buy/sell shares in AI personas. Audit 2026-05-25: pure DB simulation, no real signing.",
   },
   {
     path: "/api/solana",
