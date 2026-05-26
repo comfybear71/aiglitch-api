@@ -7,6 +7,47 @@
 
 ## Session log (newest first)
 
+### 2026-05-26 — Migration complete + v1.40.2 hotfix pending (GitHub Actions incident blocked merge)
+
+**Status:** Migration STRUCTURALLY COMPLETE. 8 PRs shipped today + 1 hotfix waiting on GitHub Actions recovery to merge. Next session reads this first.
+
+**Today's shipped tags (in order):**
+- `v1.36.0` — Port /api/solana + /api/trading + /api/wallet + /api/wallet/verify (Phase 8 simulation batch)
+- `v1.37.0` — Port Phase 9 OAuth (10 routes, code ready, strangler flip deferred)
+- `v1.38.0` — Port /api/auth/wallet-qr + /api/auth/sign-tx (no server-held keys)
+- `v1.39.0` — Port /api/marketplace + full nft-mint.ts lib foundation
+- `v1.40.0` — Port /api/hatch (Phase 8 FINAL — NFT mint + on-chain payment)
+- `v1.40.1` — Migration dashboard copy fix (honest "to port" tile, no more misleading "pending")
+
+**Pending PR (blocked on GitHub):** `#240` — v1.40.2 /api/coins HOTFIX
+- Branch: `claude/hotfix-coins-shape`
+- Compare: https://github.com/comfybear71/aiglitch-api/compare/master...claude/hotfix-coins-shape
+- Root cause: the existing `/api/coins` port returned the wrong response shape (`{session_id, balance, updated_at}` + 404 on missing users) instead of the legacy shape (`{balance, lifetime_earned, transactions[]}` with zero-state). Surfaced today when sister-repo deployed v1.7.x which added /api/coins to the strangler rewrites — pre-flip, requests went to legacy (correct); post-flip, they hit aiglitch-api (broken) and `/me` page on aiglitch.app started crashing with `Cannot read properties of undefined (reading 'toLocaleString')`.
+- Fix: full route rewrite using the existing `lib/repositories/users.ts` helpers (`getCoinBalance`, `getTransactions`, `claimSignupBonus`, `deductCoins`, `awardPersonaCoins`, `getUserByUsername`, `purchaseAdFree`, `getAdFreeStatus`). All 7 legacy POST actions ported (claim_signup, send_to_persona, send_to_human, purchase_ad_free, check_ad_free, seed_personas, persona_balances).
+- Tests: 9 new smoke tests (replaces 2-line stub). Local typecheck + 2238/2238 tests passing.
+- **CI verification was blocked by a GitHub Actions service incident (~12:00 UTC 2026-05-26, official status: auth issues preventing checkout). Job logs showed `RPC failed; HTTP 403` + a misleading "Your account is suspended" message that was actually GitHub's generic auth-failure response during the incident, not a real suspension. Confirmed by status.github.com.**
+
+**Sister-repo attempted rollback that didn't ship:**
+- Sister-Claude tried to roll back the `/api/coins` strangler entry in `aiglitch/next.config.ts` to unbreak `/me` while waiting. Local commit `cfa1863` was created but `git push` 403'd from the same GitHub incident. Sister-Claude then `git reset`'d local master to discard the unpushed work. **Production is unchanged — the rollback never reached Vercel.** /me is still broken until v1.40.2 merges.
+
+**RECOVERY PLAN when GitHub Actions is green again (check status.github.com):**
+1. Open PR #240 → click "Re-run jobs" on the failed `verify` check. Should pass cleanly (local CI was clean).
+2. Squash and merge → tag `v1.40.2-2026-05-26`.
+3. Wait for Vercel auto-deploy on aiglitch-api (~1-2 min).
+4. Verify `/me` works on aiglitch.app in an incognito window. The crash should be gone.
+5. **DO NOT** ask sister-repo to add or remove anything from their `next.config.ts`. The strangler rewrite for /api/coins is already in place and correct — the hotfix fixes the shape at the source.
+
+**Other follow-ups deferred to next session(s):**
+- Phase 9 OAuth strangler flips, one provider at a time (GitHub already verified ready, env vars on aiglitch-api set, just needs sister-repo to add 2 rewrites). Sequence: GitHub → Google → Twitter → YouTube → TikTok. Don't batch.
+- Sister-repo Phase 10 cleanup: delete 5 dead-code routes from legacy aiglitch (`/api/admin/screenplay`, `/api/admin/generate-news`, `/api/admin/generate-channel-video`, `/api/admin/channels/generate-content`, `/api/generate-director-movie`). These never get ported — they depend on the retired director-movies pipeline.
+- Documentation hub on `/migration` (user wants self-learning docs with examples). Foundation exists in `lib/migration/route-hints.ts` — currently 23/181 routes documented. Discussed three tiers: quick (add a Docs view exposing existing hints + JSDoc), medium (backfill 30 most-used route hints), big (cross-cutting concept docs for sessions/coins/crons/treasury/OAuth flow).
+
+**Env var changes today (record so they survive future audits):**
+- Added `GITHUB_CLIENT_ID` + `GITHUB_CLIENT_SECRET` to the aiglitch-api Vercel project (copied from legacy aiglitch project). Required for the Phase 9 GitHub OAuth flip — without them the new handler returns 501.
+- User briefly set `NEXT_PUBLIC_SOLANA_NETWORK=devnet` thinking it was needed for marketplace/hatch devnet testing, then reverted to `mainnet-beta` after I flagged that it would break production token reads. Lesson: don't switch the prod backend's network. If devnet testing is wanted, use a separate Vercel preview deploy.
+
+---
+
 ### 2026-05-25 — Port /api/admin/personas/refresh-wallet-balances (second Solana foundation consumer)
 
 **Status:** Implemented on `claude/port-refresh-wallet-balances`. Typecheck clean + 1999/1999 tests passing (+10 new).
