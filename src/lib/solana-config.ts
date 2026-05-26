@@ -130,3 +130,13 @@ export function hasValidTokenMint(): boolean {
 export function isValidSolanaAddress(addr: string): boolean {
   return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr);
 }
+
+// True only when NEXT_PUBLIC_SOLANA_REAL_MODE='true' AND a non-placeholder
+// token mint is configured. Used to gate code paths that touch real
+// treasury keys (e.g. bridge claim → treasury service hand-off).
+export function isRealSolanaMode(): boolean {
+  return (
+    process.env.NEXT_PUBLIC_SOLANA_REAL_MODE === "true" &&
+    hasValidTokenMint()
+  );
+}
