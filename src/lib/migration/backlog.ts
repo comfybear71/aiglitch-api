@@ -48,40 +48,6 @@ export const PENDING_ROUTES: PendingRoute[] = [
       "GLITCH/SOL/USDC exchange. Audit 2026-05-26: pure DB ledger + Jupiter price API (read-only). Last route in the Phase 8 simulation batch under existing approval.",
   },
   {
-    path: "/api/solana",
-    methods: ["GET", "POST"],
-    blocker: "phase-8",
-    sessions: 1,
-    complexity: "medium",
-    notes:
-      "Legacy ?action=-based Solana proxy. /balance + /token-balance already split out in v1.18.0. Remaining actions: link_phantom, validate_transfer, claim_airdrop, mode, elonbot_status — mostly DB simulation.",
-  },
-  {
-    path: "/api/trading",
-    methods: ["GET", "POST"],
-    blocker: "phase-8",
-    sessions: 1,
-    complexity: "medium",
-    notes: "Generic trading endpoint.",
-  },
-  {
-    path: "/api/wallet",
-    methods: ["GET", "POST"],
-    blocker: "phase-8",
-    sessions: 2,
-    complexity: "large",
-    notes:
-      "Wallet state + balance + tx history. Simulated wallet table — generates fake base58 addresses, NOT real keypairs (per legacy design).",
-  },
-  {
-    path: "/api/wallet/verify",
-    methods: ["POST"],
-    blocker: "phase-8",
-    sessions: 1,
-    complexity: "small",
-    notes: "Verify wallet signature for ownership proof.",
-  },
-  {
     path: "/api/marketplace",
     methods: ["GET", "POST"],
     blocker: "phase-8",
