@@ -7,6 +7,68 @@
 
 ## Session log (newest first)
 
+### 2026-05-27 (evening) — Decoupling audit + admin-aiglitch bootstrap kicked off
+
+**Status:** aiglitch-api migration confirmed structurally complete. User started admin-aiglitch bootstrap in a separate Claude Code session (Haiku). Revised sequencing locked in.
+
+**Decoupling audit findings (verified before bootstrap):**
+
+| Area | State | Notes |
+|---|---|---|
+| Backend code | ✅ Complete | 11 PRs shipped over recent days (v1.36.0 → v1.41.1) |
+| Cron fleet | ✅ Decoupled | Legacy `vercel.json` has `"crons": []` — all crons run on aiglitch-api |
+| Production traffic | ✅ Routed to backend | 130 strangler rewrites in sister-repo's `next.config.ts` |
+| User login | ✅ Trimmed | Google + Phantom + Meat Bag only. X + GitHub buttons removed (sister-repo v1.8.1). Backend routes for X/GitHub kept as dormant code for easy re-enable. |
+| AI engine / treasury / on-chain | ✅ All on backend | otc-swap, marketplace, hatch, budju-trading, ai-trading on aiglitch-api |
+| Legacy code in sister-repo | ⚠️ 158 dead route files remain | Phase 10 cleanup pending. Strangler bypasses them in prod but they live in the repo as fallback. |
+
+**Twitter OAuth resolution (final):**
+
+- S256 PKCE upgrade shipped (v1.41.1) — the `plain` method was getting 400'd by X's authorize endpoint.
+- AFTER the S256 fix, X STILL returned 400 even with all config correct (Client ID matches, callback URL exact match, scope correct, NEXT_PUBLIC_APP_URL correct, pay-per-use Developer tier).
+- User decided to drop X from the login surface entirely. Frontend buttons removed (sister-repo v1.8.1). Backend routes left in place as dormant code (re-enabling later = just re-add the strangler rewrite + frontend button).
+- Same call made for GitHub — user only wants Google + Phantom + Meat Bag.
+- The X 400 root cause was never fully nailed (likely some app-tier or app-config in X Developer Portal not visible to us). Captured for posterity if future need to re-enable arises.
+
+**Revised sequencing (locked tonight):**
+
+| Order | Task | Owner | Why |
+|---|---|---|---|
+| 1 | admin-aiglitch bootstrap | New Claude Code session (Haiku) in `admin-aiglitch` repo | KICKED OFF tonight. Brand-new Next.js 16 UI-only app at admin.aiglitch.app. Strangler-proxies to api.aiglitch.app. ALL admin pages ported lift-and-shift, refine later. |
+| 2 | Use admin.aiglitch.app for a few days | User | Real-world testing before deleting fallback |
+| 3 | Phase 10 cleanup on sister-repo | Sister-Claude (when user kicks off) | Delete 158 dead legacy route files in batches: (A) routes with existing strangler (~130), safe immediate; (B) cron-only + test routes (~25), safe; (C) audit + add missing rewrites for `/api/otc-swap`, `/api/post/[id]`, `/api/channels/feed`, `/api/auth/human`, `/api/telegram/webhook`, then delete. KEEP forever: `/api/image-proxy` + `/api/video-proxy`. |
+| 4 | Telegram unified channel + admin slash commands | Future session (probably Opus for setup, Haiku for ongoing) | Merge the two-channel setup into one bot with `setMyCommands(scope: chat_administrators)` for admin-only commands. Admin commands become a thin wrapper on the same `/api/admin/*` endpoints that admin.aiglitch.app uses. |
+
+**admin-aiglitch architecture (locked):**
+
+- Repo: `comfybear71/admin-aiglitch` (separate from aiglitch + aiglitch-api)
+- Domain: admin.aiglitch.app (separate Vercel project)
+- Pattern: UI-only Next.js shell. ZERO `/api/*` routes of its own (except possibly `/api/health`).
+- Strangler rewrites in admin-aiglitch's `next.config.ts beforeFiles` proxy `/api/admin/*` and `/api/auth/admin` to `api.aiglitch.app`.
+- Auth: separate from aiglitch.app (cookie auto-scopes to admin.aiglitch.app domain because the `/api/auth/admin` route sets cookie without explicit Domain attr). NO SSO across consumer + admin domains — intentional security boundary.
+- Visual fidelity: 1:1 with existing aiglitch.app/admin pages. Tailwind tokens copied from aiglitch frontend.
+- ALL existing admin pages ported (user keeps everything, trims later post-real-use).
+
+**Backend rules for cross-repo coordination going forward:**
+
+1. If admin-aiglitch needs a NEW admin endpoint, it lives in aiglitch-api FIRST (coordinated PR), then admin-aiglitch adds a strangler rewrite + UI page.
+2. admin-aiglitch NEVER duplicates backend code. Never imports `@/lib/db`, `@solana/web3.js`, AI SDKs.
+3. admin-aiglitch NEVER has cron entries in vercel.json. Crons live on aiglitch-api.
+4. Same pattern as aiglitch (consumer frontend) — UI calls backend, backend doesn't know about UI.
+
+**Haiku transition active as of this session:**
+
+User has switched to Haiku for ongoing work to save cost. Today's aiglitch-api session was Opus (OAuth debugging + architecture decisions). admin-aiglitch bootstrap session is Haiku.
+
+Escalation rule: if Haiku spirals 2+ attempts on the same thing, open a quick Opus session, unblock the specific blocker, return to Haiku. Haiku is great at execution and following clear specs; Opus is for ambiguous design decisions, cross-repo synthesis, novel debugging.
+
+**Still parked (re-stated for visibility):**
+
+- For You feed staleness — ranked fixes: (1) mirror Telegram/X cron output to `posts` table, (2) cut feed random jitter from 7d to 3-6h, (3) persist generator URLs to Blob before writing post rows, (4) bump fresh-text-only stream share to ~25%, (5) pin <30min posts in no-jitter "very-fresh" tier.
+- Phantom unsafe / GLITCH mainnet readiness — email `review@phantom.com`, DM `@blowfishxyz` on X, revoke authorities for mainnet, lock LP, publish tokenomics. DO NOT change swap frontend to `signAndSendTransaction` — current `signTransaction` + backend `sendRawTransaction` is the correct pattern for treasury-co-signed atomic transactions.
+
+---
+
 ### 2026-05-26 (late evening) — Phase 9 OAuth flipped + Docs view + cleanup PRs
 
 **Status:** Migration is FULLY done end-to-end. 4 more PRs shipped tonight + Phase 9 OAuth strangler flipped on sister-repo (v1.8.0).
