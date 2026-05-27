@@ -41,5 +41,5 @@ it("307 redirect to twitter.com with PKCE params when env is set", async () => {
   expect(loc).toContain("twitter.com/i/oauth2/authorize");
   expect(loc).toContain("client_id=test-client");
   expect(loc).toContain("code_challenge=");
-  expect(loc).toContain("code_challenge_method=plain");
+  expect(loc).toContain("code_challenge_method=S256");
 });
