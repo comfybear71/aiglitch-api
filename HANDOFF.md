@@ -7,6 +7,96 @@
 
 ## Session log (newest first)
 
+### 2026-05-27 — High-priority follow-ups parked for next session
+
+**X OAuth still looping after rate limit cleared** — so it's NOT just rate limit, there's a real bug. Need to capture the `/api/auth/callback/twitter` response's `location:` header in DevTools Network tab — the `error=...` query param will pinpoint which branch of the callback fails. Top suspects:
+- `error=token_failed`: most likely. Token exchange with X is failing. Possible causes: client_secret mismatch (recently rotated — did both Vercel projects get the new one?), code_verifier PKCE cookie not reaching the callback through the strangler proxy, or X tightened security on the `plain` PKCE method we use.
+- `error=no_user`: token exchange worked but `/users/me` fetch failed. Less likely.
+- No callback row in Network at all: loop is X-side, not ours.
+
+If `error=token_failed`, the fix path is likely to upgrade `/api/auth/twitter` from `code_challenge_method=plain` (legacy port) to `S256` (same pattern as `/api/auth/tiktok` route). Grok's analysis was right about that being a weak choice. Tiny PR, ~10 LOC change. Should ship as `v1.41.1`.
+
+---
+
+**Production GLITCH token on Phantom unsafe list — action plan**
+
+Phantom warns users when transacting with new tokens / new domains because Blowfish (Phantom's security partner) has no transaction history. Fix steps:
+
+1. Email `review@phantom.com` with: domain (aiglitch.app), project description, screenshots, X handle (@spiritary), GitHub repos, note that it's devnet/test funds.
+2. Reach out to `@blowfishxyz` on X for direct review.
+3. **DO NOT change the swap frontend to `signAndSendTransaction`** — our architecture requires treasury co-signing, so the current `signTransaction` (client) + `sendRawTransaction` (backend) pattern is **correct and intentional**. The "use signAndSendTransaction" advice from Grok was wrong for our specific architecture.
+4. For eventual mainnet launch: revoke Mint/Freeze/Metadata authorities publicly with tx hashes, lock LP tokens (visible on Solscan), publish full tokenomics + dev wallet vesting, open-source key parts, bigger DEVNET banner during transition period.
+5. After cleared with Phantom + domain ages 3-10 days, warnings naturally clear.
+
+---
+
+**For You feed staleness — ranked action list (parked for future session)**
+
+User confirmed feed feels stale even when Telegram/X are busy. Diagnosis: Telegram/X crons don't write to `posts` table; feed has strict media_url filters; tiered recency uses 7-day random jitter that reshuffles top tier; cache layers add ~2 min of stale serving. Ranked fixes:
+
+1. **Mirror Telegram/X posts back to `posts` table.** Biggest impact. Each `/api/telegram/persona-message`, `/api/x-react`, `/api/marketing-post` cron should INSERT into `posts` alongside its external send. ~50 LOC per cron.
+2. **Cut feed random jitter from 7d to 3-6h.** Single-line change in `/api/feed` (line ~448: `RANDOM() * 604800` → `RANDOM() * 21600`). Stops top tier from shuffling within itself by week-long random.
+3. **Persist generator URLs to Vercel Blob BEFORE writing post row.** Strips `vidgen.x.ai` / `replicate.delivery` raw URLs that get filtered. Audit each image/video cron.
+4. **Bump TEXT_RATIO for FRESH text only.** Boost text ratio to ~25% capped to posts <6h old.
+5. **Pin posts <30min old in a "very-fresh" tier with no jitter.** Makes "just posted" feel responsive.
+
+Doing just #1 + #2 = dramatic improvement. Where to start when user is ready.
+
+---
+
+**Telegram channel unification — discussed but deferred**
+
+User has two Telegram channels right now:
+- Main broadcast (uses `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHANNEL_ID`): all persona images/videos via `spreadPostToSocial`.
+- Per-persona bot channels (uses `persona_telegram_bots` table): each persona has own bot/chat, posts persona-specific content.
+
+User wants to MERGE into one bot/channel with scoped slash commands:
+- Public commands (`/help`, `/personas`, `/latest`, `/follow`) — everyone sees
+- Admin commands (`/generate`, `/broadcast`, `/pause_cron`, `/stats`) — admin only
+
+Telegram natively supports this via `setMyCommands` with `scope: chat_administrators, chat_id: ...`. Admin identification via env var allowlist (`ADMIN_TELEGRAM_USER_IDS`) is simplest. 3-phase migration: Phase 1 add admin scope additively, Phase 2 collapse per-persona broadcast (keep DM-only bots if wanted), Phase 3 flesh out admin commands.
+
+Defer until X OAuth is resolved + Phase 10 cleanup done.
+
+---
+
+**/migration page post-migration**
+
+User asked if /migration is now redundant. Answer: keep page, mentally rename "Migration Dashboard" → "Backend Console" or "API Console". Tabs still useful:
+- Status → "Route Directory" (live filesystem scan, regression alarm)
+- Docs → developer reference (shipped today v1.41.0)
+- Test → in-app API tester (forever useful)
+- Logs / Metrics → operational
+
+No code change urgent. Could rename heading text in `src/app/migration/client.tsx` line ~294 when convenient (~5 min).
+
+---
+
+**Haiku transition — honest assessment**
+
+User plans to use Haiku for future sessions to save cost. My take:
+
+Haiku CAN handle:
+- Small targeted bug fixes when the bug is well-described
+- Adding tests to existing code
+- Following clear specs (e.g. "port this route from legacy with these substitutions")
+- Updating docs / HANDOFF.md
+- Running and interpreting test output
+- Following the patterns established in this repo's existing code
+
+Haiku STRUGGLES with:
+- Cross-repo reasoning (aiglitch-api + aiglitch + aiglitch-meta + admin-aiglitch)
+- Ambiguous design decisions ("how should this work?")
+- Novel debugging where the failure mode is unclear
+- Big-picture trade-off discussions
+- Synthesising context across 5 different cache layers / 3 different bots / etc.
+
+What makes Haiku effective for THIS repo specifically: CLAUDE.md + HANDOFF.md + the curated docs we built today. Cold-loading those gives Haiku enough context to make focused changes.
+
+**Recommended workflow**: Use Haiku for testing, small fixes, tests-additions, documentation. Reach for Opus when: For You strategy lands, GLITCH token mainnet launch prep, Telegram channel unification, or any debugging that goes past 2 attempts. Keep CLAUDE.md + HANDOFF.md updated in EVERY session so Haiku/Opus both have current context.
+
+---
+
 ### 2026-05-26 (late evening) — Phase 9 OAuth flipped + Docs view + cleanup PRs
 
 **Status:** Migration is FULLY done end-to-end. 4 more PRs shipped tonight + Phase 9 OAuth strangler flipped on sister-repo (v1.8.0).
