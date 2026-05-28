@@ -27,12 +27,34 @@ vi.mock("@/lib/marketing", () => ({
 const testPlatformTokenMock = vi.fn();
 const getAnyAccountForPlatformMock = vi.fn();
 const postToPlatformMock = vi.fn();
+const getActiveAccountsMock = vi.fn();
 vi.mock("@/lib/marketing/platforms", () => ({
   testPlatformToken: (...a: unknown[]) => testPlatformTokenMock(...a),
   getAnyAccountForPlatform: (...a: unknown[]) =>
     getAnyAccountForPlatformMock(...a),
   postToPlatform: (...a: unknown[]) => postToPlatformMock(...a),
-  getActiveAccounts: vi.fn(),
+  getActiveAccounts: (...a: unknown[]) => getActiveAccountsMock(...a),
+}));
+
+// Hero/poster generators hit xAI — mock them so the route's handler
+// logic is tested without real image generation.
+const generateHeroImageMock = vi.fn();
+const generatePosterMock = vi.fn();
+const previewHeroPromptMock = vi.fn();
+const previewPosterPromptMock = vi.fn();
+vi.mock("@/lib/marketing/hero-image", () => ({
+  generateHeroImage: (...a: unknown[]) => generateHeroImageMock(...a),
+  generatePoster: (...a: unknown[]) => generatePosterMock(...a),
+  previewHeroPrompt: (...a: unknown[]) => previewHeroPromptMock(...a),
+  previewPosterPrompt: (...a: unknown[]) => previewPosterPromptMock(...a),
+}));
+
+vi.mock("@/lib/marketing/content-adapter", () => ({
+  adaptContentForPlatform: vi.fn().mockResolvedValue({ text: "adapted" }),
+}));
+
+vi.mock("@/lib/telegram", () => ({
+  sendTelegramMessage: vi.fn().mockResolvedValue(undefined),
 }));
 
 beforeEach(() => {
@@ -45,6 +67,12 @@ beforeEach(() => {
   testPlatformTokenMock.mockReset();
   getAnyAccountForPlatformMock.mockReset();
   postToPlatformMock.mockReset();
+  getActiveAccountsMock.mockReset();
+  getActiveAccountsMock.mockResolvedValue([]);
+  generateHeroImageMock.mockReset();
+  generatePosterMock.mockReset();
+  previewHeroPromptMock.mockReset();
+  previewPosterPromptMock.mockReset();
   vi.resetModules();
 });
 
@@ -118,10 +146,13 @@ describe("GET actions", () => {
     expect(testPlatformTokenMock).toHaveBeenCalledWith("x");
   });
 
-  it("preview_hero_prompt returns 501 deferred", async () => {
+  it("preview_hero_prompt returns 200 with prompt", async () => {
     mockIsAdmin = true;
     fake.results = [[], []];
-    expect((await callGET("action=preview_hero_prompt")).status).toBe(501);
+    previewHeroPromptMock.mockResolvedValue("HERO PROMPT TEXT");
+    const res = await callGET("action=preview_hero_prompt");
+    expect(res.status).toBe(200);
+    expect((await res.json()).prompt).toBe("HERO PROMPT TEXT");
   });
 
   it("unknown action returns 400", async () => {
@@ -215,12 +246,40 @@ describe("POST actions", () => {
     ).toBe(200);
   });
 
-  it("generate_hero / generate_poster return 501 deferred", async () => {
+  it("generate_hero returns 200 with url + spreadResults", async () => {
     mockIsAdmin = true;
-    fake.results = [[], []];
-    expect((await callPOST({ action: "generate_hero" })).status).toBe(501);
+    generateHeroImageMock.mockResolvedValue({ url: "https://blob/hero.jpg" });
+    getActiveAccountsMock.mockResolvedValue([]);
+    // ensure + settings UPSERT + posts INSERT + persona UPDATE
+    fake.results = [[], [], [], []];
+    const res = await callPOST({ action: "generate_hero" });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.url).toBe("https://blob/hero.jpg");
+    expect(Array.isArray(body.spreadResults)).toBe(true);
+    expect(generateHeroImageMock).toHaveBeenCalled();
+  });
 
-    fake.results = [[], []];
-    expect((await callPOST({ action: "generate_poster" })).status).toBe(501);
+  it("generate_poster returns 200 with url, passes focus_topics through", async () => {
+    mockIsAdmin = true;
+    generatePosterMock.mockResolvedValue({ url: "https://blob/poster.jpg" });
+    getActiveAccountsMock.mockResolvedValue([]);
+    fake.results = [[], [], [], []];
+    const res = await callPOST({
+      action: "generate_poster",
+      focus_topics: JSON.stringify(["channels"]),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.url).toBe("https://blob/poster.jpg");
+    expect(generatePosterMock).toHaveBeenCalledWith(["channels"], undefined);
+  });
+
+  it("generate_hero returns 502 when generator yields no url", async () => {
+    mockIsAdmin = true;
+    generateHeroImageMock.mockResolvedValue({ url: null, error: "xAI down" });
+    fake.results = [[]]; // ensure only
+    const res = await callPOST({ action: "generate_hero" });
+    expect(res.status).toBe(502);
   });
 });
