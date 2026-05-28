@@ -84,3 +84,22 @@ export async function POST(request: NextRequest) {
   });
   return response;
 }
+
+/**
+ * DELETE /api/auth/admin
+ *
+ * Admin logout. Clears the session cookie by setting it empty with
+ * maxAge 0. No auth required — logging out an already-invalid session
+ * is harmless.
+ */
+export async function DELETE() {
+  const response = NextResponse.json({ success: true });
+  response.cookies.set(ADMIN_COOKIE, "", {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    maxAge: 0,
+    path: "/",
+  });
+  return response;
+}
