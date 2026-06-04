@@ -33,10 +33,15 @@ import {
   pickBreakingNewsAngle,
   type DailyTopic,
 } from "@/lib/content/topic-engine";
+import { processNewTopicsForBreakingNews } from "@/lib/content/breaking-news";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-export const maxDuration = 300;
+// Bumped from 300 → 660. Breaking-news pipeline can add up to ~3-4 min
+// of xAI video gen per cron run (capped at 2 new videos/day, each ~90s
+// presenter + ~90s field generated in parallel + stitching). The legacy
+// 5-min ceiling was tight; this gives headroom for cold-start jitter.
+export const maxDuration = 660;
 
 const MIN_ACTIVE_TOPICS = 5;
 const BREAKING_NEWS_MAX_TOPICS = 2;
@@ -187,16 +192,19 @@ async function runGenerateTopics(forceRefresh: boolean): Promise<Outcome> {
 
   let topics: DailyTopic[] = [];
   let inserted = 0;
+  const insertedIds: string[] = [];
 
   if (currentCount < MIN_ACTIVE_TOPICS || forceRefresh) {
     topics = await generateDailyTopics();
     for (const topic of topics) {
       try {
+        const newId = randomUUID();
         await sql`
           INSERT INTO daily_topics (id, headline, summary, original_theme, anagram_mappings, mood, category)
-          VALUES (${randomUUID()}, ${topic.headline}, ${topic.summary}, ${topic.original_theme}, ${topic.anagram_mappings}, ${topic.mood}, ${topic.category})
+          VALUES (${newId}, ${topic.headline}, ${topic.summary}, ${topic.original_theme}, ${topic.anagram_mappings}, ${topic.mood}, ${topic.category})
         `;
         inserted++;
+        insertedIds.push(newId);
       } catch (err) {
         console.error("[generate-topics] insert failed:", err instanceof Error ? err.message : err);
       }
@@ -221,6 +229,23 @@ async function runGenerateTopics(forceRefresh: boolean): Promise<Outcome> {
   // 1-2 personas react to the briefing
   const reactionPosts = await postReactions(sql, briefing);
 
+  // Breaking-news stitched video pipeline — only for genuinely NEW
+  // topics this run. Deduped via daily_topics.breaking_video_url,
+  // capped at 2/day, gated by platform_settings.breaking_news_enabled.
+  // Failures isolated per-topic so a single xAI hiccup doesn't undo
+  // topic insertion.
+  let breakingNewsResults: Awaited<ReturnType<typeof processNewTopicsForBreakingNews>> = [];
+  if (insertedIds.length > 0) {
+    try {
+      breakingNewsResults = await processNewTopicsForBreakingNews(insertedIds);
+    } catch (err) {
+      console.error(
+        "[generate-topics] breaking-news pipeline crashed (non-fatal):",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
   const displayTopics = (topics.length > 0 ? topics : existing).map((t) => ({
     headline: t.headline,
     category: t.category,
@@ -232,6 +257,7 @@ async function runGenerateTopics(forceRefresh: boolean): Promise<Outcome> {
     inserted,
     text_news_posts: textNewsPosts,
     reaction_posts: reactionPosts,
+    breaking_news: breakingNewsResults,
     topics: displayTopics,
   };
 }
