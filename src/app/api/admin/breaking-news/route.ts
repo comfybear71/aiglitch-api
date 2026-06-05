@@ -20,7 +20,12 @@ import { getDb } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-export const maxDuration = 300; // brand asset regen can take ~60s
+// 800s (~13min) to cover the worst-case first-run scenario:
+//   intro (~3min) + outro (~3min) + presenter (~3min || parallel with field)
+//   + field (~3min) + stitch + upload + post + spread.
+// Once brand assets exist in Blob, subsequent runs skip intro/outro
+// and complete in ~3-4 min. The 300s default isn't enough for first run.
+export const maxDuration = 800;
 
 export async function GET(request: NextRequest) {
   if (!(await isAdminAuthenticated(request))) {
