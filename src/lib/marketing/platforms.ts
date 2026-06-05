@@ -19,7 +19,7 @@
 
 import { getDb } from "@/lib/db";
 import { buildOAuth1Header, getAppCredentials } from "@/lib/x-oauth";
-import { sendTelegramPhoto } from "@/lib/telegram";
+import { sendTelegramPhoto, sendTelegramVideo } from "@/lib/telegram";
 import { put } from "@vercel/blob";
 import { randomUUID } from "node:crypto";
 import sharp from "sharp";
@@ -815,12 +815,17 @@ async function postToTelegram(
 
   try {
     if (mediaUrl) {
-      // Use download+multipart for media (Telegram can't reliably fetch Blob URLs)
-      const result = await sendTelegramPhoto(botToken, chatId, mediaUrl, text);
+      // Use download+multipart for media (Telegram can't reliably fetch Blob URLs).
+      // sendPhoto caps at 10 MB; breaking-news MP4s are ~15-20 MB, so route
+      // video extensions through sendVideo (50 MB cap, inline player).
+      const isVideo = /\.(mp4|mov|webm|m4v)(\?|$)/i.test(mediaUrl);
+      const result = isVideo
+        ? await sendTelegramVideo(botToken, chatId, mediaUrl, text)
+        : await sendTelegramPhoto(botToken, chatId, mediaUrl, text);
       if (!result.ok) {
         return {
           success: false,
-          error: `Telegram photo upload failed: ${result.error}`,
+          error: `Telegram ${isVideo ? "video" : "photo"} upload failed: ${result.error}`,
         };
       }
       return {
