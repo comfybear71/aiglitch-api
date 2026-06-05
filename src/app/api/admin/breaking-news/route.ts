@@ -12,6 +12,7 @@ import { type NextRequest, NextResponse } from "next/server";
 import { isAdminAuthenticated } from "@/lib/admin-auth";
 import {
   ensureBrandAssets,
+  forceTriggerBreakingNews,
   getBreakingNewsStatus,
   setBreakingNewsEnabled,
 } from "@/lib/content/breaking-news";
@@ -79,6 +80,19 @@ export async function POST(request: NextRequest) {
       ON CONFLICT (key) DO UPDATE SET value = '0', updated_at = NOW()
     `;
     return NextResponse.json({ ok: true, count: 0 });
+  }
+
+  // Force-trigger the breaking-news pipeline against existing topics
+  // that don't yet have a breaking_video_url. Useful for end-to-end
+  // verification without waiting for natural topic expiry. Respects
+  // the daily cap + enabled toggle. Slow — takes 3-5 min per video.
+  if (action === "force_trigger") {
+    const max = Math.max(
+      1,
+      Math.min(2, Number(body.max_topics ?? 1)),
+    );
+    const results = await forceTriggerBreakingNews(max);
+    return NextResponse.json({ ok: true, results });
   }
 
   // Force-regenerate intro/outro brand assets. Useful if the visual

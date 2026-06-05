@@ -468,3 +468,39 @@ export async function processNewTopicsForBreakingNews(
 
   return results;
 }
+
+// ─── Admin manual trigger (force-runs against existing topics) ──────
+
+/**
+ * Pick up to N active topics that don't yet have a breaking_video_url
+ * and run the breaking-news pipeline on them. Used by the admin
+ * "Force Trigger" button to verify the pipeline end-to-end without
+ * waiting for natural topic expiry.
+ *
+ * Respects the daily cap + enabled toggle just like the chained path.
+ */
+export async function forceTriggerBreakingNews(
+  maxTopics = 1,
+): Promise<BreakingNewsResult[]> {
+  await ensureBreakingNewsColumns();
+  const sql = getDb();
+  let rows: Array<{ id: string }> = [];
+  try {
+    rows = (await sql`
+      SELECT id FROM daily_topics
+      WHERE breaking_video_url IS NULL
+        AND is_active = TRUE
+        AND (expires_at IS NULL OR expires_at > NOW())
+      ORDER BY created_at DESC
+      LIMIT ${maxTopics}
+    `) as Array<{ id: string }>;
+  } catch (err) {
+    console.error(
+      "[breaking-news] forceTrigger candidate fetch failed:",
+      err instanceof Error ? err.message : err,
+    );
+    return [];
+  }
+  if (rows.length === 0) return [];
+  return processNewTopicsForBreakingNews(rows.map((r) => r.id));
+}

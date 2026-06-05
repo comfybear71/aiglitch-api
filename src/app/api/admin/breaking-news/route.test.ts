@@ -16,10 +16,12 @@ vi.mock("@/lib/admin-auth", () => ({
 const getBreakingNewsStatusMock = vi.fn();
 const setBreakingNewsEnabledMock = vi.fn();
 const ensureBrandAssetsMock = vi.fn();
+const forceTriggerBreakingNewsMock = vi.fn();
 vi.mock("@/lib/content/breaking-news", () => ({
   getBreakingNewsStatus: () => getBreakingNewsStatusMock(),
   setBreakingNewsEnabled: (v: boolean) => setBreakingNewsEnabledMock(v),
   ensureBrandAssets: () => ensureBrandAssetsMock(),
+  forceTriggerBreakingNews: (n?: number) => forceTriggerBreakingNewsMock(n),
 }));
 
 type SqlCall = { strings: TemplateStringsArray; values: unknown[] };
@@ -38,6 +40,7 @@ beforeEach(() => {
   getBreakingNewsStatusMock.mockReset();
   setBreakingNewsEnabledMock.mockReset();
   ensureBrandAssetsMock.mockReset();
+  forceTriggerBreakingNewsMock.mockReset();
   vi.resetModules();
 });
 
@@ -136,6 +139,37 @@ describe("POST", () => {
     expect(res.status).toBe(200);
     expect(ensureBrandAssetsMock).toHaveBeenCalled();
     expect((await res.json()).introUrl).toBe("https://blob.test/intro.mp4");
+  });
+
+  it("force_trigger calls forceTriggerBreakingNews (default max=1)", async () => {
+    forceTriggerBreakingNewsMock.mockResolvedValue([
+      { topic_id: "t1", status: "posted", video_url: "https://blob/v.mp4", post_id: "p1" },
+    ]);
+    const { POST } = await import("./route");
+    const res = await POST(
+      await buildRequest({
+        method: "POST",
+        body: JSON.stringify({ action: "force_trigger" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(body.results[0].status).toBe("posted");
+    expect(forceTriggerBreakingNewsMock).toHaveBeenCalledWith(1);
+  });
+
+  it("force_trigger respects max_topics override (clamped 1-2)", async () => {
+    forceTriggerBreakingNewsMock.mockResolvedValue([]);
+    const { POST } = await import("./route");
+    await POST(
+      await buildRequest({
+        method: "POST",
+        body: JSON.stringify({ action: "force_trigger", max_topics: 5 }),
+      }),
+    );
+    // Clamped to 2 (the daily cap is 2 so requesting more is pointless)
+    expect(forceTriggerBreakingNewsMock).toHaveBeenCalledWith(2);
   });
 
   it("400 on unknown action", async () => {
