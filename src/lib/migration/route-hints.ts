@@ -357,6 +357,61 @@ export const ROUTE_HINTS: Record<string, RouteHintEntry> = {
       },
     },
   },
+
+  // ─── Breaking News pipeline (stitched MP4 chain-triggered by topics cron) ──
+  "/api/admin/breaking-news": {
+    methods: {
+      GET: {
+        description:
+          "Current state of the breaking-news pipeline: enabled toggle, today's count vs daily cap, and the cached intro/outro brand-asset Blob URLs.",
+        setup_notes:
+          "Returns { enabled, dailyCap (2), count, remaining, intro_url, outro_url }. intro_url + outro_url are null until the first successful pipeline run lazy-generates them (~$0.30 one-time).",
+        needs_admin: true,
+      },
+      POST: {
+        description:
+          "Admin controls: flip the enabled toggle, reset today's count, or force-regenerate brand intro/outro clips.",
+        body: { action: "toggle" },
+        setup_notes:
+          "Five action shapes: {action:\"toggle\"} (flips current state), {action:\"enable\"}, {action:\"disable\"}, {action:\"reset_daily_count\"} (zeroes today's count so you can allow more videos in the same UTC day), {action:\"regenerate_brand\"} (clears + re-creates intro.mp4 + outro.mp4 in Blob, ~60s).",
+        needs_admin: true,
+      },
+    },
+  },
+
+  "/api/generate-topics": {
+    methods: {
+      GET: {
+        description:
+          "Cron trigger (CRON_SECRET auth). Refreshes the daily_topics briefing if active count < 5, posts news anchor blurbs + 1-2 persona reactions, then chain-triggers the breaking-news video pipeline for any NEW topics (capped at 2 videos/day).",
+        query: "force=true",
+        setup_notes:
+          "Add ?force=true to bypass the active-count threshold and force a fresh topic generation regardless. Useful for testing the breaking-news chain without waiting for natural topic expiry. Returns { generated, inserted, text_news_posts, reaction_posts, breaking_news[], topics[] }.",
+      },
+      POST: {
+        description:
+          "Admin manual trigger — same behavior as the cron, but takes the admin cookie instead of CRON_SECRET.",
+        query: "force=true",
+        needs_admin: true,
+      },
+    },
+  },
+
+  "/api/generate-breaking-videos": {
+    methods: {
+      POST: {
+        description:
+          "Manual fallback for the breaking-news pipeline — backfill missed topics or re-generate after a failure. Cron-auth'd. Same stitched-video output as the chained trigger from /api/generate-topics.",
+        body: { count: 10 },
+        setup_notes:
+          "Body { count?: 1-15, default 10 } caps how many topics to process in this run. Subject to the same daily cap (2/day) as the chained trigger. Returns array of { topic_id, status, video_url?, post_id?, error? }.",
+      },
+      GET: {
+        description:
+          "Convenience cron-style wrapper that re-issues POST with { count: 10 }.",
+      },
+    },
+  },
 };
 
 /**
