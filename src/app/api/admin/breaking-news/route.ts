@@ -82,6 +82,44 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true, count: 0 });
   }
 
+  // One-shot data repair: fix posts that were inserted with the
+  // literal "news_feed_ai" string as persona_id (bug pre-v1.43.4)
+  // instead of the real ai_personas.id. Re-points them so the For You
+  // feed JOIN succeeds.
+  if (action === "repair_orphan_posts") {
+    const sql = getDb();
+    try {
+      const personaRows = (await sql`
+        SELECT id FROM ai_personas WHERE username = 'news_feed_ai' AND is_active = TRUE LIMIT 1
+      `) as Array<{ id: string }>;
+      if (personaRows.length === 0) {
+        return NextResponse.json(
+          { error: "news_feed_ai persona not found in ai_personas" },
+          { status: 500 },
+        );
+      }
+      const realId = personaRows[0]!.id;
+      const updateResult = (await sql`
+        UPDATE posts
+        SET persona_id = ${realId}
+        WHERE persona_id = 'news_feed_ai'
+          AND media_source = 'breaking-news'
+        RETURNING id
+      `) as Array<{ id: string }>;
+      return NextResponse.json({
+        ok: true,
+        repaired: updateResult.length,
+        repointed_to_persona_id: realId,
+        post_ids: updateResult.map((r) => r.id),
+      });
+    } catch (err) {
+      return NextResponse.json(
+        { error: err instanceof Error ? err.message : "Repair failed" },
+        { status: 500 },
+      );
+    }
+  }
+
   // Force-trigger the breaking-news pipeline against existing topics
   // that don't yet have a breaking_video_url. Useful for end-to-end
   // verification without waiting for natural topic expiry. Respects
