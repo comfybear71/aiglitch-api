@@ -30,7 +30,7 @@ import { getDb } from "@/lib/db";
 import { spreadPostToSocial } from "@/lib/marketing/spread-post";
 import { randomUUID } from "node:crypto";
 
-const NEWS_PERSONA_ID = "news_feed_ai";
+const NEWS_PERSONA_USERNAME = "news_feed_ai";
 const NEWS_PERSONA_NAME = "GLITCH NEWS NETWORK";
 const NEWS_PERSONA_EMOJI = "🛰️";
 const BREAKING_HASHTAG = "BreakingGlitch";
@@ -248,6 +248,41 @@ async function downloadToBuffer(url: string): Promise<Buffer> {
 }
 
 /**
+ * Resolve the news_feed_ai persona's actual `ai_personas.id` (UUID-ish
+ * string) from its username. The For You feed JOINs posts.persona_id
+ * to ai_personas.id, so posting with the literal "news_feed_ai" string
+ * (the USERNAME) instead of the real id silently drops the post from
+ * the feed. Cached for the lifetime of the Lambda.
+ */
+let _newsPersonaIdCache: string | null = null;
+async function resolveNewsPersonaId(): Promise<string | null> {
+  if (_newsPersonaIdCache) return _newsPersonaIdCache;
+  const sql = getDb();
+  try {
+    const rows = (await sql`
+      SELECT id FROM ai_personas
+      WHERE username = ${NEWS_PERSONA_USERNAME} AND is_active = TRUE
+      LIMIT 1
+    `) as Array<{ id: string }>;
+    if (rows.length === 0) {
+      console.error(
+        `[breaking-news] news persona "${NEWS_PERSONA_USERNAME}" not found ` +
+        `in ai_personas. Pipeline cannot post until persona is seeded.`,
+      );
+      return null;
+    }
+    _newsPersonaIdCache = rows[0]!.id;
+    return _newsPersonaIdCache;
+  } catch (err) {
+    console.error(
+      "[breaking-news] news persona lookup failed:",
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
+}
+
+/**
  * Generate one stitched breaking news video for a single topic.
  * Returns the final stitched URL + the new post ID.
  *
@@ -266,6 +301,17 @@ async function generateOneStitchedBreakingNews(
 ): Promise<{ videoUrl: string; postId: string }> {
   const today = new Date();
   const label = dateLabel(today);
+
+  // 0. Resolve the news persona's actual id BEFORE doing any expensive
+  // work. If the persona isn't seeded, fail fast — generating videos
+  // we can't attach to a post would burn ~$1 with nothing to show.
+  const newsPersonaId = await resolveNewsPersonaId();
+  if (!newsPersonaId) {
+    throw new Error(
+      `news_feed_ai persona missing from ai_personas table — seed it ` +
+      `before enabling the breaking-news pipeline.`,
+    );
+  }
 
   // 1. Brand assets (cheap if already generated).
   const { introUrl, outroUrl } = await ensureBrandAssets();
@@ -323,14 +369,14 @@ async function generateOneStitchedBreakingNews(
         id, persona_id, content, post_type, hashtags,
         media_url, media_type, ai_like_count, media_source, created_at
       ) VALUES (
-        ${postId}, ${NEWS_PERSONA_ID}, ${caption}, 'news', ${hashtags},
+        ${postId}, ${newsPersonaId}, ${caption}, 'news', ${hashtags},
         ${stitchedBlob.url}, 'video',
         ${Math.floor(Math.random() * 500) + 200},
         'breaking-news', NOW()
       )
     `;
     await sql`
-      UPDATE ai_personas SET post_count = post_count + 1 WHERE id = ${NEWS_PERSONA_ID}
+      UPDATE ai_personas SET post_count = post_count + 1 WHERE id = ${newsPersonaId}
     `;
   } catch (err) {
     console.error(
@@ -341,13 +387,18 @@ async function generateOneStitchedBreakingNews(
 
   // 7. Spread to socials (best-effort — failures logged, don't throw).
   try {
-    await spreadPostToSocial(
+    const spreadResult = await spreadPostToSocial(
       postId,
-      NEWS_PERSONA_ID,
+      newsPersonaId,
       NEWS_PERSONA_NAME,
       NEWS_PERSONA_EMOJI,
       { url: stitchedBlob.url, type: "video" },
       `🛰️ BREAKING (${label})`,
+    );
+    console.log(
+      `[breaking-news] spread for topic ${topic.id}: ` +
+      `posted=${spreadResult.platforms.join(",") || "none"} ` +
+      `failed=${spreadResult.failed.join(",") || "none"}`,
     );
   } catch (err) {
     console.error(
