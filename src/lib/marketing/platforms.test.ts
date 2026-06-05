@@ -14,6 +14,13 @@ vi.mock("@/lib/x-oauth", () => ({
   buildOAuth1Header: vi.fn().mockReturnValue("OAuth oauth_signature=fake"),
 }));
 
+const sendTelegramPhotoMock = vi.fn();
+const sendTelegramVideoMock = vi.fn();
+vi.mock("@/lib/telegram", () => ({
+  sendTelegramPhoto: (...a: unknown[]) => sendTelegramPhotoMock(...a),
+  sendTelegramVideo: (...a: unknown[]) => sendTelegramVideoMock(...a),
+}));
+
 import { getAppCredentials } from "@/lib/x-oauth";
 import {
   getActiveAccounts,
@@ -49,6 +56,8 @@ beforeEach(() => {
     accessToken: "at",
     accessTokenSecret: "ats",
   } as unknown as ReturnType<typeof getAppCredentials>);
+  sendTelegramPhotoMock.mockReset();
+  sendTelegramVideoMock.mockReset();
 });
 
 afterEach(() => {
@@ -269,5 +278,72 @@ describe("postToPlatform — deferred platforms", () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain("network down");
     errSpy.mockRestore();
+  });
+});
+
+describe("postToPlatform — Telegram media dispatch", () => {
+  const TG_ACCOUNT = {
+    ...X_ACCOUNT,
+    id: "acc-tg",
+    platform: "telegram" as const,
+    account_name: "aiglitch_channel",
+    account_id: "@aiglitch_channel",
+    access_token: "bot-token",
+  };
+
+  it("routes MP4 URLs through sendTelegramVideo (not sendPhoto)", async () => {
+    sendTelegramVideoMock.mockResolvedValue({ ok: true, messageId: 42 });
+    const result = await postToPlatform(
+      "telegram",
+      TG_ACCOUNT,
+      "caption",
+      "https://blob.test/breaking-news/stitched/2026-06-05/t1.mp4",
+    );
+    expect(result.success).toBe(true);
+    expect(result.platformPostId).toBe("42");
+    expect(sendTelegramVideoMock).toHaveBeenCalledOnce();
+    expect(sendTelegramPhotoMock).not.toHaveBeenCalled();
+  });
+
+  it("routes image URLs through sendTelegramPhoto", async () => {
+    sendTelegramPhotoMock.mockResolvedValue({ ok: true, messageId: 7 });
+    const result = await postToPlatform(
+      "telegram",
+      TG_ACCOUNT,
+      "caption",
+      "https://blob.test/hero/img.jpg",
+    );
+    expect(result.success).toBe(true);
+    expect(result.platformPostId).toBe("7");
+    expect(sendTelegramPhotoMock).toHaveBeenCalledOnce();
+    expect(sendTelegramVideoMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores query strings when detecting video extension", async () => {
+    sendTelegramVideoMock.mockResolvedValue({ ok: true, messageId: 1 });
+    await postToPlatform(
+      "telegram",
+      TG_ACCOUNT,
+      "c",
+      "https://blob.test/v.mp4?sig=abc",
+    );
+    expect(sendTelegramVideoMock).toHaveBeenCalledOnce();
+    expect(sendTelegramPhotoMock).not.toHaveBeenCalled();
+  });
+
+  it("surfaces video upload failure with 'video' label in error", async () => {
+    sendTelegramVideoMock.mockResolvedValue({
+      ok: false,
+      error: "file too big",
+    });
+    const result = await postToPlatform(
+      "telegram",
+      TG_ACCOUNT,
+      "c",
+      "https://blob.test/v.mp4",
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Telegram video upload failed");
+    expect(result.error).toContain("file too big");
   });
 });
