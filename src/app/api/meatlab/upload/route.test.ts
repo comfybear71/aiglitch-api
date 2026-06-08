@@ -109,7 +109,7 @@ describe("POST /api/meatlab/upload", () => {
     const opts = last.opts as TokenOpts;
     expect(opts.allowedContentTypes).toContain("video/mp4");
     expect(opts.allowedContentTypes).toContain("image/heic");
-    expect(opts.maximumSizeInBytes).toBe(100 * 1024 * 1024);
+    expect(opts.maximumSizeInBytes).toBe(500 * 1024 * 1024);
   });
 
   it("accepts avatars/ path", async () => {
