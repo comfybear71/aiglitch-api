@@ -3,7 +3,7 @@
  *
  * POST — Invoked by `@vercel/blob/client#upload()` running in the
  * browser. Vends a short-lived token so the browser uploads big
- * files (up to 100 MB here) directly to Vercel Blob, bypassing
+ * files (up to 500 MB here) directly to Vercel Blob, bypassing
  * the 4.5 MB serverless body limit.
  *
  * Path allowlist: `meatlab/…` or `avatars/…`. Anything else is
@@ -15,7 +15,10 @@
  * Content-type allowlist: common image + video types plus
  * `application/octet-stream` (Safari iOS sometimes sends this for
  * camera-roll MP4s) and `video/x-matroska` (Android exports).
- * 100 MB max per file. No auth — meatlab uploads are user-initiated
+ * 500 MB max per file — covers ~5 min of 1080p or ~2 min of 4K from
+ * a phone camera roll. Vercel Blob's hard limit is 5 TB; this cap
+ * is purely defensive against runaway uploads. No auth — meatlab
+ * uploads are user-initiated
  * from the public meatlab page. Consumed exclusively by the client-
  * side `upload()` call, which won't fire until the user signs in to
  * meatlab.
@@ -73,7 +76,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         }
         return {
           allowedContentTypes: ALLOWED_CONTENT_TYPES,
-          maximumSizeInBytes: 100 * 1024 * 1024,
+          maximumSizeInBytes: 500 * 1024 * 1024,
         };
       },
       onUploadCompleted: async ({ blob }) => {
