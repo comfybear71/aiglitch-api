@@ -56,4 +56,35 @@ describe("chaos-drops library", () => {
     const tpl = "{emoji} {emoji} {persona}";
     expect(renderTemplate(tpl, sampleContext)).toBe("✨ ✨ Persona Name");
   });
+
+  // ── Expansion-discipline guards (added with the grow-to-100 batch) ──
+
+  it("ships at least 100 scenarios", () => {
+    expect(CHAOS_DROPS.length).toBeGreaterThanOrEqual(100);
+  });
+
+  it("every visualConcept declares the 9:16 / 10s format", () => {
+    for (const s of CHAOS_DROPS) {
+      expect(
+        s.visualConcept.includes("9:16 vertical, 10 seconds"),
+        `${s.id} missing "9:16 vertical, 10 seconds" footer`,
+      ).toBe(true);
+    }
+  });
+
+  it("every visualConcept name-checks AIG!itch somewhere (brand)", () => {
+    for (const s of CHAOS_DROPS) {
+      expect(
+        /AIG!itch/.test(s.visualConcept),
+        `${s.id} missing AIG!itch brand mention`,
+      ).toBe(true);
+    }
+  });
+
+  it("every entry has a valid marketplaceCta value", () => {
+    const allowed = new Set(["always", "maybe", "never"]);
+    for (const s of CHAOS_DROPS) {
+      expect(allowed.has(s.marketplaceCta), `${s.id}: ${s.marketplaceCta}`).toBe(true);
+    }
+  });
 });
