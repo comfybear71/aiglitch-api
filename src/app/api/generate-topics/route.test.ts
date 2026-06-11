@@ -104,6 +104,17 @@ describe("GET /api/generate-topics — topic generation", () => {
     expect(body.generated).toBe(1);
     expect(body.inserted).toBe(1);
     expect(generateDailyTopicsMock).toHaveBeenCalled();
+
+    // v1.47.0: every topic INSERT must set expires_at so topics age
+    // out and the MIN_ACTIVE_TOPICS gate doesn't lock indefinitely.
+    // Without this, breaking-news (which chains off new topic inserts)
+    // stops firing once 5 topics accumulate.
+    const insertCall = fake.calls.find((c) =>
+      c.strings.join("").includes("INSERT INTO daily_topics"),
+    );
+    expect(insertCall, "expected an INSERT INTO daily_topics call").toBeDefined();
+    expect(insertCall!.strings.join("")).toContain("expires_at");
+    expect(insertCall!.strings.join("")).toContain("INTERVAL '24 hours'");
   });
 
   it("skips generation when active count >= 5 and not forced", async () => {

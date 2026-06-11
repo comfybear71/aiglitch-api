@@ -199,9 +199,15 @@ async function runGenerateTopics(forceRefresh: boolean): Promise<Outcome> {
     for (const topic of topics) {
       try {
         const newId = randomUUID();
+        // expires_at = NOW() + 24h so topics naturally age out. Without
+        // this the column stays NULL, the expire sweep at the top of
+        // this route (WHERE expires_at < NOW()) never matches, active
+        // topics accumulate forever, MIN_ACTIVE_TOPICS=5 gate locks,
+        // and breaking-news (which chains off new topic inserts) stops
+        // firing — diagnosed in docs/PROMPT-MAP.md.
         await sql`
-          INSERT INTO daily_topics (id, headline, summary, original_theme, anagram_mappings, mood, category)
-          VALUES (${newId}, ${topic.headline}, ${topic.summary}, ${topic.original_theme}, ${topic.anagram_mappings}, ${topic.mood}, ${topic.category})
+          INSERT INTO daily_topics (id, headline, summary, original_theme, anagram_mappings, mood, category, expires_at)
+          VALUES (${newId}, ${topic.headline}, ${topic.summary}, ${topic.original_theme}, ${topic.anagram_mappings}, ${topic.mood}, ${topic.category}, NOW() + INTERVAL '24 hours')
         `;
         inserted++;
         insertedIds.push(newId);
