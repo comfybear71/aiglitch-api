@@ -96,7 +96,14 @@ the page is moving anyway.
 
 > Paste this into a fresh Claude session inside the new
 > `comfybear71/marketing-aiglitch` repo (which doesn't exist yet — first
-> step is to create the repo + Vercel project).
+> step is to create the repo + Vercel project + DNS, see operator
+> checklist below).
+>
+> Most context (sister-repo rules, Rule 5 PR format, etc.) lives in
+> the **CLAUDE.md template** at `docs/sister-repo-templates/` in the
+> aiglitch-api repo. The prompt below tells the new Claude session to
+> copy that template into the new repo as its CLAUDE.md, so we don't
+> have to repeat the whole thing in every bootstrap prompt.
 
 ```
 Stuart French here. This is a brand-new Next.js app that becomes
@@ -106,41 +113,131 @@ marketing.aiglitch.app. It's a sister to admin.aiglitch.app
 ease of work scope + security isolation + so I can iterate on the
 marketing tooling without redeploying the whole admin.
 
-Repo to create: comfybear71/marketing-aiglitch
-Vercel project to create: marketing-aiglitch
-Domain: marketing.aiglitch.app
-Backend: api.aiglitch.app (call /api/admin/* routes there — same
-proxy pattern as admin-aiglitch uses for everything except the
-admin auth POST).
+FIRST THING — set up the project brain:
+1. Download the CLAUDE.md and HANDOFF.md templates from aiglitch-api:
+     curl -O https://raw.githubusercontent.com/comfybear71/aiglitch-api/master/docs/sister-repo-templates/CLAUDE-frontend-template.md
+     mv CLAUDE-frontend-template.md CLAUDE.md
+     curl -O https://raw.githubusercontent.com/comfybear71/aiglitch-api/master/docs/sister-repo-templates/HANDOFF-template.md
+     mv HANDOFF-template.md HANDOFF.md
+2. Edit CLAUDE.md — search for `<<TEMPLATE:` markers and fill in:
+     repo name = marketing-aiglitch
+     project name = marketing-aiglitch
+     subdomain = marketing.aiglitch.app
+     "What this repo is" = the marketing-specific paragraph
+3. Edit HANDOFF.md similarly — set the date, the subdomain placeholder,
+   and list the planned sidebar entries.
+4. Commit both files as the first commit on master.
 
-Goals for THIS session (bootstrap only):
-1. Next.js 14 App Router scaffold matching admin-aiglitch's structure.
-2. Login page that POSTs to api.aiglitch.app/api/auth/admin (same
-   admin password as the existing admin).
-3. Empty layout + sidebar with placeholder navigation entries for
-   the 9 tabs that will move here in later sessions:
-   AI Costs, Events, Ad Campaigns, Sponsors, X Growth, Spec Ads,
-   Merch Studio, Emails, Contact, plus an Ad Creator entry that
-   will be built fresh (consumes aiglitch-api sessions 2-4).
-4. NO tab content yet — just placeholders that say "Coming in
-   session N — see docs/ROADMAP.md in aiglitch-api".
+Once CLAUDE.md is in the repo, READ IT IN FULL before doing any
+further work — it has the mandatory sister-repo + Rule 5 sections
+pre-filled. Confirm you've read it before continuing.
+
+Repo: comfybear71/marketing-aiglitch (you should be in it already)
+Vercel project: marketing-aiglitch (already created — Vercel
+  auto-deploys on push to master)
+Domain: marketing.aiglitch.app (DNS already pointed at Vercel)
+Backend: api.aiglitch.app (the aiglitch-api repo). Call /api/admin/*
+  routes there.
+
+The backend is fully working as of aiglitch-api v1.53.0 (2026-06-18):
+- Auth: POST https://api.aiglitch.app/api/auth/admin with
+  {password: "<env ADMIN_PASSWORD>"} — sets the admin cookie.
+- Ad Creator backend (the killer feature for THIS marketing app):
+    GET    /api/admin/ads                — list briefs
+    POST   /api/admin/ads                — create brief
+    GET    /api/admin/ads/[id]           — read brief + assets + diagnostic
+    PATCH  /api/admin/ads/[id]           — update
+    DELETE /api/admin/ads/[id]           — soft delete
+    POST   /api/admin/ads/[id]/upload    — Vercel Blob client-upload token
+    DELETE /api/admin/ads/[id]/assets/[assetId] — remove asset
+    POST   /api/admin/ads/[id]/generate  — generate the MP4 (3-4 min, ~$1.55)
+- The diagnostic surface is in GET /api/admin/ads/[id] under
+  `brief.last_video_url`, `brief.last_error`, `brief.generation_log`.
+
+After CLAUDE.md is in place, goals for THIS session:
+1. Next.js 16 App Router scaffold (matches aiglitch-api version).
+2. Login page that POSTs to https://api.aiglitch.app/api/auth/admin
+   with {password}. Same admin password as admin.aiglitch.app.
+3. Empty layout + sidebar with placeholder navigation entries:
+   - Ad Creator (THE big new tab, will land in marketing session 2)
+   - Sponsors (proof-of-pattern move from admin in marketing session 3)
+   - AI Costs
+   - Events
+   - Ad Campaigns
+   - X Growth
+   - Spec Ads
+   - Merch Studio
+   - Emails
+   - Contact
+4. NO tab content yet — every placeholder shows "Coming next session".
 5. Cookie scoping: scoped to .aiglitch.app domain so admin auth
-   cookie carries across all 3 admin subdomains (admin / marketing
-   / trading). Confirm with the user before shipping if uncertain.
-6. CI/CD: GitHub Actions on push to main → Vercel auto-deploy.
+   cookie carries across admin / marketing / trading subdomains.
+   Test by logging in on admin.aiglitch.app and confirming you stay
+   authed when you navigate to marketing.aiglitch.app.
+6. CI/CD: GitHub Actions on push to master → Vercel auto-deploy.
    Vitest in the workflow.
 
 Constraints:
-- Reuse admin-aiglitch's design tokens / Tailwind config if possible
-  — copy them into this repo, don't try to share a package yet.
-- No backend changes. The backend already exists.
-- Follow Rule 5 — PR handoff format (read aiglitch-api's CLAUDE.md
-  if you don't know it).
+- Reuse admin-aiglitch's design tokens / Tailwind config — copy them
+  into this repo, don't try to share a package yet.
+- No backend changes. The backend already exists at api.aiglitch.app.
+- Follow Rule 5 — PR handoff format. Read aiglitch-api's CLAUDE.md
+  (https://github.com/comfybear71/aiglitch-api/blob/master/CLAUDE.md)
+  for the format spec.
+- This first session does NOT move any existing admin tabs over yet.
+  Just the empty shell + login + nav. Tabs move in later sessions
+  one at a time so blast radius stays small.
 
-Deliverable: working empty shell deployed at marketing.aiglitch.app,
-admin login round-trips successfully, sidebar shows 10 placeholder
-tabs. PR + tag + release notes per Rule 5.
+Deliverable: working empty shell deployed at marketing.aiglitch.app.
+Admin login round-trips successfully (POST to api.aiglitch.app/api/auth/admin
+returns ok and sets a cookie that lets you navigate the empty tabs).
+Sidebar shows 10 placeholder entries. CI green on push. PR + tag
++ release notes per Rule 5.
+
+Tag name for this PR: v0.1.0 (this is the first release of a new repo).
 ```
+
+## Operator checklist BEFORE you paste the prompt above
+
+You need three prereqs done. None of them are code — pure setup. ~15 min total.
+
+### 1. Create the GitHub repo
+
+1. Go to https://github.com/new
+2. Owner: `comfybear71`
+3. Repository name: `marketing-aiglitch`
+4. Description: "Marketing tooling app for marketing.aiglitch.app — sister to admin-aiglitch"
+5. Visibility: private (recommended) or public (your call)
+6. **Don't** initialize with README/license/.gitignore — the Claude session will scaffold from scratch
+7. Click "Create repository"
+
+### 2. Create the Vercel project
+
+1. Go to https://vercel.com/new
+2. Import the `comfybear71/marketing-aiglitch` repo you just created
+3. Project name: `marketing-aiglitch`
+4. Framework: Next.js (auto-detected once the repo has code)
+5. Skip the env-var step for now (the prompt above tells the new Claude session what to add later)
+6. Click "Deploy" — it'll fail because the repo is empty, that's fine, the project link is what we needed
+7. In Project Settings → Domains, add `marketing.aiglitch.app`
+
+### 3. Point DNS
+
+In your DNS provider (wherever aiglitch.app's records live):
+- Add a CNAME record: `marketing` → `cname.vercel-dns.com`
+- TTL: default
+- Wait 5-15 min for propagation
+
+When Vercel's "Domains" page shows the green "Valid Configuration" checkmark next to marketing.aiglitch.app, prereqs are done.
+
+### 4. Start the new Claude session
+
+1. Open a fresh Claude conversation
+2. Make sure it's pointed at the new `comfybear71/marketing-aiglitch` repo
+3. Paste the **Marketing repo bootstrap prompt** above
+4. Claude takes it from there — scaffolds Next.js, builds login, ships PR
+
+After that PR merges + deploys, you'll have a working marketing.aiglitch.app with an empty nav. Then we come back to the next session and start building the Ad Creator UI (which consumes the v1.53.0 backend we shipped tonight).
 
 ---
 

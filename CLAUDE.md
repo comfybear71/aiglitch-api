@@ -14,6 +14,15 @@ This API repo is HALF of one project. The other half is the legacy
 serves the web app at `aiglitch.app`, owns the frontend rendering,
 service worker, crons, content generation, and DB schema.
 
+> **Additional sister repos:**
+> - `comfybear71/admin-aiglitch` — admin frontend at admin.aiglitch.app
+> - `comfybear71/marketing-aiglitch` — marketing tooling at marketing.aiglitch.app (created in ROADMAP session 5, may not exist yet — check)
+> - `comfybear71/trading-aiglitch` — trading + NFT at trading.aiglitch.app (ROADMAP session 17, future)
+>
+> All sister repos call this API. Backend changes live here. Frontend
+> changes happen in the respective sister repo via a separate Claude
+> session. See `docs/ROADMAP.md` for the multi-repo plan.
+
 **They are one project, not two.** Every Claude session in this repo
 MUST have the sister repo cloned and pulled fresh before answering
 any question that could touch both sides.
