@@ -37,7 +37,7 @@ Edit a string in the file listed below, push, deploy. That's it.
 | **Edit Grok-mode prompts** | `src/lib/content/breaking-news.ts` → `presenterPrompt()`, `fieldPrompt()`. Tokens: `${topic.headline}`, `${topic.summary}`, `${dateLabel}`, `${topic.mood}`, `${topic.category}`. |
 | **Edit Grok brand intro/outro** | Same file → `INTRO_PROMPT`, `OUTRO_PROMPT`. After editing, regenerate via admin action `regenerate_brand`. |
 | **Edit HeyGen script** | Same file → `presenterScript()`. Just the text the avatar reads — no visual prompt needed. Cap to ~30 words for ~10s read at news-anchor pace. |
-| **Switch HeyGen avatar / voice** | Change the env var values (`HEYGEN_NEWS_ANCHOR_AVATAR_ID` / `HEYGEN_NEWS_ANCHOR_VOICE_ID`). Pick IDs from HeyGen dashboard → Avatars / Voices catalog. No redeploy. |
+| **Switch HeyGen avatar / voice** | Change the env var values (`HEYGEN_NEWS_ANCHOR_AVATAR_ID` / `HEYGEN_NEWS_ANCHOR_VOICE_ID`). Use `GET /api/admin/heygen/catalog` (admin auth) to list all available IDs from your HeyGen account — the response also includes a `suggestions.news_anchor_*` heuristic filter for professional-looking candidates. No redeploy needed when env vars change. |
 | Trigger | **Chain-triggered** — NOT a standalone cron. Fires from `/api/generate-topics` only when that route inserts a **new** topic row. |
 | Daily cap | `DAILY_CAP_DEFAULT = 2` in `breaking-news.ts`. UTC midnight reset. Applies to both modes. |
 | Admin controls | `POST /api/admin/breaking-news` — actions: `toggle`, `enable`, `disable`, `reset_daily_count`, `regenerate_brand`, `force_trigger`, `repair_orphan_posts`. |
