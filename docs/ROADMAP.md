@@ -32,7 +32,7 @@ happen in the respective frontend repo via a sister Claude session.
 | # | Session | Repo | Status | Notes |
 |---|---|---|---|---|
 | 0 | Roadmap + spec lock | aiglitch-api | ✅ this PR | The doc you're reading. |
-| 1 | **ffmpeg stitcher** — re-encode + concat to support mixed-codec (Grok + HeyGen) clips. Brings intro/outro back to breaking-news Mode B. Foundation for the Ad Creator. | aiglitch-api | ⬜ | Bundle `ffmpeg-static` in serverless function. ~30-60s re-encode per 30s of output. |
+| 1 | **ffmpeg stitcher** — re-encode + concat to support mixed-codec (Grok + HeyGen) clips. Brings intro/outro back to breaking-news Mode B. Foundation for the Ad Creator. | aiglitch-api | ✅ v1.50.0 | Bundled `ffmpeg-static`. Wired into breaking-news Mode B — intro + HeyGen anchor + outro stitched into 16s output. Foundation for Ad Creator (session 2-4). |
 | 2 | **Ad Creator backend — part 1**: schema + admin endpoints. New DB table for "ad briefs" (title, project name, concept, target socials). CRUD endpoints. No generation yet. | aiglitch-api | ⬜ | Hangs off `/api/admin/ads/*`. |
 | 3 | **Ad Creator backend — part 2**: generation pipeline. Brief → HeyGen presenter + Grok b-roll + HeyGen intro/outro → ffmpeg stitch → MP4 in Blob → INSERT post to For You feed. | aiglitch-api | ⬜ | Posts to AIG!itch For You feed only (user said other-project socials are manual for now). |
 | 4 | **Ad Creator backend — part 3**: upload-existing-media path. Operator uploads their own video clips to mix with AI-generated content (per user: "experiment until we hit sweet spot for each project/business"). | aiglitch-api | ⬜ | Reuses Vercel Blob client-upload pattern from meatlab. |

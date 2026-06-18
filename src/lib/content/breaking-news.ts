@@ -10,12 +10,13 @@
  *
  * Mode B — HeyGen anchor (active when HEYGEN_API_KEY +
  *   HEYGEN_NEWS_ANCHOR_AVATAR_ID + HEYGEN_NEWS_ANCHOR_VOICE_ID all set):
- *   single 10s talking-head clip via HeyGen Avatar V — real avatar,
- *   real TTS, real lip-sync. Skips Grok intro/field/outro/stitching
- *   entirely (stitching HeyGen + Grok output needs ffmpeg re-encoding;
- *   deferred). Per-story cost: ~$0.17. Quality lift on the anchor
- *   segment is dramatic; trade-off is losing the brand intro/outro
- *   + b-roll variety.
+ *   [intro.mp4] + [HeyGen anchor clip] + [outro.mp4] re-encoded +
+ *   concatenated via ffmpeg-stitch.ts. HeyGen produces a real talking
+ *   head with TTS lip-sync; the brand bookends frame it. Field b-roll
+ *   is skipped to keep the anchor the focal point and the cost down.
+ *   Per-story cost: ~$0.17 HeyGen + ~$0.30 one-time intro/outro
+ *   generation (cached). The ffmpeg re-encode pass takes ~30-60s wall
+ *   time on top of HeyGen's ~30-60s render, total ~2 min end-to-end.
  *
  * Daily cap: 2 stories/day via platform_settings either mode. In Mode A
  * that's a $5.60/day ceiling (= ~$170/month worst case); in Mode B
@@ -37,6 +38,7 @@ import { put } from "@vercel/blob";
 import { generateVideoToBlob } from "@/lib/ai/video";
 import { generateAvatarVideoToBlob } from "@/lib/ai/heygen";
 import { concatMP4Clips } from "@/lib/media/mp4-concat";
+import { stitchClipsWithReencode } from "@/lib/media/ffmpeg-stitch";
 import { getDb } from "@/lib/db";
 import { spreadPostToSocial } from "@/lib/marketing/spread-post";
 import { randomUUID } from "node:crypto";
@@ -387,34 +389,66 @@ async function generateOneStitchedBreakingNews(
 
   // 1. Fork on whether HeyGen is configured.
   //
-  // HeyGen anchor mode: generate the anchor video standalone via HeyGen
-  // Avatar V (real talking head + real TTS lip-sync), skip Grok presenter
-  // /field/intro/outro/stitching entirely. Output is a single 10s
-  // talking-head clip. Cheaper (~$0.17/story vs ~$2.80 stitched on Grok
-  // 1.5/720p) and dramatically better quality than Grok's generic
-  // rendered anchor — but loses the brand intro/outro + b-roll. Stitching
-  // HeyGen output with Grok clips is deferred: mp4-concat needs identical
-  // codec profiles across clips, and HeyGen + Grok use different
-  // encoders, so naive stitching produces broken MP4s. A future PR can
-  // add ffmpeg-based re-encoding if we want the full 26s format back.
+  // HeyGen anchor mode (v1.50.0+): generate the anchor clip via HeyGen
+  // Avatar V (real talking head + real TTS lip-sync), then stitch with
+  // the same Grok intro + outro brand bookends as Mode A. Mixed-codec
+  // stitching is handled by ffmpeg-stitch.ts which re-encodes each clip
+  // to a common H.264 baseline + AAC profile before concatenating.
+  // The b-roll field clip is skipped — HeyGen anchor + brand bookends
+  // make a 16s clip (3s intro + 10s anchor + 3s outro) which keeps the
+  // distinct GNN brand identity AND the dramatic quality lift on the
+  // anchor segment. Per-story cost: ~$0.17 HeyGen + ~$0.30 one-time
+  // intro/outro generation (cached after first run).
   //
   // Grok-only mode (default when HeyGen env vars unset): existing 4-clip
-  // stitched flow.
+  // stitched flow with the legacy byte-level concat.
   let stitchedBlob: { url: string };
 
   if (isHeyGenAnchorConfigured()) {
     console.log(
       `[breaking-news] HeyGen anchor mode for topic ${topic.id}`,
     );
+    // Brand assets first — cheap when cached.
+    const { introUrl, outroUrl } = await ensureBrandAssets();
+
+    // Generate the talking head via HeyGen. Write to a CLIP path
+    // (not the final stitched path) so the final output is the
+    // stitched MP4, not the anchor-only clip.
     const anchor = await generateAvatarVideoToBlob({
       script: presenterScript(topic),
       avatarId: process.env.HEYGEN_NEWS_ANCHOR_AVATAR_ID!,
       voiceId: process.env.HEYGEN_NEWS_ANCHOR_VOICE_ID!,
       taskType: "video_generation",
       aspectRatio: "9:16",
-      blobPath: `breaking-news/stitched/${label}/${topic.id}.mp4`,
+      blobPath: `breaking-news/clips/${topic.id}/anchor.mp4`,
     });
-    stitchedBlob = { url: anchor.blobUrl };
+
+    // Download all 3 source clips for ffmpeg re-encode + concat.
+    const [introBuf, anchorBuf, outroBuf] = await Promise.all([
+      downloadToBuffer(introUrl),
+      downloadToBuffer(anchor.blobUrl),
+      downloadToBuffer(outroUrl),
+    ]);
+
+    // Stitch with re-encoding — handles HeyGen's H.264 profile +
+    // Grok's H.264 profile mismatch, injects silent audio on any
+    // brand asset that was generated before the v1.48 Grok 1.5
+    // upgrade landed audio support.
+    const stitched = await stitchClipsWithReencode([
+      introBuf,
+      anchorBuf,
+      outroBuf,
+    ]);
+
+    stitchedBlob = await put(
+      `breaking-news/stitched/${label}/${topic.id}.mp4`,
+      stitched,
+      {
+        access: "public",
+        contentType: "video/mp4",
+        addRandomSuffix: false,
+      },
+    );
   } else {
     // Brand assets (cheap if already generated).
     const { introUrl, outroUrl } = await ensureBrandAssets();
