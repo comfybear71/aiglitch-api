@@ -238,6 +238,12 @@ export async function generateAvatarVideoToBlob(
     access: "public",
     contentType: opts.contentType ?? "video/mp4",
     addRandomSuffix: false,
+    // Force-trigger retries (or natural cron re-runs after a partial
+    // failure) hit the same blob path. Without this, Vercel Blob throws
+    // "blob already exists" on the second attempt and the whole pipeline
+    // fails. Safe to overwrite — the path is keyed by topic_id +
+    // anchor.mp4, so a retry replaces a stale partial with a fresh full.
+    allowOverwrite: true,
   });
   return {
     blobUrl: blob.url,

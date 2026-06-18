@@ -447,6 +447,10 @@ async function generateOneStitchedBreakingNews(
         access: "public",
         contentType: "video/mp4",
         addRandomSuffix: false,
+        // Force-trigger retries reuse the same stitched path. Allow
+        // overwrites so a partial-failure rerun doesn't trip Vercel
+        // Blob's existence check.
+        allowOverwrite: true,
       },
     );
   } else {
@@ -491,6 +495,10 @@ async function generateOneStitchedBreakingNews(
         access: "public",
         contentType: "video/mp4",
         addRandomSuffix: false,
+        // Force-trigger retries reuse the same stitched path. Allow
+        // overwrites so a partial-failure rerun doesn't trip Vercel
+        // Blob's existence check.
+        allowOverwrite: true,
       },
     );
   }

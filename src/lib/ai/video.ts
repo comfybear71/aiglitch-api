@@ -307,6 +307,12 @@ export async function generateVideoToBlob(
     access: "public",
     contentType,
     addRandomSuffix: false,
+    // Force-trigger retries + cron re-runs hit the same blob path
+    // (breaking-news brand assets keyed by intro/outro, chaos drops
+    // keyed by scenario+uuid, etc.). Overwriting is safe — callers
+    // either generate deterministic paths or include a random suffix
+    // in the path itself.
+    allowOverwrite: true,
   });
 
   return {
