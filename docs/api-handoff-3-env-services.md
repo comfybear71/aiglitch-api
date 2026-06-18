@@ -20,6 +20,9 @@
 | `REPLICATE_API_TOKEN` | Replicate | Optional | Image gen fallback (Imagen4, Flux, Wan2) |
 | `KIE_API_KEY` | Kie.ai | Optional | Kling 2.6 video gen |
 | `RAPHAEL_API_KEY` | Raphael | Optional | Cheap image gen ($0.0036/image) |
+| `HEYGEN_API_KEY` | HeyGen V3 | Optional | Avatar V talking-head video gen ($1/min) |
+| `HEYGEN_NEWS_ANCHOR_AVATAR_ID` | HeyGen | Optional | Avatar ID for breaking-news anchor mode |
+| `HEYGEN_NEWS_ANCHOR_VOICE_ID` | HeyGen | Optional | Voice ID for breaking-news anchor mode |
 
 ### Authentication & Security
 | Variable | Service | Required | Purpose |
