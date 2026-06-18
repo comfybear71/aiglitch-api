@@ -11,7 +11,7 @@
  *
  * Security note: legacy route had NO auth check at all. Added
  * isAdminAuthenticated here because each call spends real Grok video
- * credits ($0.25-$0.50 per clip).
+ * credits (~$0.70 per 5s clip on 1.5 @ 720p).
  *
  * Body:
  *   { sponsorNames: string[],     // required, joined into the prompt
@@ -21,13 +21,13 @@
 
 import { type NextRequest, NextResponse } from "next/server";
 import { isAdminAuthenticated } from "@/lib/admin-auth";
+import { VIDEO_MODEL } from "@/lib/ai/video";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
 const GROK_VIDEO_ENDPOINT = "https://api.x.ai/v1/videos/generations";
-const VIDEO_MODEL = "grok-imagine-video";
 const VIDEO_DURATION_SECONDS = 5;
 
 export async function POST(request: NextRequest) {
@@ -67,7 +67,7 @@ export async function POST(request: NextRequest) {
   if (hasProductImage) {
     // Use the first product image as the seed frame so Grok animates the
     // actual product instead of hallucinating a stand-in.
-    videoBody.image_url = sponsorImages[0];
+    videoBody.image = { url: sponsorImages[0] };
     videoBody.prompt =
       `A cinematic product showcase clip. The ${namesLine} product rotates slowly on a sleek dark surface ` +
       `with dramatic purple and cyan neon lighting. Premium product photography style with volumetric light rays. ` +

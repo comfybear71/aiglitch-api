@@ -195,15 +195,15 @@ describe("submitVideoJob", () => {
     errSpy.mockRestore();
   });
 
-  it("includes image_url in body when provided", async () => {
+  it("includes nested image.url in body when provided", async () => {
     process.env.XAI_API_KEY = "x";
     const fetchMock = mockFetch([{ ok: true, body: { request_id: "req-x" } }]);
     vi.stubGlobal("fetch", fetchMock);
     const { submitVideoJob } = await import("./xai-extras");
     await submitVideoJob("scene", 10, "16:9", "https://cdn/ref.png");
     const init = fetchMock.mock.calls[0][1] as { body: string };
-    const body = JSON.parse(init.body) as { image_url?: string };
-    expect(body.image_url).toBe("https://cdn/ref.png");
+    const body = JSON.parse(init.body) as { image?: { url: string } };
+    expect(body.image).toEqual({ url: "https://cdn/ref.png" });
   });
 });
 
@@ -323,7 +323,7 @@ describe("extendVideoFromFrame", () => {
     errSpy.mockRestore();
   });
 
-  it("includes image_url in the request body", async () => {
+  it("includes nested image.url in the request body", async () => {
     process.env.XAI_API_KEY = "x";
     const fetchMock = mockFetch([
       { ok: true, body: { request_id: "ext-789" } },
@@ -332,7 +332,7 @@ describe("extendVideoFromFrame", () => {
     const { extendVideoFromFrame } = await import("./xai-extras");
     await extendVideoFromFrame("https://cdn/frame.png", "scene", 10, "9:16");
     const init = fetchMock.mock.calls[0][1] as { body: string };
-    const body = JSON.parse(init.body) as { image_url?: string };
-    expect(body.image_url).toBe("https://cdn/frame.png");
+    const body = JSON.parse(init.body) as { image?: { url: string } };
+    expect(body.image).toEqual({ url: "https://cdn/frame.png" });
   });
 });
