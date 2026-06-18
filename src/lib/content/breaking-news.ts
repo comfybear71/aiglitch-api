@@ -8,15 +8,19 @@
  *   (~$0.30 one-time cost). Per-story cost on Grok 1.0/720p: presenter
  *   10s + field 10s ≈ $1.40. On Grok 1.5/720p: ≈ $2.80.
  *
- * Mode B — HeyGen anchor (active when HEYGEN_API_KEY +
+ * Mode B — HeyGen anchor + Grok b-roll (active when HEYGEN_API_KEY +
  *   HEYGEN_NEWS_ANCHOR_AVATAR_ID + HEYGEN_NEWS_ANCHOR_VOICE_ID all set):
- *   [intro.mp4] + [HeyGen anchor clip] + [outro.mp4] re-encoded +
- *   concatenated via ffmpeg-stitch.ts. HeyGen produces a real talking
- *   head with TTS lip-sync; the brand bookends frame it. Field b-roll
- *   is skipped to keep the anchor the focal point and the cost down.
- *   Per-story cost: ~$0.17 HeyGen + ~$0.30 one-time intro/outro
- *   generation (cached). The ffmpeg re-encode pass takes ~30-60s wall
- *   time on top of HeyGen's ~30-60s render, total ~2 min end-to-end.
+ *   [intro.mp4] + [HeyGen anchor clip] + [Grok field b-roll] +
+ *   [outro.mp4] re-encoded + concatenated via ffmpeg-stitch.ts. Same
+ *   26s shape as Mode A but with HeyGen Avatar V for the anchor
+ *   segment (real lip-sync + TTS) — gets the quality lift on the
+ *   talking head while keeping topic-specific b-roll variety from
+ *   Grok 1.5 so the post doesn't look identical every day. Anchor
+ *   and field are generated in parallel.
+ *   Per-story cost: ~$0.17 HeyGen + ~$1.40 Grok field 10s @ 720p +
+ *   ~$0.30 one-time intro/outro = ~$1.57 + brand amortised. ffmpeg
+ *   re-encode adds ~30-60s wall time on top of the parallel gen,
+ *   total ~2-3 min end-to-end.
  *
  * Daily cap: 2 stories/day via platform_settings either mode. In Mode A
  * that's a $5.60/day ceiling (= ~$170/month worst case); in Mode B
@@ -411,10 +415,12 @@ async function generateOneStitchedBreakingNews(
     // Brand assets first — cheap when cached.
     const { introUrl, outroUrl } = await ensureBrandAssets();
 
-    // Generate the talking head via HeyGen. Write to a CLIP path
-    // (not the final stitched path) so the final output is the
-    // stitched MP4, not the anchor-only clip.
-    const anchor = await generateAvatarVideoToBlob({
+    // Generate the anchor (HeyGen) + field b-roll (Grok) in parallel.
+    // Anchor = real talking head with TTS lip-sync. Field = generative
+    // visual matching the topic mood + category, so the post doesn't
+    // look identical every day. Both calls are independent so we save
+    // 30-60s by overlapping their wall-clock.
+    const anchorPromise = generateAvatarVideoToBlob({
       script: presenterScript(topic),
       avatarId: process.env.HEYGEN_NEWS_ANCHOR_AVATAR_ID!,
       voiceId: process.env.HEYGEN_NEWS_ANCHOR_VOICE_ID!,
@@ -422,21 +428,30 @@ async function generateOneStitchedBreakingNews(
       aspectRatio: "9:16",
       blobPath: `breaking-news/clips/${topic.id}/anchor.mp4`,
     });
+    const fieldPromise = generateVideoToBlob({
+      prompt: fieldPrompt(topic, label),
+      taskType: "video_generation",
+      duration: FIELD_DURATION_SEC,
+      aspectRatio: "9:16",
+      blobPath: `breaking-news/clips/${topic.id}/field.mp4`,
+    });
+    const [anchor, field] = await Promise.all([anchorPromise, fieldPromise]);
 
-    // Download all 3 source clips for ffmpeg re-encode + concat.
-    const [introBuf, anchorBuf, outroBuf] = await Promise.all([
+    // Download all 4 source clips for ffmpeg re-encode + concat.
+    const [introBuf, anchorBuf, fieldBuf, outroBuf] = await Promise.all([
       downloadToBuffer(introUrl),
       downloadToBuffer(anchor.blobUrl),
+      downloadToBuffer(field.blobUrl),
       downloadToBuffer(outroUrl),
     ]);
 
-    // Stitch with re-encoding — handles HeyGen's H.264 profile +
-    // Grok's H.264 profile mismatch, injects silent audio on any
-    // brand asset that was generated before the v1.48 Grok 1.5
-    // upgrade landed audio support.
+    // Stitch with re-encoding — handles HeyGen + Grok H.264 profile
+    // mismatch, injects silent audio on any brand asset that was
+    // generated before the v1.48 Grok 1.5 audio upgrade.
     const stitched = await stitchClipsWithReencode([
       introBuf,
       anchorBuf,
+      fieldBuf,
       outroBuf,
     ]);
 
