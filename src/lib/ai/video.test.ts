@@ -124,9 +124,10 @@ describe("submitVideoJob", () => {
     });
     expect(res.requestId).toBe("req-1");
     expect(res.durationSec).toBe(10);
-    // v1.48.0: default model is 1.5 @ 720p = $0.14/sec → 10s = $1.40
-    expect(res.estimatedUsd).toBeCloseTo(1.4, 6);
-    expect(res.model).toBe("grok-imagine-video-1.5");
+    // v1.51.1: text-to-video falls back to 1.0 (1.5 is image-to-video
+    // only). 1.0 @ 720p = $0.07/sec → 10s = $0.70.
+    expect(res.estimatedUsd).toBeCloseTo(0.7, 6);
+    expect(res.model).toBe("grok-imagine-video");
 
     expect(fetchCalls[0]!.url).toBe("https://api.x.ai/v1/videos/generations");
     const body = JSON.parse(fetchCalls[0]!.init?.body as string) as {
@@ -137,7 +138,7 @@ describe("submitVideoJob", () => {
       aspect_ratio?: string;
       image?: { url: string };
     };
-    expect(body.model).toBe("grok-imagine-video-1.5");
+    expect(body.model).toBe("grok-imagine-video");
     expect(body.duration).toBe(10);
     expect(body.resolution).toBe("720p");
     expect(body.aspect_ratio).toBeUndefined();
@@ -155,8 +156,8 @@ describe("submitVideoJob", () => {
       resolution: "480p",
     });
     expect(res.durationSec).toBe(5);
-    // 1.5 @ 480p = $0.08/sec → 5s = $0.40
-    expect(res.estimatedUsd).toBeCloseTo(0.4, 6);
+    // Text-to-video → 1.0 @ 480p = $0.05/sec → 5s = $0.25
+    expect(res.estimatedUsd).toBeCloseTo(0.25, 6);
     const body = JSON.parse(fetchCalls[0]!.init?.body as string) as {
       duration: number;
       aspect_ratio: string;
@@ -177,8 +178,28 @@ describe("submitVideoJob", () => {
     });
     const body = JSON.parse(fetchCalls[0]!.init?.body as string) as {
       image: { url: string };
+      model: string;
     };
     expect(body.image).toEqual({ url: "https://cdn.test/frame.png" });
+    // v1.51.1: image-to-video routes to 1.5 (the better motion / audio
+    // model). The text-to-video path stays on 1.0 because xAI's 1.5 is
+    // image-only.
+    expect(body.model).toBe("grok-imagine-video-1.5");
+  });
+
+  it("explicit model override beats the sourceImageUrl-based default", async () => {
+    fetchQueue.push(okJson({ request_id: "req-3b" }));
+    const { submitVideoJob, VIDEO_MODEL_V10 } = await import("./video");
+    await submitVideoJob({
+      prompt: "force 1.0 even with image",
+      taskType: "video_generation",
+      sourceImageUrl: "https://cdn.test/frame.png",
+      model: VIDEO_MODEL_V10,
+    });
+    const body = JSON.parse(fetchCalls[0]!.init?.body as string) as {
+      model: string;
+    };
+    expect(body.model).toBe("grok-imagine-video");
   });
 
   it("captures a synchronous video URL when xAI returns one on submit", async () => {

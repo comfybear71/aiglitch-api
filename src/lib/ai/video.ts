@@ -12,12 +12,20 @@
  * `submitVideoJob` directly. One-shot flows (`hatch-admin`) use
  * `generateVideoToBlob`.
  *
- * Model: defaults to `grok-imagine-video-1.5` as of v1.48.0 (was 1.0
- * which never silently upgraded — xAI ships the two model IDs side by
- * side). 1.5 adds native synced audio, better motion + physics, and
- * ~2x faster generation. No code path opts in or out of audio; it
- * just ships with the video. To steer the audio (SFX, ambience, brief
- * dialogue), append cues to the `prompt` string.
+ * Model selection (v1.51.1):
+ *   - sourceImageUrl provided → `grok-imagine-video-1.5` (image-to-video,
+ *     native synced audio, better motion + physics, ~2x faster).
+ *   - sourceImageUrl absent (pure text prompt) → `grok-imagine-video`
+ *     1.0. xAI's 1.5 model is image-to-video ONLY and returns
+ *     400 "Text-to-video is not supported for this model." when called
+ *     with just a prompt. 1.0 stays the fallback for text-to-video
+ *     paths (chaos drops, breaking-news field/intro/outro, channel
+ *     videos, sponsor cards) until xAI adds 1.5 text-to-video.
+ *   - Explicit override: pass `opts.model = VIDEO_MODEL_V15` to force
+ *     1.5 regardless. Only works with `sourceImageUrl`.
+ *
+ * To steer 1.5's audio output (SFX, ambience, brief dialogue), append
+ * cues to the `prompt` string.
  *
  * Pricing: tiered by model + resolution (`costPerSecond(model, res)`).
  *
@@ -149,7 +157,15 @@ export async function submitVideoJob(
   }
   const key = apiKey();
   const durationSec = opts.duration ?? 10;
-  const model = opts.model ?? VIDEO_MODEL;
+  // Grok Imagine Video 1.5 is image-to-video ONLY — text-to-video
+  // submits return 400 "Text-to-video is not supported for this
+  // model." When the caller didn't pass a sourceImageUrl, fall back
+  // to the 1.0 model which still supports text-to-video. Callers
+  // can opt into 1.5's improved motion + audio by either providing
+  // an image OR explicitly setting `opts.model = VIDEO_MODEL_V15`
+  // and supplying an image.
+  const defaultModel = opts.sourceImageUrl ? VIDEO_MODEL_V15 : VIDEO_MODEL_V10;
+  const model = opts.model ?? defaultModel;
   const resolution = opts.resolution ?? "720p";
   const payload: Record<string, unknown> = {
     model,
