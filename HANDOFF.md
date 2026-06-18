@@ -7,6 +7,31 @@
 
 ## Session log (newest first)
 
+### 2026-06-18 — HeyGen Avatar V live for breaking news + ROADMAP.md locked
+
+**Status:** Breaking-news anchor now generated via HeyGen Avatar V (Mode B). Multi-session roadmap captured in `docs/ROADMAP.md`. 20 sessions planned across 4 repos (this one + admin-aiglitch + 2 new sister repos to be created: marketing-aiglitch, trading-aiglitch).
+
+**Tags shipped this stretch (v1.46.0 — v1.49.2):**
+- `v1.46.0` — Chaos drops library 25 → 100 scenarios
+- `v1.46.1-docs` — PROMPT-MAP.md for operator content-pipeline reference
+- `v1.47.0` — Topics `expires_at` fix (breaking-news no longer needs `force_trigger` to fire)
+- `v1.48.0` — Grok video 1.5 + cost ledger tier table fix
+- `v1.49.0` — HeyGen Avatar V wired into breaking-news anchor (Mode B)
+- `v1.49.1` — HeyGen catalog admin endpoint (`GET /api/admin/heygen/catalog`)
+- `v1.49.2` — Diagnostic surface (`lastForceTrigger` in breaking-news GET) — caught the `avatar_not_found` error that was silently failing in Vercel logs
+
+**Operational note — HeyGen anchor running anchor-only:** breaking-news Mode B currently produces a 10s talking-head video with no brand intro/outro. mp4-concat can't stitch HeyGen + Grok output because their H.264 codec profiles differ. Session 1 (ffmpeg stitcher) restores the brand bookends.
+
+**Known broken admin pages** (to fix during marketing tab moves, see ROADMAP.md sessions 7-9, 15):
+- `admin.aiglitch.app/prompts` → "Couldn't load"
+- `admin.aiglitch.app/costs` → "Couldn't load"
+- `admin.aiglitch.app/contacts` → "Couldn't load"
+- `admin.aiglitch.app/events` → "Couldn't load"
+
+**Next ship target:** session 1 — `ffmpeg-static` stitcher with re-encode-to-common-profile, restoring breaking-news intro/outro under Mode B. Foundation for the Ad Creator pipeline.
+
+---
+
 ### 2026-05-26 (late evening) — Phase 9 OAuth flipped + Docs view + cleanup PRs
 
 **Status:** Migration is FULLY done end-to-end. 4 more PRs shipped tonight + Phase 9 OAuth strangler flipped on sister-repo (v1.8.0).
