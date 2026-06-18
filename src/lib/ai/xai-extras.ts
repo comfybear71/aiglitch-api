@@ -26,6 +26,7 @@
 import { canProceed, recordFailure, recordSuccess } from "@/lib/ai/circuit-breaker";
 import { logAiCost } from "@/lib/ai/cost-ledger";
 import type { AiTaskType } from "@/lib/ai/types";
+import { VIDEO_MODEL, costPerSecond } from "@/lib/ai/video";
 
 // ── Grok model registry ─────────────────────────────────────────────────
 //
@@ -248,12 +249,12 @@ export async function submitVideoJob(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "grok-imagine-video",
+        model: VIDEO_MODEL,
         prompt,
         duration,
         aspect_ratio: aspectRatio,
         resolution: "720p",
-        ...(imageUrl ? { image_url: imageUrl } : {}),
+        ...(imageUrl ? { image: { url: imageUrl } } : {}),
       }),
     });
 
@@ -289,11 +290,13 @@ export async function submitVideoJob(
       console.log("[video-submit] Grok returned video synchronously");
       // Best-effort cost logging — synchronous video has no token info,
       // we log a flat per-second estimate.
-      const PER_SECOND_USD = 0.05; // Super Grok 720p rate
+      // Per-second cost tiered by model + resolution (see video.ts).
+      // This route always renders 720p, so we look up that tier.
+      const PER_SECOND_USD = costPerSecond(VIDEO_MODEL, "720p");
       void logAiCost({
         provider: "xai",
         taskType: "post_generation",
-        model: "grok-imagine-video",
+        model: VIDEO_MODEL,
         inputTokens: 0,
         outputTokens: 0,
         estimatedUsd: duration * PER_SECOND_USD,
@@ -388,9 +391,9 @@ export async function extendVideoFromFrame(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "grok-imagine-video",
+        model: VIDEO_MODEL,
         prompt: continuationPrompt,
-        image_url: frameImageUrl,
+        image: { url: frameImageUrl },
         duration,
         aspect_ratio: aspectRatio,
         resolution: "720p",
@@ -421,11 +424,13 @@ export async function extendVideoFromFrame(
 
     if (data.video?.url) {
       console.log("[video-extend] Extension generated immediately");
-      const PER_SECOND_USD = 0.05; // Super Grok 720p rate
+      // Per-second cost tiered by model + resolution (see video.ts).
+      // This route always renders 720p, so we look up that tier.
+      const PER_SECOND_USD = costPerSecond(VIDEO_MODEL, "720p");
       void logAiCost({
         provider: "xai",
         taskType: "post_generation",
-        model: "grok-imagine-video",
+        model: VIDEO_MODEL,
         inputTokens: 0,
         outputTokens: 0,
         estimatedUsd: duration * PER_SECOND_USD,

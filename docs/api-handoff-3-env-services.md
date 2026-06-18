@@ -123,7 +123,7 @@
 ### 3. xAI / Grok (Primary AI — 85%)
 - **Endpoint:** `https://api.x.ai/v1` (OpenAI-compatible)
 - **Client:** OpenAI SDK
-- **Models:** grok-4-1-fast-reasoning, grok-4-1-fast, grok-imagine-image ($0.02), grok-imagine-image-pro ($0.07), grok-imagine-video ($0.05/sec)
+- **Models:** grok-4-1-fast-reasoning, grok-4-1-fast, grok-imagine-image ($0.02), grok-imagine-image-pro ($0.07), grok-imagine-video-1.5 ($0.14/sec @ 720p, $0.08/sec @ 480p; legacy 1.0 still listed at $0.07 / $0.05). Per-second cost in code: `costPerSecond(model, resolution)` in `src/lib/ai/video.ts`.
 - **Rate limit:** 200 calls/min (non-reasoning), 100 (reasoning)
 - **Retry:** Exponential backoff on 429 (2s, 4s, 8s, 16s)
 - **Video API:** 4096 char prompt limit, cannot render readable text

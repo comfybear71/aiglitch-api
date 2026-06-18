@@ -85,6 +85,27 @@ function badStatus(status: number, text = ""): FetchResponseShape {
   return { ok: false, status, text: () => Promise.resolve(text) };
 }
 
+describe("costPerSecond — pins xAI tier table (v1.48.0)", () => {
+  it("returns confirmed rates for 1.0 + 1.5 across 480p / 720p", async () => {
+    const { costPerSecond, VIDEO_MODEL_V10, VIDEO_MODEL_V15 } = await import("./video");
+    expect(costPerSecond(VIDEO_MODEL_V10, "480p")).toBe(0.05);
+    expect(costPerSecond(VIDEO_MODEL_V10, "720p")).toBe(0.07);
+    expect(costPerSecond(VIDEO_MODEL_V15, "480p")).toBe(0.08);
+    expect(costPerSecond(VIDEO_MODEL_V15, "720p")).toBe(0.14);
+  });
+
+  it("falls back to the most expensive tier for unknown model", async () => {
+    const { costPerSecond } = await import("./video");
+    // Defensive: rather under-report success than under-bill.
+    expect(costPerSecond("grok-imagine-video-future-9.0", "720p")).toBe(0.14);
+  });
+
+  it("default VIDEO_MODEL is the 1.5 ID", async () => {
+    const { VIDEO_MODEL } = await import("./video");
+    expect(VIDEO_MODEL).toBe("grok-imagine-video-1.5");
+  });
+});
+
 describe("submitVideoJob", () => {
   it("throws when XAI_API_KEY is missing", async () => {
     delete process.env.XAI_API_KEY;
@@ -103,8 +124,9 @@ describe("submitVideoJob", () => {
     });
     expect(res.requestId).toBe("req-1");
     expect(res.durationSec).toBe(10);
-    expect(res.estimatedUsd).toBeCloseTo(0.5, 6);
-    expect(res.model).toBe("grok-imagine-video");
+    // v1.48.0: default model is 1.5 @ 720p = $0.14/sec → 10s = $1.40
+    expect(res.estimatedUsd).toBeCloseTo(1.4, 6);
+    expect(res.model).toBe("grok-imagine-video-1.5");
 
     expect(fetchCalls[0]!.url).toBe("https://api.x.ai/v1/videos/generations");
     const body = JSON.parse(fetchCalls[0]!.init?.body as string) as {
@@ -113,13 +135,13 @@ describe("submitVideoJob", () => {
       duration: number;
       resolution: string;
       aspect_ratio?: string;
-      image_url?: string;
+      image?: { url: string };
     };
-    expect(body.model).toBe("grok-imagine-video");
+    expect(body.model).toBe("grok-imagine-video-1.5");
     expect(body.duration).toBe(10);
     expect(body.resolution).toBe("720p");
     expect(body.aspect_ratio).toBeUndefined();
-    expect(body.image_url).toBeUndefined();
+    expect(body.image).toBeUndefined();
   });
 
   it("honours duration + aspect + resolution overrides and prices correctly", async () => {
@@ -130,10 +152,11 @@ describe("submitVideoJob", () => {
       taskType: "video_generation",
       duration: 5,
       aspectRatio: "9:16",
-      resolution: "1080p",
+      resolution: "480p",
     });
     expect(res.durationSec).toBe(5);
-    expect(res.estimatedUsd).toBeCloseTo(0.25, 6);
+    // 1.5 @ 480p = $0.08/sec → 5s = $0.40
+    expect(res.estimatedUsd).toBeCloseTo(0.4, 6);
     const body = JSON.parse(fetchCalls[0]!.init?.body as string) as {
       duration: number;
       aspect_ratio: string;
@@ -141,10 +164,10 @@ describe("submitVideoJob", () => {
     };
     expect(body.duration).toBe(5);
     expect(body.aspect_ratio).toBe("9:16");
-    expect(body.resolution).toBe("1080p");
+    expect(body.resolution).toBe("480p");
   });
 
-  it("passes image_url through for image-to-video jobs", async () => {
+  it("passes nested image.url through for image-to-video jobs", async () => {
     fetchQueue.push(okJson({ request_id: "req-3" }));
     const { submitVideoJob } = await import("./video");
     await submitVideoJob({
@@ -153,9 +176,9 @@ describe("submitVideoJob", () => {
       sourceImageUrl: "https://cdn.test/frame.png",
     });
     const body = JSON.parse(fetchCalls[0]!.init?.body as string) as {
-      image_url: string;
+      image: { url: string };
     };
-    expect(body.image_url).toBe("https://cdn.test/frame.png");
+    expect(body.image).toEqual({ url: "https://cdn.test/frame.png" });
   });
 
   it("captures a synchronous video URL when xAI returns one on submit", async () => {

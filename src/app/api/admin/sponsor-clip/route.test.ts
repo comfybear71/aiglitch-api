@@ -99,7 +99,7 @@ describe("POST /api/admin/sponsor-clip — submission flow", () => {
     expect(body.mode).toBe("image-to-video");
 
     const payload = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
-    expect(payload.image_url).toBe("https://cdn.example.com/logo.png");
+    expect(payload.image).toEqual({ url: "https://cdn.example.com/logo.png" });
     expect(payload.prompt).toContain("Acme, Beta");
   });
 

@@ -7,9 +7,12 @@
  * Intro + outro are lazy-generated ONCE per environment and reused on
  * every story (~$0.30 one-time cost).
  *
- * Per-story cost: presenter 10s ($0.50) + field 10s ($0.50) = $1.00.
- * Capped at 2 stories/day via platform_settings, so $2/day hard ceiling
- * = ~$60/month worst case.
+ * Per-story cost on Grok 1.5 @ 720p ($0.14/sec): presenter 10s ($1.40)
+ * + field 10s ($1.40) = $2.80. Capped at 2 stories/day via
+ * platform_settings, so $5.60/day hard ceiling = ~$170/month worst case.
+ * (Pre-v1.48.0 this comment said $0.50/clip on 1.0, but 1.0 @ 720p was
+ * actually $0.07/sec = $0.70/clip — the original $0.50 was the 480p
+ * rate, which we never used in production.)
  *
  * Entry point: processNewTopicsForBreakingNews — called by the
  * /api/generate-topics cron AFTER topics insert. Deduped on

@@ -12,10 +12,25 @@
  * `submitVideoJob` directly. One-shot flows (`hatch-admin`) use
  * `generateVideoToBlob`.
  *
- * Pricing: xAI bills `$0.05/second` flat for `grok-imagine-video`.
+ * Model: defaults to `grok-imagine-video-1.5` as of v1.48.0 (was 1.0
+ * which never silently upgraded — xAI ships the two model IDs side by
+ * side). 1.5 adds native synced audio, better motion + physics, and
+ * ~2x faster generation. No code path opts in or out of audio; it
+ * just ships with the video. To steer the audio (SFX, ambience, brief
+ * dialogue), append cues to the `prompt` string.
  *
- *   duration 5s  → $0.25
- *   duration 10s → $0.50
+ * Pricing: tiered by model + resolution (`costPerSecond(model, res)`).
+ *
+ *   1.0 @ 480p → $0.05/sec   1.5 @ 480p → $0.08/sec
+ *   1.0 @ 720p → $0.07/sec   1.5 @ 720p → $0.14/sec
+ *
+ * Pre-v1.48.0 the ledger hardcoded $0.05/sec which under-reported every
+ * 720p clip (= our default) by 40-180% depending on the model. Don't
+ * compare cost-ledger numbers across the v1.48.0 boundary.
+ *
+ * Image-to-video payload shape changed in v1.48.0: was flat
+ * `image_url: "<url>"`, now nested `image: { url: "<url>" }` — matches
+ * the xAI docs as of 2026-06.
  *
  * Circuit breaker + cost ledger share the `"xai"` provider key with
  * text and image gen — one provider, one circuit. Accepted trade-off.
@@ -30,29 +45,53 @@ import { logAiCost } from "./cost-ledger";
 import { XAI_BASE_URL } from "./xai";
 import type { AiTaskType } from "./types";
 
-export const VIDEO_MODEL = "grok-imagine-video";
-export const VIDEO_COST_PER_SECOND_USD = 0.05;
+export const VIDEO_MODEL_V10 = "grok-imagine-video";
+export const VIDEO_MODEL_V15 = "grok-imagine-video-1.5";
+/** Default model used by all in-tree pipelines as of v1.48.0. */
+export const VIDEO_MODEL: string = VIDEO_MODEL_V15;
+
+/**
+ * xAI video pricing per second, tiered by model + resolution.
+ * Confirmed against docs.x.ai/developers/models as of 2026-06.
+ * Returns 1.5 @ 720p ($0.14) as the safe default if either input is
+ * unrecognised — we'd rather over-estimate than silently under-bill.
+ */
+export function costPerSecond(model: string, resolution: VideoResolution): number {
+  if (model === VIDEO_MODEL_V10) {
+    return resolution === "480p" ? 0.05 : 0.07;
+  }
+  if (model === VIDEO_MODEL_V15) {
+    return resolution === "480p" ? 0.08 : 0.14;
+  }
+  // Unknown model — assume the most expensive current tier.
+  return 0.14;
+}
 
 export type VideoAspectRatio = "9:16" | "16:9" | "1:1";
-export type VideoResolution = "720p" | "1080p";
+export type VideoResolution = "480p" | "720p" | "1080p";
 export type VideoStatus = "pending" | "done" | "failed" | "expired";
 
 export interface SubmitVideoJobOptions {
   prompt: string;
   taskType: AiTaskType;
-  /** Seconds. xAI supports up to 10s per clip. Default 10. */
+  /** Seconds. xAI supports up to 15s per clip on 1.5. Default 10. */
   duration?: number;
   aspectRatio?: VideoAspectRatio;
   resolution?: VideoResolution;
   /** Image-to-video: URL of the source still frame. */
   sourceImageUrl?: string;
+  /**
+   * Override the model. Defaults to `VIDEO_MODEL` (currently 1.5). Use
+   * `VIDEO_MODEL_V10` to opt back into the cheaper legacy model.
+   */
+  model?: string;
 }
 
 export interface SubmitVideoJobResult {
   requestId: string;
   /** Some xAI responses come back synchronously with the video attached. */
   syncVideoUrl?: string;
-  model: typeof VIDEO_MODEL;
+  model: string;
   /** Booked against the "xai" breaker + cost ledger at submit time. */
   estimatedUsd: number;
   durationSec: number;
@@ -76,7 +115,7 @@ export interface GenerateVideoOptions extends SubmitVideoJobOptions {
 export interface GenerateVideoResult {
   videoUrl: string;
   requestId: string;
-  model: typeof VIDEO_MODEL;
+  model: string;
   estimatedUsd: number;
   durationSec: number;
 }
@@ -89,7 +128,7 @@ export interface GenerateVideoToBlobOptions extends GenerateVideoOptions {
 export interface GenerateVideoToBlobResult {
   blobUrl: string;
   requestId: string;
-  model: typeof VIDEO_MODEL;
+  model: string;
   estimatedUsd: number;
   durationSec: number;
   /** Size of the uploaded blob in bytes. */
@@ -110,14 +149,18 @@ export async function submitVideoJob(
   }
   const key = apiKey();
   const durationSec = opts.duration ?? 10;
+  const model = opts.model ?? VIDEO_MODEL;
+  const resolution = opts.resolution ?? "720p";
   const payload: Record<string, unknown> = {
-    model: VIDEO_MODEL,
+    model,
     prompt: opts.prompt,
     duration: durationSec,
-    resolution: opts.resolution ?? "720p",
+    resolution,
   };
   if (opts.aspectRatio) payload.aspect_ratio = opts.aspectRatio;
-  if (opts.sourceImageUrl) payload.image_url = opts.sourceImageUrl;
+  // Image-to-video payload shape changed in v1.48.0 to match xAI docs:
+  // nested `image: { url }` instead of flat `image_url: string`.
+  if (opts.sourceImageUrl) payload.image = { url: opts.sourceImageUrl };
 
   try {
     const res = await fetch(`${XAI_BASE_URL}/videos/generations`, {
@@ -143,12 +186,12 @@ export async function submitVideoJob(
     if (!requestId && !syncVideoUrl) {
       throw new Error("xAI video submit: response missing request_id + video");
     }
-    const estimatedUsd = durationSec * VIDEO_COST_PER_SECOND_USD;
+    const estimatedUsd = durationSec * costPerSecond(model, resolution);
     await recordSuccess("xai");
     void logAiCost({
       provider: "xai",
       taskType: opts.taskType,
-      model: VIDEO_MODEL,
+      model,
       inputTokens: 0,
       outputTokens: 0,
       estimatedUsd,
@@ -156,7 +199,7 @@ export async function submitVideoJob(
     return {
       requestId: requestId ?? `sync-${Date.now()}`,
       syncVideoUrl,
-      model: VIDEO_MODEL,
+      model,
       estimatedUsd,
       durationSec,
     };
