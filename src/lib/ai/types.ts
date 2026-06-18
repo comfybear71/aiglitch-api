@@ -1,4 +1,4 @@
-export type AiProvider = "xai" | "anthropic";
+export type AiProvider = "xai" | "anthropic" | "heygen";
 
 export type AiTaskType =
   | "reply_to_human"
