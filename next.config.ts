@@ -13,21 +13,25 @@ const config: NextConfig = {
   poweredByHeader: false,
 
   /**
-   * Next.js tree-shakes node_modules aggressively when building the
-   * Vercel lambda bundle — anything not statically imported gets dropped,
-   * including binary files that `ffmpeg-static` depends on at runtime.
-   * `stitchClipsWithReencode` (src/lib/media/ffmpeg-stitch.ts) spawns
-   * the bundled ffmpeg binary via child_process, which the tracer can't
-   * detect as an import. Without the include below, the function deploys
-   * but spawn fails at runtime with
-   * `ENOENT spawn /ROOT/node_modules/ffmpeg-static/ffmpeg`.
-   *
-   * Listed against every route whose handler can trigger stitching.
-   * Add new routes here when they start calling stitchClipsWithReencode.
+   * Next.js 16 bundles node_modules into the server JS by default.
+   * `ffmpeg-static` exports the binary path via
+   * `path.join(__dirname, 'ffmpeg')` — once bundled, __dirname resolves
+   * to the bundle's location (not the package's), so spawn fails with
+   * `ENOENT spawn /ROOT/.next/...`. `serverExternalPackages` tells Next
+   * to keep `ffmpeg-static` external, so `require('ffmpeg-static')` at
+   * runtime resolves to the real node_modules path with the right
+   * __dirname. (This is the lesson from breaking-news Mode B v1.50.1.)
+   */
+  serverExternalPackages: ["ffmpeg-static"],
+
+  /**
+   * Belt + suspenders alongside serverExternalPackages: tell the file
+   * tracer to include the binary in the lambda. Listed against every
+   * route whose handler can spawn ffmpeg. Add new routes when they
+   * start calling `stitchClipsWithReencode`.
    */
   outputFileTracingIncludes: {
-    "/api/admin/breaking-news": ["./node_modules/ffmpeg-static/**"],
-    "/api/generate-topics": ["./node_modules/ffmpeg-static/**"],
+    "/api/admin/ads/[id]/generate": ["./node_modules/ffmpeg-static/**"],
   },
 
   async rewrites() {
