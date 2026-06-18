@@ -49,6 +49,22 @@ export interface AdBrief {
   concept: string;
   status: AdBriefStatus;
   target_socials: string | null; // CSV: "telegram,x,feed"
+  /**
+   * Diagnostic surface for the most recent generation attempt — same
+   * pattern as `breaking_news_last_force_trigger`. Lets the operator
+   * see what failed without scraping Vercel logs.
+   */
+  last_video_url: string | null;
+  last_post_id: string | null;
+  last_error: string | null;
+  last_generation_at: string | null;
+  /**
+   * JSON-serialized array of per-step records: `{ step, status,
+   * estimated_usd?, video_url?, error? }`. Includes claude script,
+   * heygen anchor, each grok b-roll, ffmpeg stitch, blob upload,
+   * post insert. Useful for cost auditing AND failure forensics.
+   */
+  generation_log: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -86,6 +102,14 @@ export async function ensureAdBriefsSchema(): Promise<void> {
       updated_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
     )
   `.catch(() => {});
+  // Diagnostic columns added in session 3 (v1.53.0) — idempotent ALTERs
+  // so we don't need a formal migration when an env that pre-dates
+  // session 3 hits the schema bootstrap.
+  await sql`ALTER TABLE ad_briefs ADD COLUMN IF NOT EXISTS last_video_url TEXT`.catch(() => {});
+  await sql`ALTER TABLE ad_briefs ADD COLUMN IF NOT EXISTS last_post_id TEXT`.catch(() => {});
+  await sql`ALTER TABLE ad_briefs ADD COLUMN IF NOT EXISTS last_error TEXT`.catch(() => {});
+  await sql`ALTER TABLE ad_briefs ADD COLUMN IF NOT EXISTS last_generation_at TIMESTAMPTZ`.catch(() => {});
+  await sql`ALTER TABLE ad_briefs ADD COLUMN IF NOT EXISTS generation_log TEXT`.catch(() => {});
   await sql`
     CREATE INDEX IF NOT EXISTS idx_ad_briefs_status_created
       ON ad_briefs(status, created_at DESC)
@@ -236,6 +260,48 @@ export async function updateBrief(
 export async function softDeleteBrief(id: string): Promise<boolean> {
   const updated = await updateBrief(id, { status: "archived" });
   return updated !== null;
+}
+
+export interface GenerationLogEntry {
+  step: string;
+  status: "ok" | "failed";
+  estimated_usd?: number;
+  video_url?: string;
+  error?: string;
+  duration_sec?: number;
+}
+
+export interface GenerationResult {
+  status: "posted" | "failed";
+  video_url?: string;
+  post_id?: string;
+  error?: string;
+  log: GenerationLogEntry[];
+}
+
+/**
+ * Persist the per-attempt diagnostic surface. Always overwrites the
+ * brief's `last_*` columns — last attempt wins. Future enhancement
+ * could move to a separate ad_brief_generations history table.
+ */
+export async function recordGenerationResult(
+  briefId: string,
+  result: GenerationResult,
+): Promise<void> {
+  await ensureAdBriefsSchema();
+  const sql = getDb();
+  const status: AdBriefStatus = result.status;
+  await sql`
+    UPDATE ad_briefs
+    SET status              = ${status},
+        last_video_url      = ${result.video_url ?? null},
+        last_post_id        = ${result.post_id ?? null},
+        last_error          = ${result.error ?? null},
+        last_generation_at  = NOW(),
+        generation_log      = ${JSON.stringify(result.log)},
+        updated_at          = NOW()
+    WHERE id = ${briefId}
+  `;
 }
 
 // ── Assets ──────────────────────────────────────────────────────────

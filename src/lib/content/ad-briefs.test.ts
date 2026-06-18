@@ -35,13 +35,14 @@ afterEach(() => {
 });
 
 /**
- * The schema bootstrap fires 5 statements (2 CREATE TABLE + 3 CREATE
- * INDEX) before the consumer's real query lands. Prepend that many empty
- * results so the test only needs to provide values for what it cares
- * about.
+ * The schema bootstrap fires 10 statements (2 CREATE TABLE + 3 CREATE
+ * INDEX + 5 idempotent ALTERs for the diagnostic columns added in
+ * session 3) before the consumer's real query lands. Prepend that many
+ * empty results so the test only needs to provide values for what it
+ * cares about.
  */
 function withSchema(...rows: unknown[][]): unknown[][] {
-  return [...Array(5).fill([]), ...rows];
+  return [...Array(10).fill([]), ...rows];
 }
 
 describe("createBrief", () => {

@@ -72,17 +72,23 @@ Edit a string in the file listed below, push, deploy. That's it.
 
 ---
 
-## 4b. Ad Creator (NEW — v1.52.0, backend schema only, no generation yet)
+## 4b. Ad Creator (v1.52.0 schema + CRUD + upload, v1.53.0 generation pipeline)
 
 | | |
 |---|---|
-| What it does | Operator authors an "ad brief" (title, project, concept, target socials), optionally uploads existing media. Generation pipeline (HeyGen presenter + Grok b-roll + ffmpeg stitch → For You feed post) lands in ROADMAP session 3. |
-| **Schema** | Two tables, lazy-bootstrapped in `src/lib/content/ad-briefs.ts`: `ad_briefs` (id, title, project_name, concept, status, target_socials) + `ad_brief_assets` (FK to brief, asset_type, blob_url, original_filename). |
-| **Status enum** | `draft` → `generating` → `ready` → `posted` (or `failed`/`archived` terminals). |
+| What it does | Operator authors an "ad brief" (title, project, concept, target socials), optionally uploads existing media. Then POST `/api/admin/ads/[id]/generate` runs the full Brief → Claude script → HeyGen anchor + Grok b-roll → ffmpeg stitch → For You feed post pipeline. |
+| **Schema** | Two tables, lazy-bootstrapped in `src/lib/content/ad-briefs.ts`: `ad_briefs` (id, title, project_name, concept, status, target_socials + diagnostic columns: `last_video_url`, `last_post_id`, `last_error`, `last_generation_at`, `generation_log`) + `ad_brief_assets` (FK to brief, asset_type, blob_url, original_filename). |
+| **Status enum** | `draft` → `generating` → `posted` (or `failed`/`archived` terminals). Pipeline flips to `generating` immediately for visibility, then to `posted` or `failed` at completion. |
 | **Edit brief field validation rules** | `src/app/api/admin/ads/route.ts` POST handler. `title` + `project_name` are required, others optional. |
-| **CRUD endpoints** | `GET /api/admin/ads` (list, filterable by `status` / `project_name` / `includeArchived` / `limit`), `POST /api/admin/ads` (create), `GET /api/admin/ads/[id]` (read + nested assets), `PATCH /api/admin/ads/[id]` (partial update), `DELETE /api/admin/ads/[id]` (soft delete → `status='archived'`). All admin auth. |
+| **CRUD endpoints** | `GET /api/admin/ads` (list, filterable by `status` / `project_name` / `includeArchived` / `limit`), `POST /api/admin/ads` (create), `GET /api/admin/ads/[id]` (read + nested assets + diagnostic columns), `PATCH /api/admin/ads/[id]` (partial update), `DELETE /api/admin/ads/[id]` (soft delete → `status='archived'`). All admin auth. |
 | **Asset upload** | `POST /api/admin/ads/[id]/upload` — Vercel Blob client-upload token, same pattern as `/api/meatlab/upload`. 500 MB cap, image + video MIME types. `DELETE /api/admin/ads/[id]/assets/[assetId]` to remove. Blob path locked to `ad-briefs/<brief_id>/...` so token-A can't dump into brief-B's directory. |
-| Trigger | None yet — generation in session 3. |
+| **Edit script generation prompt** | `src/lib/content/ad-creator.ts` → `generateAdScript()` function. Tokens: `${brief.project_name}`, `${brief.title}`, `${brief.concept}`. Asset hints appended automatically. |
+| **Edit cost cap** | Same file → `DEFAULT_MAX_COST_USD = 5`. Override per call via body `{maxCostUsd: 8}`. Pre-flight refuses to start if `(scenes × $0.70 + $0.17 anchor)` exceeds cap. |
+| **Edit max scenes** | Same file → `MAX_SCENES = 3` (cap Claude is told to respect). |
+| **Diagnostic surface** | `GET /api/admin/ads/[id]` returns `last_video_url`, `last_post_id`, `last_error`, `last_generation_at`, `generation_log`. The log is a JSON array of per-step records — same idea as breaking-news `lastForceTrigger`. Read in Safari to debug without Vercel logs. |
+| Trigger | `POST /api/admin/ads/[id]/generate` — admin-only, sync, `maxDuration = 800s`. Optional body: `{maxCostUsd?, avatarId?, voiceId?}`. |
+| Post attribution | Architect persona (`glitch-000`), `post_type='ad'`, `media_source='ad-creator'`, hashtags `ad,${project_name},AIGlitch`. |
+| Storage layout | `ad-briefs/<brief_id>/<file>` — operator uploads. `ad-briefs/<brief_id>/generations/<timestamp>/{anchor,scene_N,final}.mp4` — generation output. |
 
 ---
 
