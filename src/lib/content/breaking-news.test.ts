@@ -175,14 +175,15 @@ describe("processNewTopicsForBreakingNews", () => {
 });
 
 describe("getBreakingNewsStatus", () => {
-  it("returns full state shape", async () => {
+  it("returns full state shape including a null lastForceTrigger when never run", async () => {
     const today = new Date().toISOString().slice(0, 10);
     fake.results = [
       [{ value: "true" }], // enabled
       [{ value: today }], // reset date
       [{ value: "1" }], // count
-      [{ value: "https://blob.test/intro.mp4" }],
-      [{ value: "https://blob.test/outro.mp4" }],
+      [{ value: "https://blob.test/intro.mp4" }], // intro
+      [{ value: "https://blob.test/outro.mp4" }], // outro
+      [], // last_force_trigger — never written
     ];
     const { getBreakingNewsStatus } = await import("./breaking-news");
     const s = await getBreakingNewsStatus();
@@ -192,5 +193,50 @@ describe("getBreakingNewsStatus", () => {
     expect(s.remaining).toBe(1);
     expect(s.intro_url).toBe("https://blob.test/intro.mp4");
     expect(s.outro_url).toBe("https://blob.test/outro.mp4");
+    expect(s.lastForceTrigger).toBeNull();
+  });
+
+  it("surfaces persisted lastForceTrigger results so failures are visible from Safari", async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const persisted = {
+      at: "2026-06-18T02:22:06.000Z",
+      results: [
+        {
+          topic_id: "ce8f3ec3-2028-4bb1-a87d-b37ab243cbe4",
+          status: "failed",
+          error:
+            "HeyGen video submit failed (400): {\"error\":\"avatar_id is not Avatar V compatible\"}",
+        },
+      ],
+    };
+    fake.results = [
+      [{ value: "true" }],
+      [{ value: today }],
+      [{ value: "0" }],
+      [{ value: "https://blob.test/intro.mp4" }],
+      [{ value: "https://blob.test/outro.mp4" }],
+      [{ value: JSON.stringify(persisted) }],
+    ];
+    const { getBreakingNewsStatus } = await import("./breaking-news");
+    const s = await getBreakingNewsStatus();
+    expect(s.lastForceTrigger).not.toBeNull();
+    expect(s.lastForceTrigger!.at).toBe(persisted.at);
+    expect(s.lastForceTrigger!.results[0]!.status).toBe("failed");
+    expect(s.lastForceTrigger!.results[0]!.error).toContain("avatar_id");
+  });
+
+  it("returns null when the stored last_force_trigger row is malformed JSON", async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    fake.results = [
+      [{ value: "true" }],
+      [{ value: today }],
+      [{ value: "0" }],
+      [], // intro
+      [], // outro
+      [{ value: "{not-json" }],
+    ];
+    const { getBreakingNewsStatus } = await import("./breaking-news");
+    const s = await getBreakingNewsStatus();
+    expect(s.lastForceTrigger).toBeNull();
   });
 });

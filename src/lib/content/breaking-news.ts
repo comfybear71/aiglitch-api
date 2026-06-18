@@ -59,6 +59,13 @@ const KEY_DAILY_COUNT = "breaking_news_daily_count";
 const KEY_DAILY_RESET_DATE = "breaking_news_daily_reset_date";
 const KEY_INTRO_URL = "breaking_news_intro_url";
 const KEY_OUTRO_URL = "breaking_news_outro_url";
+/**
+ * Diagnostic surface: stores the JSON-serialized per-topic results of
+ * the most recent force_trigger run + an ISO timestamp. Exposed via
+ * `getBreakingNewsStatus().lastForceTrigger` so the operator can see
+ * failure reasons from Safari without scraping Vercel logs.
+ */
+const KEY_LAST_FORCE_TRIGGER = "breaking_news_last_force_trigger";
 
 export interface BreakingNewsTopic {
   id: string;
@@ -153,6 +160,32 @@ async function incrementDailyCount(): Promise<void> {
   await writeSetting(KEY_DAILY_COUNT, String(current + 1));
 }
 
+/**
+ * Read + parse the most recent force_trigger results, if any. Returns
+ * null when no force_trigger has been recorded yet. Used by the
+ * GET /api/admin/breaking-news status payload so the operator can
+ * inspect failure reasons from a browser without Vercel log access.
+ */
+async function readLastForceTrigger(): Promise<{
+  at: string;
+  results: BreakingNewsResult[];
+} | null> {
+  const raw = await readSetting(KEY_LAST_FORCE_TRIGGER);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as { at: string; results: BreakingNewsResult[] };
+  } catch {
+    return null;
+  }
+}
+
+async function writeLastForceTrigger(results: BreakingNewsResult[]): Promise<void> {
+  await writeSetting(
+    KEY_LAST_FORCE_TRIGGER,
+    JSON.stringify({ at: new Date().toISOString(), results }),
+  );
+}
+
 export async function getBreakingNewsStatus(): Promise<{
   enabled: boolean;
   dailyCap: number;
@@ -160,6 +193,7 @@ export async function getBreakingNewsStatus(): Promise<{
   remaining: number;
   intro_url: string | null;
   outro_url: string | null;
+  lastForceTrigger: { at: string; results: BreakingNewsResult[] } | null;
 }> {
   const enabled = await isBreakingNewsEnabled();
   const { count, remaining } = await getDailyCounter();
@@ -170,6 +204,7 @@ export async function getBreakingNewsStatus(): Promise<{
     remaining,
     intro_url: await readSetting(KEY_INTRO_URL),
     outro_url: await readSetting(KEY_OUTRO_URL),
+    lastForceTrigger: await readLastForceTrigger(),
   };
 }
 
@@ -623,6 +658,21 @@ export async function forceTriggerBreakingNews(
     );
     return [];
   }
-  if (rows.length === 0) return [];
-  return processNewTopicsForBreakingNews(rows.map((r) => r.id));
+  if (rows.length === 0) {
+    const empty: BreakingNewsResult[] = [];
+    await writeLastForceTrigger(empty);
+    return empty;
+  }
+  const results = await processNewTopicsForBreakingNews(rows.map((r) => r.id));
+  // Persist for the diagnostic surface in getBreakingNewsStatus.
+  // Non-fatal if write fails — surfaced via console.error inside writeSetting.
+  try {
+    await writeLastForceTrigger(results);
+  } catch (err) {
+    console.error(
+      "[breaking-news] writeLastForceTrigger failed (non-fatal):",
+      err instanceof Error ? err.message : err,
+    );
+  }
+  return results;
 }
