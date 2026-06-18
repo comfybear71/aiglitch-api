@@ -256,3 +256,66 @@ export async function generateAvatarVideoToBlob(
 export function isHeyGenConfigured(): boolean {
   return !!process.env.HEYGEN_API_KEY;
 }
+
+// ── Catalog discovery (used by /api/admin/heygen/catalog) ─────────────
+
+export interface HeyGenAvatarSummary {
+  avatar_id: string;
+  avatar_name: string;
+  gender?: string;
+  preview_image_url?: string;
+  preview_video_url?: string;
+}
+
+export interface HeyGenVoiceSummary {
+  voice_id: string;
+  name: string;
+  gender?: string;
+  language?: string;
+  preview_audio?: string;
+}
+
+/**
+ * Lists all avatars available to the configured account. Used so the
+ * operator can find the avatar_id for env vars like
+ * HEYGEN_NEWS_ANCHOR_AVATAR_ID without having to dig through the
+ * HeyGen dashboard.
+ */
+export async function listAvatars(): Promise<HeyGenAvatarSummary[]> {
+  const key = apiKey();
+  const res = await fetch(`${HEYGEN_BASE_URL}/v2/avatars`, {
+    headers: { "X-Api-Key": key },
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(
+      `HeyGen list-avatars failed (${res.status}): ${detail.slice(0, 200)}`,
+    );
+  }
+  const data = (await res.json()) as {
+    data?: { avatars?: HeyGenAvatarSummary[] };
+  };
+  return data.data?.avatars ?? [];
+}
+
+/**
+ * Lists all voices available to the configured account. Operator picks
+ * the voice_id to drop into HEYGEN_NEWS_ANCHOR_VOICE_ID (or future
+ * per-pipeline voice env vars).
+ */
+export async function listVoices(): Promise<HeyGenVoiceSummary[]> {
+  const key = apiKey();
+  const res = await fetch(`${HEYGEN_BASE_URL}/v2/voices`, {
+    headers: { "X-Api-Key": key },
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(
+      `HeyGen list-voices failed (${res.status}): ${detail.slice(0, 200)}`,
+    );
+  }
+  const data = (await res.json()) as {
+    data?: { voices?: HeyGenVoiceSummary[] };
+  };
+  return data.data?.voices ?? [];
+}

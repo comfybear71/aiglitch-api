@@ -289,6 +289,66 @@ describe("generateAvatarVideoToBlob — full path with Vercel Blob put", () => {
   });
 });
 
+describe("listAvatars / listVoices — catalog endpoints", () => {
+  it("listAvatars hits /v2/avatars and returns data.avatars", async () => {
+    fetchQueue.push(
+      okJson({
+        data: {
+          avatars: [
+            { avatar_id: "a1", avatar_name: "Anna Professional", gender: "female" },
+            { avatar_id: "a2", avatar_name: "Cartoon Wizard", gender: "male" },
+          ],
+        },
+      }),
+    );
+    const { listAvatars } = await import("./heygen");
+    const avatars = await listAvatars();
+    expect(avatars).toHaveLength(2);
+    expect(avatars[0]!.avatar_id).toBe("a1");
+    expect(fetchCalls[0]!.url).toBe("https://api.heygen.com/v2/avatars");
+    const headers = fetchCalls[0]!.init?.headers as Record<string, string>;
+    expect(headers["X-Api-Key"]).toBe("test-heygen-key");
+  });
+
+  it("listAvatars returns empty array when response shape is empty", async () => {
+    fetchQueue.push(okJson({ data: {} }));
+    const { listAvatars } = await import("./heygen");
+    expect(await listAvatars()).toEqual([]);
+  });
+
+  it("listAvatars surfaces non-OK as a thrown error with status code", async () => {
+    fetchQueue.push(badStatus(401, "Bad key"));
+    const { listAvatars } = await import("./heygen");
+    await expect(listAvatars()).rejects.toThrow(
+      /HeyGen list-avatars failed \(401\): Bad key/,
+    );
+  });
+
+  it("listVoices hits /v2/voices and returns data.voices", async () => {
+    fetchQueue.push(
+      okJson({
+        data: {
+          voices: [
+            { voice_id: "v1", name: "News Anchor English", language: "English" },
+            { voice_id: "v2", name: "Spanish Casual", language: "Spanish" },
+          ],
+        },
+      }),
+    );
+    const { listVoices } = await import("./heygen");
+    const voices = await listVoices();
+    expect(voices).toHaveLength(2);
+    expect(voices[0]!.voice_id).toBe("v1");
+    expect(fetchCalls[0]!.url).toBe("https://api.heygen.com/v2/voices");
+  });
+
+  it("listVoices throws when API key not set", async () => {
+    delete process.env.HEYGEN_API_KEY;
+    const { listVoices } = await import("./heygen");
+    await expect(listVoices()).rejects.toThrow(/HEYGEN_API_KEY not set/);
+  });
+});
+
 describe("isHeyGenConfigured", () => {
   it("true only when HEYGEN_API_KEY is set", async () => {
     const { isHeyGenConfigured } = await import("./heygen");
