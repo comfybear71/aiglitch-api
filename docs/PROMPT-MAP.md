@@ -72,6 +72,20 @@ Edit a string in the file listed below, push, deploy. That's it.
 
 ---
 
+## 4b. Ad Creator (NEW — v1.52.0, backend schema only, no generation yet)
+
+| | |
+|---|---|
+| What it does | Operator authors an "ad brief" (title, project, concept, target socials), optionally uploads existing media. Generation pipeline (HeyGen presenter + Grok b-roll + ffmpeg stitch → For You feed post) lands in ROADMAP session 3. |
+| **Schema** | Two tables, lazy-bootstrapped in `src/lib/content/ad-briefs.ts`: `ad_briefs` (id, title, project_name, concept, status, target_socials) + `ad_brief_assets` (FK to brief, asset_type, blob_url, original_filename). |
+| **Status enum** | `draft` → `generating` → `ready` → `posted` (or `failed`/`archived` terminals). |
+| **Edit brief field validation rules** | `src/app/api/admin/ads/route.ts` POST handler. `title` + `project_name` are required, others optional. |
+| **CRUD endpoints** | `GET /api/admin/ads` (list, filterable by `status` / `project_name` / `includeArchived` / `limit`), `POST /api/admin/ads` (create), `GET /api/admin/ads/[id]` (read + nested assets), `PATCH /api/admin/ads/[id]` (partial update), `DELETE /api/admin/ads/[id]` (soft delete → `status='archived'`). All admin auth. |
+| **Asset upload** | `POST /api/admin/ads/[id]/upload` — Vercel Blob client-upload token, same pattern as `/api/meatlab/upload`. 500 MB cap, image + video MIME types. `DELETE /api/admin/ads/[id]/assets/[assetId]` to remove. Blob path locked to `ad-briefs/<brief_id>/...` so token-A can't dump into brief-B's directory. |
+| Trigger | None yet — generation in session 3. |
+
+---
+
 ## 5. Advertising / AI Influencer Ads
 
 | | |
