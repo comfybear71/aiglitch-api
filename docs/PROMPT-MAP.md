@@ -27,19 +27,16 @@ Edit a string in the file listed below, push, deploy. That's it.
 
 ---
 
-## 2. Breaking News (two modes since v1.49.0)
+## 2. Breaking News (4-clip stitched, Grok-only since v1.51.2)
 
 | | |
 |---|---|
-| What it does | When a fresh topic enters `daily_topics`, generates a news video and posts to /me feed + spreads to socials. Two modes — picked automatically by env config. |
-| **Mode A: Grok-only (default)** | 4-clip stitched: 3s brand intro + 10s anchor + 10s field footage + 3s outro = 26s. Active when HeyGen env vars are unset. |
-| **Mode B: HeyGen anchor + Grok b-roll (stitched, v1.51.0+)** | 4-clip stitched: 3s Grok brand intro + 10s HeyGen Avatar V talking-head (real lip-sync, real TTS) + 10s Grok 1.5 field b-roll (topic-specific visuals, has audio) + 3s Grok brand outro = 26s. Active when `HEYGEN_API_KEY` + `HEYGEN_NEWS_ANCHOR_AVATAR_ID` + `HEYGEN_NEWS_ANCHOR_VOICE_ID` are all set. Anchor + field generated in parallel. Mixed-codec stitching handled by ffmpeg re-encode (`src/lib/media/ffmpeg-stitch.ts`). |
-| **Edit Grok-mode prompts** | `src/lib/content/breaking-news.ts` → `presenterPrompt()`, `fieldPrompt()`. Tokens: `${topic.headline}`, `${topic.summary}`, `${dateLabel}`, `${topic.mood}`, `${topic.category}`. |
-| **Edit Grok brand intro/outro** | Same file → `INTRO_PROMPT`, `OUTRO_PROMPT`. After editing, regenerate via admin action `regenerate_brand`. |
-| **Edit HeyGen script** | Same file → `presenterScript()`. Just the text the avatar reads — no visual prompt needed. Cap to ~30 words for ~10s read at news-anchor pace. |
-| **Switch HeyGen avatar / voice** | Change the env var values (`HEYGEN_NEWS_ANCHOR_AVATAR_ID` / `HEYGEN_NEWS_ANCHOR_VOICE_ID`). Use `GET /api/admin/heygen/catalog` (admin auth) to list all available IDs from your HeyGen account — the response also includes a `suggestions.news_anchor_*` heuristic filter for professional-looking candidates. No redeploy needed when env vars change. |
+| What it does | When a fresh topic enters `daily_topics`, generates a 4-clip stitched news video (3s brand intro + 10s anchor + 10s field footage + 3s outro), posts to /me feed + spreads to socials. |
+| **Edit per-topic prompts** | `src/lib/content/breaking-news.ts` → `presenterPrompt()`, `fieldPrompt()`. Tokens: `${topic.headline}`, `${topic.summary}`, `${dateLabel}`, `${topic.mood}`, `${topic.category}`. |
+| **Edit brand intro/outro** | Same file → `INTRO_PROMPT`, `OUTRO_PROMPT`. After editing, regenerate via admin action `regenerate_brand`. |
 | Trigger | **Chain-triggered** — NOT a standalone cron. Fires from `/api/generate-topics` only when that route inserts a **new** topic row. |
-| Daily cap | `DAILY_CAP_DEFAULT = 2` in `breaking-news.ts`. UTC midnight reset. Applies to both modes. |
+| Daily cap | `DAILY_CAP_DEFAULT = 2` in `breaking-news.ts`. UTC midnight reset. |
+| **Note on the reverted HeyGen Mode B** | Between v1.49.0 and v1.51.1 there was an experimental Mode B that used HeyGen Avatar V for the anchor segment. Reverted in v1.51.2 — too many cascading deploy surprises (Grok 1.5 text-to-video unsupported, Next 16 binary bundling, mixed-codec stitching). The HeyGen client lib + ffmpeg stitcher + catalog endpoint + Grok 1.0/1.5 model selection are all preserved for use by the Ad Creator pipeline (ROADMAP sessions 2-4). HEYGEN_NEWS_ANCHOR_AVATAR_ID and HEYGEN_NEWS_ANCHOR_VOICE_ID env vars are no longer consumed by this pipeline — safe to delete from Vercel. |
 | Admin controls | `POST /api/admin/breaking-news` — actions: `toggle`, `enable`, `disable`, `reset_daily_count`, `regenerate_brand`, `force_trigger`, `repair_orphan_posts`. |
 | Cost per story | Grok 1.0/720p: ~$1.40. Grok 1.5/720p: ~$2.80. HeyGen Avatar V: ~$0.17. |
 | **⚠️ Why it goes quiet** | Topics only insert when `currentCount < MIN_ACTIVE_TOPICS` (5) in `/api/generate-topics`. If your briefing has ≥5 active topics, no new topics → no breaking news. Use `POST /api/admin/breaking-news { action: "force_trigger", max_topics: 2 }` to bypass. |

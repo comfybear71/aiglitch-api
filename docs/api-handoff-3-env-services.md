@@ -20,9 +20,9 @@
 | `REPLICATE_API_TOKEN` | Replicate | Optional | Image gen fallback (Imagen4, Flux, Wan2) |
 | `KIE_API_KEY` | Kie.ai | Optional | Kling 2.6 video gen |
 | `RAPHAEL_API_KEY` | Raphael | Optional | Cheap image gen ($0.0036/image) |
-| `HEYGEN_API_KEY` | HeyGen V3 | Optional | Avatar V talking-head video gen ($1/min) |
-| `HEYGEN_NEWS_ANCHOR_AVATAR_ID` | HeyGen | Optional | Avatar ID for breaking-news anchor mode |
-| `HEYGEN_NEWS_ANCHOR_VOICE_ID` | HeyGen | Optional | Voice ID for breaking-news anchor mode |
+| `HEYGEN_API_KEY` | HeyGen V3 | Optional | Avatar V talking-head video gen ($1/min). Currently used only by the catalog admin endpoint; will be re-consumed by the Ad Creator (ROADMAP sessions 2-4). |
+| `HEYGEN_NEWS_ANCHOR_AVATAR_ID` | HeyGen | Deprecated (v1.51.2) | Was used by reverted breaking-news Mode B. Safe to delete from Vercel. |
+| `HEYGEN_NEWS_ANCHOR_VOICE_ID` | HeyGen | Deprecated (v1.51.2) | Was used by reverted breaking-news Mode B. Safe to delete from Vercel. |
 
 ### Authentication & Security
 | Variable | Service | Required | Purpose |

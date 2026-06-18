@@ -32,7 +32,7 @@ happen in the respective frontend repo via a sister Claude session.
 | # | Session | Repo | Status | Notes |
 |---|---|---|---|---|
 | 0 | Roadmap + spec lock | aiglitch-api | ✅ this PR | The doc you're reading. |
-| 1 | **ffmpeg stitcher** — re-encode + concat to support mixed-codec (Grok + HeyGen) clips. Brings intro/outro back to breaking-news Mode B. Foundation for the Ad Creator. | aiglitch-api | ✅ v1.50.0 | Bundled `ffmpeg-static`. Wired into breaking-news Mode B — intro + HeyGen anchor + outro stitched into 16s output. Foundation for Ad Creator (session 2-4). |
+| 1 | **ffmpeg stitcher** — re-encode + concat to support mixed-codec (Grok + HeyGen) clips. Originally wired into breaking-news Mode B; Mode B reverted in v1.51.2 after deploy-pipeline thrash. Library preserved for Ad Creator. | aiglitch-api | ✅ v1.50.0 (parked, breaking-news no longer consumes) | `ffmpeg-static` bundled, `serverExternalPackages` pattern documented in lessons-learned. See "Status at the time of writing" for what to know before reusing this in sessions 2-4. |
 | 2 | **Ad Creator backend — part 1**: schema + admin endpoints. New DB table for "ad briefs" (title, project name, concept, target socials). CRUD endpoints. No generation yet. | aiglitch-api | ⬜ | Hangs off `/api/admin/ads/*`. |
 | 3 | **Ad Creator backend — part 2**: generation pipeline. Brief → HeyGen presenter + Grok b-roll + HeyGen intro/outro → ffmpeg stitch → MP4 in Blob → INSERT post to For You feed. | aiglitch-api | ⬜ | Posts to AIG!itch For You feed only (user said other-project socials are manual for now). |
 | 4 | **Ad Creator backend — part 3**: upload-existing-media path. Operator uploads their own video clips to mix with AI-generated content (per user: "experiment until we hit sweet spot for each project/business"). | aiglitch-api | ⬜ | Reuses Vercel Blob client-upload pattern from meatlab. |
@@ -159,15 +159,41 @@ sessions.
 
 ---
 
-## Status at the time of writing (2026-06-18)
+## Status at the time of writing (2026-06-18, end of HeyGen experiment)
 
-- Grok video upgraded to 1.5 (v1.48.0) — synced audio, better motion, 2x speed.
-- HeyGen Avatar V wired up for breaking-news anchor (v1.49.0). Currently running anchor-only (no intro/outro) until session 1 (ffmpeg stitcher) brings them back.
-- HeyGen catalog endpoint (v1.49.1) — admin can list avatars + voices.
-- Force-trigger diagnostic surface (v1.49.2) — `lastForceTrigger` in GET status payload lets us diagnose silent failures from Safari without scraping Vercel logs.
-- Chaos drops library expanded to 100 scenarios (v1.46.0).
-- Topic expiry bug fixed (v1.47.0) — breaking news now fires naturally without `force_trigger`.
-- 4 known-broken admin pages flagged for fixing during tab moves.
+What ships and runs today:
+
+- **Breaking News** — back to the original Grok-only 4-clip 26s stitched format (intro + presenter + field + outro). Mode B HeyGen experiment reverted in v1.51.2.
+- Grok video model selection (v1.51.1): text-to-video routes to `grok-imagine-video` (1.0), image-to-video routes to `grok-imagine-video-1.5` (better motion + native audio). xAI's 1.5 is image-only — calling it with just a prompt returns 400.
+- Cost ledger fix (v1.48.0): tiered by `(model, resolution)`. Pre-v1.48 ledger numbers underreported every 720p clip by 40-180%.
+- Topic `expires_at` fix (v1.47.0): breaking news fires naturally without `force_trigger` — topics rotate daily.
+- Chaos drops: 100 scenarios (v1.46.0). 9 visual style families. Marketplace tilt.
+- HeyGen catalog admin endpoint (v1.49.1): `GET /api/admin/heygen/catalog` lists avatar + voice IDs. Preserved for Ad Creator use.
+- Force-trigger diagnostic (v1.49.2): `lastForceTrigger` in breaking-news GET status. Killer-feature for diagnosing the HeyGen failure chain without Vercel logs.
+- 4 known-broken admin pages flagged for fixing during marketing-tab moves.
 - 2 sister repos pending creation: marketing-aiglitch, trading-aiglitch.
 
-Next ship target: ffmpeg stitcher (session 1).
+Preserved parts of the HeyGen / ffmpeg infrastructure (do NOT delete, the Ad Creator will use them):
+
+- `src/lib/ai/heygen.ts` + `.test.ts` — HeyGen V3 Avatar V client (submit / poll / generate / blob, catalog listing).
+- `src/lib/media/ffmpeg-stitch.ts` + `.test.ts` — mixed-codec re-encode-and-concat stitcher.
+- `next.config.ts` `outputFileTracingIncludes` + (when re-applied) `serverExternalPackages: ['ffmpeg-static']` — bundling fixes for the binary.
+- `src/app/api/admin/heygen/catalog/route.ts` — admin endpoint to browse HeyGen avatars + voices.
+- `package.json` `ffmpeg-static` + `@vercel/blob` `allowOverwrite` discipline — retry-safe blob writes.
+
+## Lessons learned from the HeyGen Mode B saga (read before Ad Creator)
+
+The Mode B experiment thrashed v1.49.0 → v1.51.2 with five cascading failures. Each was individually small but the chain was expensive in tokens, HeyGen credits, and the user's patience. Lessons to apply in sessions 2-4:
+
+1. **xAI Grok 1.5 is image-to-video ONLY.** Pure text prompts return 400 "Text-to-video is not supported for this model." Code that uses 1.5 must guarantee a `sourceImageUrl`. We added auto-selection in v1.51.1 (text → 1.0, image → 1.5) — use that helper.
+2. **Next.js 16 bundles every node_modules dep into the server JS by default.** Native binaries like `ffmpeg-static` need BOTH `serverExternalPackages: ['ffmpeg-static']` (so `__dirname` resolves correctly at runtime) AND `outputFileTracingIncludes` (so the file is in the lambda). One without the other isn't enough.
+3. **Vercel Blob refuses to overwrite by default.** Any retryable path needs `allowOverwrite: true` on the `put()` call. Without it, the second attempt at a deterministic-path write fails with "blob already exists" while the first attempt's stale partial sits there forever.
+4. **HeyGen mobile app catalog ≠ V3 API catalog.** The iPhone app surfaces Avatar IV (photo-to-life) and Instant Avatar template demos that aren't addressable via `POST /v3/videos` with `engine.type: 'avatar_v'`. Always use the catalog admin endpoint (`/api/admin/heygen/catalog`) or `GET /v2/avatars` directly to pick V-compatible IDs.
+5. **Mixed-codec stitching IS possible** — ffmpeg re-encode-then-concat works fine (`src/lib/media/ffmpeg-stitch.ts`). Cost: ~30-60s wall time per 30s of output. Don't try `mp4-concat`'s byte-level stitcher with mixed-provider clips.
+6. **Don't make a model-version upgrade the default for ALL paths in one PR.** v1.48 should have made 1.5 opt-in by `sourceImageUrl` from day one — instead the unconditional default silently broke every text-to-video path and the bug only surfaced when the field b-roll call hit production.
+7. **Ship a deploy-time dry-run before adding native binary deps.** ffmpeg ENOENT could have been caught locally with a quick `npm run build && node .next/server/.../route.js` smoke test. Worth scripting before sessions 2-4 add more native deps.
+8. **The diagnostic surface (v1.49.2) was the single highest-leverage thing we built.** Without `lastForceTrigger` in the GET response, we'd still be guessing at Vercel logs. Build similar surfaces into every new admin-triggered async pipeline.
+
+Capture these in the Ad Creator backend (sessions 2-4) — same provider mix, similar surprises.
+
+Next ship target: ROADMAP session 2 — Ad Creator backend part 1 (schema + admin endpoints), when the user is ready.

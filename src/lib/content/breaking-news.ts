@@ -1,30 +1,22 @@
 /**
- * Breaking News pipeline — single MP4 per daily_topic, two modes.
+ * Breaking News pipeline — single stitched MP4 per daily_topic.
  *
- * Mode A — Grok-only (default, when HeyGen env vars unset):
- *   [intro.mp4] + [presenter clip] + [field clip] + [outro.mp4]
- *   stitched with mp4-concat (pure JS, no ffmpeg) into a single 26s video.
- *   Intro + outro lazy-generated ONCE per environment, reused per story
- *   (~$0.30 one-time cost). Per-story cost on Grok 1.0/720p: presenter
- *   10s + field 10s ≈ $1.40. On Grok 1.5/720p: ≈ $2.80.
+ * Per topic: [intro.mp4] + [presenter clip] + [field clip] + [outro.mp4]
+ * stitched with mp4-concat (pure JS, no ffmpeg) into a single 26s video.
  *
- * Mode B — HeyGen anchor + Grok b-roll (active when HEYGEN_API_KEY +
- *   HEYGEN_NEWS_ANCHOR_AVATAR_ID + HEYGEN_NEWS_ANCHOR_VOICE_ID all set):
- *   [intro.mp4] + [HeyGen anchor clip] + [Grok field b-roll] +
- *   [outro.mp4] re-encoded + concatenated via ffmpeg-stitch.ts. Same
- *   26s shape as Mode A but with HeyGen Avatar V for the anchor
- *   segment (real lip-sync + TTS) — gets the quality lift on the
- *   talking head while keeping topic-specific b-roll variety from
- *   Grok 1.5 so the post doesn't look identical every day. Anchor
- *   and field are generated in parallel.
- *   Per-story cost: ~$0.17 HeyGen + ~$1.40 Grok field 10s @ 720p +
- *   ~$0.30 one-time intro/outro = ~$1.57 + brand amortised. ffmpeg
- *   re-encode adds ~30-60s wall time on top of the parallel gen,
- *   total ~2-3 min end-to-end.
+ * Intro + outro lazy-generated ONCE per environment, reused per story
+ * (~$0.30 one-time cost). Per-story cost on Grok 1.0/720p: presenter
+ * 10s + field 10s ≈ $1.40. Daily cap of 2 = ~$170/month worst case.
  *
- * Daily cap: 2 stories/day via platform_settings either mode. In Mode A
- * that's a $5.60/day ceiling (= ~$170/month worst case); in Mode B
- * it's ~$0.34/day (= ~$10/month).
+ * Note (v1.51.2): a Mode B variant using HeyGen Avatar V for the
+ * anchor segment shipped briefly between v1.49.0 and v1.51.1 and was
+ * reverted — too many cascading deploy / API surprises (Grok 1.5
+ * text-to-video unsupported, Next 16 binary bundling, mixed-codec
+ * stitching). The HeyGen client lib + ffmpeg stitcher are preserved
+ * (`src/lib/ai/heygen.ts` + `src/lib/media/ffmpeg-stitch.ts`) for the
+ * Ad Creator pipeline (ROADMAP sessions 2-4) which has a more
+ * forgiving cost / iteration profile. Don't re-add the Mode B fork
+ * here unless the Ad Creator proves out the full stack first.
  *
  * Entry point: processNewTopicsForBreakingNews — called by the
  * /api/generate-topics cron AFTER topics insert. Deduped on
@@ -40,9 +32,7 @@
 
 import { put } from "@vercel/blob";
 import { generateVideoToBlob } from "@/lib/ai/video";
-import { generateAvatarVideoToBlob } from "@/lib/ai/heygen";
 import { concatMP4Clips } from "@/lib/media/mp4-concat";
-import { stitchClipsWithReencode } from "@/lib/media/ffmpeg-stitch";
 import { getDb } from "@/lib/db";
 import { spreadPostToSocial } from "@/lib/marketing/spread-post";
 import { randomUUID } from "node:crypto";
@@ -277,32 +267,6 @@ function presenterPrompt(topic: BreakingNewsTopic, dateLabel: string): string {
   );
 }
 
-/**
- * Script the HeyGen avatar reads aloud. Capped at ~30 words so the
- * Avatar V output lands around 10 seconds (news-anchor pace is roughly
- * 2.5 words/sec). Summary is truncated before concatenation so a long
- * topic doesn't blow past the read length.
- */
-function presenterScript(topic: BreakingNewsTopic): string {
-  const summary = topic.summary.slice(0, 140);
-  return `Breaking news from the Glitch News Network. ${topic.headline}. ${summary}`;
-}
-
-/**
- * True only when all three HeyGen anchor env vars are set. Missing any
- * one → fall back to the Grok cyberpunk-anchor flow automatically.
- *   HEYGEN_API_KEY
- *   HEYGEN_NEWS_ANCHOR_AVATAR_ID
- *   HEYGEN_NEWS_ANCHOR_VOICE_ID
- */
-function isHeyGenAnchorConfigured(): boolean {
-  return !!(
-    process.env.HEYGEN_API_KEY &&
-    process.env.HEYGEN_NEWS_ANCHOR_AVATAR_ID &&
-    process.env.HEYGEN_NEWS_ANCHOR_VOICE_ID
-  );
-}
-
 function fieldPrompt(topic: BreakingNewsTopic, dateLabel: string): string {
   return (
     `On-scene field footage related to "${topic.headline}". Dramatic visuals matching the ` +
@@ -391,132 +355,54 @@ async function generateOneStitchedBreakingNews(
     );
   }
 
-  // 1. Fork on whether HeyGen is configured.
-  //
-  // HeyGen anchor mode (v1.50.0+): generate the anchor clip via HeyGen
-  // Avatar V (real talking head + real TTS lip-sync), then stitch with
-  // the same Grok intro + outro brand bookends as Mode A. Mixed-codec
-  // stitching is handled by ffmpeg-stitch.ts which re-encodes each clip
-  // to a common H.264 baseline + AAC profile before concatenating.
-  // The b-roll field clip is skipped — HeyGen anchor + brand bookends
-  // make a 16s clip (3s intro + 10s anchor + 3s outro) which keeps the
-  // distinct GNN brand identity AND the dramatic quality lift on the
-  // anchor segment. Per-story cost: ~$0.17 HeyGen + ~$0.30 one-time
-  // intro/outro generation (cached after first run).
-  //
-  // Grok-only mode (default when HeyGen env vars unset): existing 4-clip
-  // stitched flow with the legacy byte-level concat.
-  let stitchedBlob: { url: string };
+  // 1. Brand assets (cheap if already generated).
+  const { introUrl, outroUrl } = await ensureBrandAssets();
 
-  if (isHeyGenAnchorConfigured()) {
-    console.log(
-      `[breaking-news] HeyGen anchor mode for topic ${topic.id}`,
-    );
-    // Brand assets first — cheap when cached.
-    const { introUrl, outroUrl } = await ensureBrandAssets();
+  // 2. Generate presenter + field in parallel (independent xAI calls).
+  const presenterPromise = generateVideoToBlob({
+    prompt: presenterPrompt(topic, label),
+    taskType: "video_generation",
+    duration: PRESENTER_DURATION_SEC,
+    aspectRatio: "9:16",
+    blobPath: `breaking-news/clips/${topic.id}/presenter.mp4`,
+  });
+  const fieldPromise = generateVideoToBlob({
+    prompt: fieldPrompt(topic, label),
+    taskType: "video_generation",
+    duration: FIELD_DURATION_SEC,
+    aspectRatio: "9:16",
+    blobPath: `breaking-news/clips/${topic.id}/field.mp4`,
+  });
+  const [presenter, field] = await Promise.all([
+    presenterPromise,
+    fieldPromise,
+  ]);
 
-    // Generate the anchor (HeyGen) + field b-roll (Grok) in parallel.
-    // Anchor = real talking head with TTS lip-sync. Field = generative
-    // visual matching the topic mood + category, so the post doesn't
-    // look identical every day. Both calls are independent so we save
-    // 30-60s by overlapping their wall-clock.
-    const anchorPromise = generateAvatarVideoToBlob({
-      script: presenterScript(topic),
-      avatarId: process.env.HEYGEN_NEWS_ANCHOR_AVATAR_ID!,
-      voiceId: process.env.HEYGEN_NEWS_ANCHOR_VOICE_ID!,
-      taskType: "video_generation",
-      aspectRatio: "9:16",
-      blobPath: `breaking-news/clips/${topic.id}/anchor.mp4`,
-    });
-    const fieldPromise = generateVideoToBlob({
-      prompt: fieldPrompt(topic, label),
-      taskType: "video_generation",
-      duration: FIELD_DURATION_SEC,
-      aspectRatio: "9:16",
-      blobPath: `breaking-news/clips/${topic.id}/field.mp4`,
-    });
-    const [anchor, field] = await Promise.all([anchorPromise, fieldPromise]);
+  // 3. Download all 4 source clips.
+  const [introBuf, presenterBuf, fieldBuf, outroBuf] = await Promise.all([
+    downloadToBuffer(introUrl),
+    downloadToBuffer(presenter.blobUrl),
+    downloadToBuffer(field.blobUrl),
+    downloadToBuffer(outroUrl),
+  ]);
 
-    // Download all 4 source clips for ffmpeg re-encode + concat.
-    const [introBuf, anchorBuf, fieldBuf, outroBuf] = await Promise.all([
-      downloadToBuffer(introUrl),
-      downloadToBuffer(anchor.blobUrl),
-      downloadToBuffer(field.blobUrl),
-      downloadToBuffer(outroUrl),
-    ]);
+  // 4. Stitch with pure-JS concat (matches what channel videos use).
+  const stitched = concatMP4Clips([introBuf, presenterBuf, fieldBuf, outroBuf]);
 
-    // Stitch with re-encoding — handles HeyGen + Grok H.264 profile
-    // mismatch, injects silent audio on any brand asset that was
-    // generated before the v1.48 Grok 1.5 audio upgrade.
-    const stitched = await stitchClipsWithReencode([
-      introBuf,
-      anchorBuf,
-      fieldBuf,
-      outroBuf,
-    ]);
-
-    stitchedBlob = await put(
-      `breaking-news/stitched/${label}/${topic.id}.mp4`,
-      stitched,
-      {
-        access: "public",
-        contentType: "video/mp4",
-        addRandomSuffix: false,
-        // Force-trigger retries reuse the same stitched path. Allow
-        // overwrites so a partial-failure rerun doesn't trip Vercel
-        // Blob's existence check.
-        allowOverwrite: true,
-      },
-    );
-  } else {
-    // Brand assets (cheap if already generated).
-    const { introUrl, outroUrl } = await ensureBrandAssets();
-
-    // Generate presenter + field in parallel (independent xAI calls).
-    const presenterPromise = generateVideoToBlob({
-      prompt: presenterPrompt(topic, label),
-      taskType: "video_generation",
-      duration: PRESENTER_DURATION_SEC,
-      aspectRatio: "9:16",
-      blobPath: `breaking-news/clips/${topic.id}/presenter.mp4`,
-    });
-    const fieldPromise = generateVideoToBlob({
-      prompt: fieldPrompt(topic, label),
-      taskType: "video_generation",
-      duration: FIELD_DURATION_SEC,
-      aspectRatio: "9:16",
-      blobPath: `breaking-news/clips/${topic.id}/field.mp4`,
-    });
-    const [presenter, field] = await Promise.all([
-      presenterPromise,
-      fieldPromise,
-    ]);
-
-    // Download all 4 source clips.
-    const [introBuf, presenterBuf, fieldBuf, outroBuf] = await Promise.all([
-      downloadToBuffer(introUrl),
-      downloadToBuffer(presenter.blobUrl),
-      downloadToBuffer(field.blobUrl),
-      downloadToBuffer(outroUrl),
-    ]);
-
-    // Stitch with pure-JS concat (matches what channel videos use).
-    const stitched = concatMP4Clips([introBuf, presenterBuf, fieldBuf, outroBuf]);
-
-    stitchedBlob = await put(
-      `breaking-news/stitched/${label}/${topic.id}.mp4`,
-      stitched,
-      {
-        access: "public",
-        contentType: "video/mp4",
-        addRandomSuffix: false,
-        // Force-trigger retries reuse the same stitched path. Allow
-        // overwrites so a partial-failure rerun doesn't trip Vercel
-        // Blob's existence check.
-        allowOverwrite: true,
-      },
-    );
-  }
+  // 5. Upload final.
+  const stitchedBlob = await put(
+    `breaking-news/stitched/${label}/${topic.id}.mp4`,
+    stitched,
+    {
+      access: "public",
+      contentType: "video/mp4",
+      addRandomSuffix: false,
+      // Force-trigger retries reuse the same stitched path. Allow
+      // overwrites so a partial-failure rerun doesn't trip Vercel
+      // Blob's existence check.
+      allowOverwrite: true,
+    },
+  );
 
   // 6. INSERT post → For You feed.
   const sql = getDb();
