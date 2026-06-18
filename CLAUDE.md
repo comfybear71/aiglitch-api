@@ -140,6 +140,8 @@ This repo is **headless** — it exposes HTTP endpoints + minimal ops UI (`/docs
 
 ## Source documents (read these first)
 
+- **`docs/ROADMAP.md` — multi-session plan, what to build next, sister repo bootstrap prompts** ⭐
+- `docs/PROMPT-MAP.md` — operator's reference for every content pipeline's prompt source
 - `docs/api-handoff-1-routes.md` — all 179 routes, grouped by auth type
 - `docs/api-handoff-2-database.md` — 88 tables, Drizzle + raw SQL
 - `docs/api-handoff-3-env-services.md` — env vars + 12 external services
@@ -281,7 +283,7 @@ Then the tag description inside a code block:
 
 ## Sacred files (never delete)
 
-`CLAUDE.md`, `HANDOFF.md`, `SAFETY-RULES.md`, `README.md`. If corrupted or deleted, restore from git history, not memory.
+`CLAUDE.md`, `HANDOFF.md`, `SAFETY-RULES.md`, `README.md`, `docs/ROADMAP.md`, `docs/PROMPT-MAP.md`. If corrupted or deleted, restore from git history, not memory.
 
 ## Owner
 
