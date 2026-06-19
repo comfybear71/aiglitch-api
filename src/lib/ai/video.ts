@@ -178,51 +178,110 @@ export async function submitVideoJob(
   // nested `image: { url }` instead of flat `image_url: string`.
   if (opts.sourceImageUrl) payload.image = { url: opts.sourceImageUrl };
 
-  try {
-    const res = await fetch(`${XAI_BASE_URL}/videos/generations`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${key}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      throw new Error(
-        `xAI video submit failed (${res.status}): ${detail.slice(0, 300)}`,
-      );
+  // ── Retry loop (v1.54.0) ────────────────────────────────────────
+  //
+  // xAI's grok-imagine-video model is rate-limited at 1 request/second
+  // per team. Concurrent submits (breaking-news Mode A fires presenter
+  // + field in parallel; chaos drops can collide with admin-triggered
+  // ones) blow through that and surface as:
+  //   { code: "resource-exhausted", error: "Too many requests ..." }
+  //
+  // Mirror the proven backoff in xai-extras.ts: retry transient
+  // statuses (429 + 5xx) up to 3 times with 2s/4s/8s base + 0-500ms
+  // jitter. Jitter is important — without it, two concurrent callers
+  // that BOTH got 429 would both retry at exactly +2s and collide
+  // again. Honors a Retry-After response header (seconds) when xAI
+  // provides one. Other 4xx fail fast — 400 "text-to-video not
+  // supported" or 401 "bad key" should NOT keep retrying.
+  const MAX_RETRIES = 3;
+  let lastErr: Error | null = null;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const res = await fetch(`${XAI_BASE_URL}/videos/generations`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${key}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const isTransient = res.status === 429 || res.status >= 500;
+        if (isTransient && attempt < MAX_RETRIES) {
+          const retryAfterHeader = res.headers?.get?.("retry-after") ?? null;
+          const retryAfterSec = retryAfterHeader
+            ? parseInt(retryAfterHeader, 10)
+            : NaN;
+          // Drain body so the connection can be reused; tiny memory cost.
+          await res.text().catch(() => "");
+          const baseMs =
+            Number.isFinite(retryAfterSec) && retryAfterSec > 0
+              ? retryAfterSec * 1000
+              : Math.pow(2, attempt + 1) * 1000;
+          const jitterMs = Math.floor(Math.random() * 500);
+          const waitMs = baseMs + jitterMs;
+          console.warn(
+            `[xai/video] transient ${res.status} (attempt ${attempt + 1}/${MAX_RETRIES + 1}), retrying in ${(waitMs / 1000).toFixed(2)}s`,
+          );
+          await new Promise((r) => setTimeout(r, waitMs));
+          continue;
+        }
+        const detail = await res.text().catch(() => "");
+        throw new Error(
+          `xAI video submit failed (${res.status}): ${detail.slice(0, 300)}`,
+        );
+      }
+      const data = (await res.json()) as {
+        request_id?: string;
+        video?: { url?: string };
+      };
+      const requestId = data.request_id;
+      const syncVideoUrl = data.video?.url;
+      if (!requestId && !syncVideoUrl) {
+        throw new Error("xAI video submit: response missing request_id + video");
+      }
+      const estimatedUsd = durationSec * costPerSecond(model, resolution);
+      await recordSuccess("xai");
+      void logAiCost({
+        provider: "xai",
+        taskType: opts.taskType,
+        model,
+        inputTokens: 0,
+        outputTokens: 0,
+        estimatedUsd,
+      });
+      return {
+        requestId: requestId ?? `sync-${Date.now()}`,
+        syncVideoUrl,
+        model,
+        estimatedUsd,
+        durationSec,
+      };
+    } catch (err) {
+      // Network-level errors are transient — retry with backoff.
+      // Errors we threw ourselves (non-OK status outside the retry
+      // window, or missing request_id) bubble out.
+      lastErr = err instanceof Error ? err : new Error(String(err));
+      const isThrownByUs =
+        lastErr.message.startsWith("xAI video submit failed") ||
+        lastErr.message.startsWith("xAI video submit: response missing");
+      if (!isThrownByUs && attempt < MAX_RETRIES) {
+        const baseMs = Math.pow(2, attempt + 1) * 1000;
+        const jitterMs = Math.floor(Math.random() * 500);
+        console.warn(
+          `[xai/video] network error (attempt ${attempt + 1}/${MAX_RETRIES + 1}): ${lastErr.message}; retrying in ${((baseMs + jitterMs) / 1000).toFixed(2)}s`,
+        );
+        await new Promise((r) => setTimeout(r, baseMs + jitterMs));
+        continue;
+      }
+      await recordFailure("xai");
+      throw lastErr;
     }
-    const data = (await res.json()) as {
-      request_id?: string;
-      video?: { url?: string };
-    };
-    const requestId = data.request_id;
-    const syncVideoUrl = data.video?.url;
-    if (!requestId && !syncVideoUrl) {
-      throw new Error("xAI video submit: response missing request_id + video");
-    }
-    const estimatedUsd = durationSec * costPerSecond(model, resolution);
-    await recordSuccess("xai");
-    void logAiCost({
-      provider: "xai",
-      taskType: opts.taskType,
-      model,
-      inputTokens: 0,
-      outputTokens: 0,
-      estimatedUsd,
-    });
-    return {
-      requestId: requestId ?? `sync-${Date.now()}`,
-      syncVideoUrl,
-      model,
-      estimatedUsd,
-      durationSec,
-    };
-  } catch (err) {
-    await recordFailure("xai");
-    throw err;
   }
+  // Should be unreachable — the loop either returns on success or
+  // throws on terminal failure inside the catch block.
+  await recordFailure("xai");
+  throw lastErr ?? new Error("xAI video submit failed after retries");
 }
 
 export async function pollVideoJob(requestId: string): Promise<PollVideoJobResult> {

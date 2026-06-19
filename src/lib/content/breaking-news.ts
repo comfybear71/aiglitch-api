@@ -358,7 +358,18 @@ async function generateOneStitchedBreakingNews(
   // 1. Brand assets (cheap if already generated).
   const { introUrl, outroUrl } = await ensureBrandAssets();
 
-  // 2. Generate presenter + field in parallel (independent xAI calls).
+  // 2. Generate presenter + field — submit sequentially with a 1.1s
+  // gap to stay under xAI grok-imagine-video's 1 req/sec rate limit,
+  // then poll both in parallel. Without the gap, the two xAI submits
+  // fire in the same tick and the second returns
+  //   429 { code: "resource-exploited", error: "Too many requests ..." }
+  // killing the whole pipeline. submitVideoJob has its own retry now
+  // (v1.54.0) as a defence-in-depth — but avoiding the burst in the
+  // first place is the cheap part of the fix.
+  //
+  // Promise polling proceeds in parallel because each generateVideoToBlob
+  // promise starts its submit-then-poll loop the moment it's called;
+  // we just kick them off 1.1s apart.
   const presenterPromise = generateVideoToBlob({
     prompt: presenterPrompt(topic, label),
     taskType: "video_generation",
@@ -366,6 +377,7 @@ async function generateOneStitchedBreakingNews(
     aspectRatio: "9:16",
     blobPath: `breaking-news/clips/${topic.id}/presenter.mp4`,
   });
+  await new Promise((r) => setTimeout(r, 1100));
   const fieldPromise = generateVideoToBlob({
     prompt: fieldPrompt(topic, label),
     taskType: "video_generation",
