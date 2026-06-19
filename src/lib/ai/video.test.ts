@@ -215,13 +215,25 @@ describe("submitVideoJob", () => {
     expect(res.syncVideoUrl).toBe("https://xai.test/sync.mp4");
   });
 
-  it("throws on non-OK submit response", async () => {
+  it("throws on persistent 500 after exhausting retries", async () => {
+    // v1.54.0 added 4 attempts (1 + 3 retries) for transient statuses.
+    // Push enough bad responses to exhaust the loop.
     fetchQueue.push(badStatus(500, "upstream boom"));
+    fetchQueue.push(badStatus(500, "upstream boom"));
+    fetchQueue.push(badStatus(500, "upstream boom"));
+    fetchQueue.push(badStatus(500, "upstream boom"));
+    // Patch setTimeout so the retry sleeps don't slow the test down.
+    const realSetTimeout = global.setTimeout;
+    vi.stubGlobal(
+      "setTimeout",
+      ((cb: () => void) => realSetTimeout(cb, 0)) as unknown as typeof setTimeout,
+    );
     const { submitVideoJob } = await import("./video");
     await expect(
       submitVideoJob({ prompt: "x", taskType: "video_generation" }),
     ).rejects.toThrow(/xAI video submit failed \(500\): upstream boom/);
-  });
+    vi.unstubAllGlobals();
+  }, 10_000);
 
   it("throws when the response carries neither request_id nor video url", async () => {
     fetchQueue.push(okJson({}));
@@ -230,6 +242,85 @@ describe("submitVideoJob", () => {
       submitVideoJob({ prompt: "x", taskType: "video_generation" }),
     ).rejects.toThrow(/missing request_id \+ video/);
   });
+
+  // ── v1.54.0 retry/backoff specs ────────────────────────────────
+
+  it("retries on 429 and succeeds on second attempt", async () => {
+    fetchQueue.push(badStatus(429, '{"code":"resource-exhausted"}'));
+    fetchQueue.push(okJson({ request_id: "req-retry-1" }));
+    const realSetTimeout = global.setTimeout;
+    vi.stubGlobal(
+      "setTimeout",
+      ((cb: () => void) => realSetTimeout(cb, 0)) as unknown as typeof setTimeout,
+    );
+    const { submitVideoJob } = await import("./video");
+    const res = await submitVideoJob({
+      prompt: "x",
+      taskType: "video_generation",
+    });
+    expect(res.requestId).toBe("req-retry-1");
+    expect(fetchCalls).toHaveLength(2);
+    vi.unstubAllGlobals();
+  }, 10_000);
+
+  it("retries on 503 then succeeds", async () => {
+    fetchQueue.push(badStatus(503, "service unavailable"));
+    fetchQueue.push(okJson({ request_id: "req-retry-2" }));
+    const realSetTimeout = global.setTimeout;
+    vi.stubGlobal(
+      "setTimeout",
+      ((cb: () => void) => realSetTimeout(cb, 0)) as unknown as typeof setTimeout,
+    );
+    const { submitVideoJob } = await import("./video");
+    const res = await submitVideoJob({
+      prompt: "x",
+      taskType: "video_generation",
+    });
+    expect(res.requestId).toBe("req-retry-2");
+    vi.unstubAllGlobals();
+  }, 10_000);
+
+  it("fails fast on non-transient 4xx (e.g. 400 bad request)", async () => {
+    // 400 should NOT trigger the retry loop — text-to-video on 1.5
+    // returns 400 deterministically; we don't want to spend 3 retries
+    // before bubbling the error.
+    fetchQueue.push(badStatus(400, "invalid model"));
+    const { submitVideoJob } = await import("./video");
+    await expect(
+      submitVideoJob({ prompt: "x", taskType: "video_generation" }),
+    ).rejects.toThrow(/xAI video submit failed \(400\): invalid model/);
+    expect(fetchCalls).toHaveLength(1);
+  });
+
+  it("honors Retry-After header when xAI provides one", async () => {
+    // Mock returns a 429 with Retry-After: 1 second; assert we wait
+    // ~1s (vs the default 2s exponential backoff).
+    fetchQueue.push({
+      ok: false,
+      status: 429,
+      text: () => Promise.resolve(""),
+      headers: new Headers({ "retry-after": "1" }),
+    });
+    fetchQueue.push(okJson({ request_id: "req-ra" }));
+    // Spy on setTimeout to capture the delay.
+    const waits: number[] = [];
+    const realSetTimeout = global.setTimeout;
+    vi.stubGlobal(
+      "setTimeout",
+      ((cb: () => void, ms: number) => {
+        waits.push(ms);
+        return realSetTimeout(cb, 0);
+      }) as unknown as typeof setTimeout,
+    );
+    const { submitVideoJob } = await import("./video");
+    await submitVideoJob({ prompt: "x", taskType: "video_generation" });
+    // Should be ~1000ms (the Retry-After value) + 0-500ms jitter, NOT
+    // the 2000ms default backoff.
+    expect(waits.length).toBeGreaterThan(0);
+    expect(waits[0]).toBeGreaterThanOrEqual(1000);
+    expect(waits[0]).toBeLessThan(1600);
+    vi.unstubAllGlobals();
+  }, 10_000);
 });
 
 describe("pollVideoJob", () => {
