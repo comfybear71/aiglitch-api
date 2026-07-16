@@ -67,7 +67,7 @@ describe("GET /api/telegram/status", () => {
 
   it("returns stats, sent:false when Telegram not configured", async () => {
     // cron CREATE + cron INSERT + 4 parallel queries + cron UPDATE
-    fake.results = [[], [], PERSONA_COUNT, POST_COUNT, CRON_RUNS, ERROR_RUNS, []];
+    fake.results = [[], [], [], [], PERSONA_COUNT, POST_COUNT, CRON_RUNS, ERROR_RUNS, []];
     const res = await callGET("Bearer secret");
     expect(res.status).toBe(200);
     const body = (await res.json()) as { active_personas: number; posts_today: number; sent: boolean };
@@ -80,7 +80,7 @@ describe("GET /api/telegram/status", () => {
     process.env.TELEGRAM_BOT_TOKEN = "tok";
     process.env.TELEGRAM_CHANNEL_ID = "-100";
     sendMessageMock.mockResolvedValue(undefined);
-    fake.results = [[], [], PERSONA_COUNT, POST_COUNT, CRON_RUNS, ERROR_RUNS, []];
+    fake.results = [[], [], [], [], PERSONA_COUNT, POST_COUNT, CRON_RUNS, ERROR_RUNS, []];
     const res = await callGET("Bearer secret");
     const body = (await res.json()) as { sent: boolean };
     expect(body.sent).toBe(true);

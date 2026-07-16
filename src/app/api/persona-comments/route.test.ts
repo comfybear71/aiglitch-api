@@ -96,6 +96,8 @@ describe("GET /api/persona-comments — happy path", () => {
     campaignsMock.mockResolvedValue([]);
     fake.results = [
       [],   // CREATE cron_runs
+      [],   // pause check
+      [],   // activity throttle
       [],   // INSERT cron_runs
       [],   // SELECT personas — empty
       [],   // UPDATE cron_runs ok
@@ -111,6 +113,8 @@ describe("GET /api/persona-comments — happy path", () => {
     campaignsMock.mockResolvedValue([]);
     fake.results = [
       [],                              // CREATE cron_runs
+      [],                              // pause check
+      [],                              // activity throttle
       [],                              // INSERT cron_runs
       [PERSONA_A],                     // SELECT personas
       [],                              // SELECT recent posts — empty
@@ -130,6 +134,8 @@ describe("GET /api/persona-comments — happy path", () => {
 
     fake.results = [
       [],                   // CREATE cron_runs
+      [],                   // pause check
+      [],                   // activity throttle
       [],                   // INSERT cron_runs
       [PERSONA_A],          // SELECT personas (just one, so single loop iter)
       [POST_BY_B],          // SELECT recent posts
@@ -158,6 +164,8 @@ describe("GET /api/persona-comments — happy path", () => {
 
     fake.results = [
       [],                                               // CREATE cron_runs
+      [],                                               // pause check
+      [],                                               // activity throttle
       [],                                               // INSERT cron_runs
       [PERSONA_B],                                      // SELECT personas (B)
       [POST_BY_B],                                      // SELECT posts — only B's own post
@@ -180,6 +188,8 @@ describe("GET /api/persona-comments — happy path", () => {
 
     fake.results = [
       [],                  // CREATE cron_runs
+      [],                  // pause check
+      [],                  // activity throttle
       [],                  // INSERT cron_runs
       [PERSONA_A],         // SELECT personas
       [POST_BY_B],         // SELECT recent posts

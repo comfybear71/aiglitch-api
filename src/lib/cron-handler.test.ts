@@ -43,20 +43,17 @@ describe("cronHandler", () => {
 
     const result = await cronHandler("test-job", async () => ({ processed: 5 }));
 
-    // CREATE TABLE IF NOT EXISTS + INSERT + UPDATE = 3 queries
-    expect(fake.calls.length).toBe(3);
+    // CREATE + pause SELECT + throttle SELECT + INSERT + UPDATE = 5
+    expect(fake.calls.length).toBe(5);
     expect(result.processed).toBe(5);
     expect(result._cron_run_id).toBeDefined();
 
-    // INSERT passes id, name, 'running' (literal in SQL string, not value)
-    const insertCall = fake.calls[1]!;
+    const insertCall = fake.calls[3]!;
     expect(insertCall.values).toContain("test-job");
-    // 'running' is a SQL literal in the template string, not a bound value
     const insertSql = insertCall.strings.join("");
     expect(insertSql).toContain("running");
 
-    // UPDATE sets status='ok' (literal in SQL string)
-    const updateCall = fake.calls[2]!;
+    const updateCall = fake.calls[4]!;
     const updateSql = updateCall.strings.join("");
     expect(updateSql).toContain("'ok'");
   });
@@ -70,10 +67,9 @@ describe("cronHandler", () => {
       }),
     ).rejects.toThrow("something broke");
 
-    // CREATE TABLE + INSERT + UPDATE (error)
-    expect(fake.calls.length).toBe(3);
-    const updateCall = fake.calls[2]!;
-    // 'error' is a SQL literal in the template string
+    // CREATE + pause + throttle + INSERT + UPDATE error = 5
+    expect(fake.calls.length).toBe(5);
+    const updateCall = fake.calls[4]!;
     const updateSql = updateCall.strings.join("");
     expect(updateSql).toContain("'error'");
     expect(updateCall.values).toContain("something broke");
@@ -85,10 +81,9 @@ describe("cronHandler", () => {
     await cronHandler("job-a", async () => ({}));
     await cronHandler("job-b", async () => ({}));
 
-    // First call: CREATE + INSERT + UPDATE = 3
-    // Second call: INSERT + UPDATE = 2 (no CREATE)
-    // Total: 5
-    expect(fake.calls.length).toBe(5);
+    // First: CREATE + pause + throttle + INSERT + UPDATE = 5
+    // Second: pause + throttle + INSERT + UPDATE = 4
+    expect(fake.calls.length).toBe(9);
   });
 
   it("merges _cron_run_id into the returned result", async () => {
@@ -97,5 +92,58 @@ describe("cronHandler", () => {
     expect(result.x).toBe(1);
     expect(result.y).toBe("hello");
     expect(typeof result._cron_run_id).toBe("string");
+  });
+
+  it("skips fn when job is paused (admin alias key)", async () => {
+    const { cronHandler } = await getCronHandler();
+    const fn = vi.fn(async () => ({ ran: true }));
+
+    // CREATE [], pause OR-query returns paused, then INSERT skipped row
+    // For generate-persona-content, pause uses 2-key OR query
+    fake.results = [
+      [], // CREATE
+      [{ value: "true" }], // pause hit via alias
+      // no throttle query — paused short-circuits
+    ];
+
+    const result = await cronHandler("generate-persona-content", fn);
+
+    expect(fn).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      skipped: true,
+      reason: "paused",
+      cron: "generate-persona-content",
+    });
+
+    const insertSql = fake.calls[2]!.strings.join("");
+    expect(insertSql).toContain("throttled");
+  });
+
+  it("skips fn when activity throttle is 0%", async () => {
+    const { cronHandler } = await getCronHandler();
+    const fn = vi.fn(async () => ({ ran: true }));
+
+    fake.results = [
+      [], // CREATE
+      [], // not paused
+      [{ value: "0" }], // throttle 0%
+    ];
+
+    const result = await cronHandler("general-content", fn);
+
+    expect(fn).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ skipped: true, reason: "throttled" });
+  });
+
+  it("skipThrottle bypasses pause and activity checks", async () => {
+    const { cronHandler } = await getCronHandler();
+    const fn = vi.fn(async () => ({ ran: true }));
+
+    const result = await cronHandler("general-content", fn, { skipThrottle: true });
+
+    expect(fn).toHaveBeenCalled();
+    expect(result.ran).toBe(true);
+    // CREATE + INSERT + UPDATE only (no pause/throttle)
+    expect(fake.calls.length).toBe(3);
   });
 });

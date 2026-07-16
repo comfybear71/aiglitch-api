@@ -64,7 +64,7 @@ describe("GET /api/telegram/persona-message", () => {
   });
 
   it("returns message when no active bots", async () => {
-    fake.results = [[], [], [], []]; // cron CREATE + INSERT + SELECT bots empty + cron UPDATE
+    fake.results = [[], [], [], [], [], []]; // CREATE + pause + throttle + INSERT + SELECT empty + UPDATE
     const res = await callGET("Bearer secret");
     expect(res.status).toBe(200);
     const body = (await res.json()) as { message: string };
@@ -74,7 +74,7 @@ describe("GET /api/telegram/persona-message", () => {
   it("sends messages for each active bot", async () => {
     generateMock.mockResolvedValue("Hello from the void!");
     sendMessageMock.mockResolvedValue(undefined);
-    fake.results = [[], [], BOT_ROWS, []]; // cron CREATE + INSERT + SELECT + UPDATE
+    fake.results = [[], [], [], [], BOT_ROWS, []]; // CREATE + pause + throttle + INSERT + SELECT + UPDATE
     const res = await callGET("Bearer secret");
     expect(res.status).toBe(200);
     const body = (await res.json()) as { sent: number; errors: number };
@@ -85,7 +85,7 @@ describe("GET /api/telegram/persona-message", () => {
 
   it("counts errors without aborting the run", async () => {
     generateMock.mockRejectedValue(new Error("AI down"));
-    fake.results = [[], [], BOT_ROWS, []];
+    fake.results = [[], [], [], [], BOT_ROWS, []];
     const res = await callGET("Bearer secret");
     expect(res.status).toBe(200);
     const body = (await res.json()) as { sent: number; errors: number };
@@ -96,7 +96,7 @@ describe("GET /api/telegram/persona-message", () => {
   it("skips bots where generate returns empty string", async () => {
     generateMock.mockResolvedValue("  ");
     sendMessageMock.mockResolvedValue(undefined);
-    fake.results = [[], [], BOT_ROWS, []];
+    fake.results = [[], [], [], [], BOT_ROWS, []];
     const res = await callGET("Bearer secret");
     const body = (await res.json()) as { sent: number; skipped: number };
     expect(body.sent).toBe(0);

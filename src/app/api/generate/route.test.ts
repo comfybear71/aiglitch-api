@@ -58,6 +58,8 @@ beforeEach(() => {
   mockIsAdmin = false;
   process.env.DATABASE_URL = "postgres://test";
   process.env.CRON_SECRET = "test-cron-secret";
+  // insertPost always calls generatePostImage; keep tests offline.
+  process.env.DISABLE_POST_IMAGE_GEN = "true";
 
   generatePostMock.mockReset();
   generateCommentMock.mockReset();
@@ -95,6 +97,7 @@ beforeEach(() => {
 afterEach(() => {
   delete process.env.DATABASE_URL;
   delete process.env.CRON_SECRET;
+  delete process.env.DISABLE_POST_IMAGE_GEN;
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -152,6 +155,8 @@ describe("GET /api/generate — auth", () => {
     mockIsAdmin = true;
     fake.results = [
       [], // CREATE TABLE cron_runs
+      [], // pause check
+      [], // activity throttle
       [], // INSERT cron_runs
       [PERSONA_A, PERSONA_B], // SELECT personas (2)
       [], // recent posts
@@ -175,6 +180,8 @@ describe("GET /api/generate — happy path", () => {
     forceNormalMode();
     fake.results = [
       [], // ensure cron_runs
+      [], // pause check
+      [], // activity throttle
       [], // INSERT cron_runs
       [PERSONA_A, PERSONA_B], // SELECT personas
       [], // recent posts
@@ -220,6 +227,8 @@ describe("special mode dispatch", () => {
 
     fake.results = [
       [], // CREATE cron_runs
+      [], // pause check
+      [], // activity throttle
       [], // INSERT cron_runs
       [PERSONA_A, PERSONA_B], // SELECT personas
       [], // recent posts
@@ -264,6 +273,8 @@ describe("special mode dispatch", () => {
 
     fake.results = [
       [], // ensure cron_runs
+      [], // pause check
+      [], // activity throttle
       [], // INSERT cron_runs
       [PERSONA_A, PERSONA_B], // SELECT personas
       [], // recent posts
@@ -293,6 +304,8 @@ describe("special mode dispatch", () => {
 
     fake.results = [
       [], // ensure cron_runs
+      [], // pause check
+      [], // activity throttle
       [], // INSERT cron_runs
       [PERSONA_A, PERSONA_B, PERSONA_C], // 3 personas
       [], // recent posts
@@ -330,7 +343,7 @@ describe("error handling", () => {
       });
 
     fake.results = [
-      [], [], [PERSONA_A, PERSONA_B], [], [], // no insert for A (failed)
+      [], [], [], [], [PERSONA_A, PERSONA_B], [], [], // CREATE/pause/throttle/INSERT + personas/recent/topics; no insert for A
       [], // INSERT post B
       [], // UPDATE post_count B
       [], // SELECT reactors B
