@@ -27,6 +27,8 @@ export interface DailyTopic {
   anagram_mappings: string;
   mood: string;
   category: string;
+  /** Original NewsAPI article URL when topic came from real headlines. */
+  source_url?: string | null;
 }
 
 // ── Platform-internal news templates ──────────────────────────────────
@@ -125,6 +127,7 @@ function generatePlatformNews(): DailyTopic[] {
       anagram_mappings: "Platform-internal news — no real-world mappings",
       mood,
       category: t.category,
+      source_url: null,
     });
   }
 
@@ -136,43 +139,58 @@ function generatePlatformNews(): DailyTopic[] {
 const VALID_MOODS = ["outraged", "amused", "worried", "hopeful", "shocked", "confused", "celebratory"];
 const VALID_CATEGORIES = ["politics", "tech", "entertainment", "sports", "economy", "environment", "social", "world"];
 
-function parseTopicArray(raw: string): DailyTopic[] {
+function parseTopicArray(
+  raw: string,
+  headlines?: { url: string | null }[],
+): DailyTopic[] {
   const match = raw.match(/\[[\s\S]*\]/);
   if (!match) return [];
 
   try {
-    const parsed = JSON.parse(match[0]) as Partial<DailyTopic>[];
+    const parsed = JSON.parse(match[0]) as (Partial<DailyTopic> & { source_index?: number })[];
     if (!Array.isArray(parsed)) return [];
 
     return parsed
-      .filter((t): t is DailyTopic => typeof t?.headline === "string" && typeof t?.summary === "string")
-      .map((t) => ({
-        headline: t.headline,
-        summary: t.summary,
-        original_theme: t.original_theme || "current events",
-        anagram_mappings: t.anagram_mappings || "fictionalised",
-        mood: VALID_MOODS.includes(t.mood ?? "") ? (t.mood as string) : "amused",
-        category: VALID_CATEGORIES.includes(t.category ?? "") ? (t.category as string) : "world",
-      }));
+      .filter((t) => typeof t?.headline === "string" && typeof t?.summary === "string")
+      .map((t) => {
+        const idx =
+          typeof t.source_index === "number" && t.source_index >= 0 ? t.source_index : null;
+        const source_url =
+          idx !== null && headlines?.[idx]?.url ? headlines[idx]!.url : null;
+        return {
+          headline: t.headline as string,
+          summary: t.summary as string,
+          original_theme: t.original_theme || "current events",
+          anagram_mappings: t.anagram_mappings || "fictionalised",
+          mood: VALID_MOODS.includes(t.mood ?? "") ? (t.mood as string) : "amused",
+          category: VALID_CATEGORIES.includes(t.category ?? "") ? (t.category as string) : "world",
+          source_url,
+        };
+      });
   } catch {
     return [];
   }
 }
 
-async function generateFromHeadlines(headlines: { title: string; description: string; source: string }[]): Promise<DailyTopic[]> {
-  const headlineText = headlines.map((h) => `- ${h.title} (${h.source}): ${h.description}`).join("\n");
+async function generateFromHeadlines(
+  headlines: { title: string; description: string; source: string; url: string | null }[],
+): Promise<DailyTopic[]> {
+  const headlineText = headlines
+    .map((h, i) => `[${i}] ${h.title} (${h.source}): ${h.description}`)
+    .join("\n");
 
   const userPrompt =
     `You are a satirical news editor for AIG!itch, an AI-only social media platform. Here are REAL news headlines from today. Rewrite each with fictional names but keep the real story structure.\n\n` +
-    `REAL HEADLINES:\n${headlineText}\n\n` +
+    `REAL HEADLINES (numbered — preserve source_index in output):\n${headlineText}\n\n` +
     `RULES:\n` +
     `1. ALL real people's names MUST be replaced with anagrams or wordplay\n` +
     `2. Countries/places get fun coded names (Iran→"Rain Land", USA→"Eagle Nation", etc.)\n` +
     `3. Events stay recognisable but satirised\n` +
     `4. Each topic needs a MOOD: ${VALID_MOODS.join(" | ")}\n` +
-    `5. Make topics juicy — AI personas need to argue about them\n\n` +
+    `5. Make topics juicy — AI personas need to argue about them\n` +
+    `6. Each topic MUST include source_index matching the headline number above\n\n` +
     `Respond with JSON array:\n` +
-    `[{"headline":"...","summary":"...","original_theme":"...","anagram_mappings":"...","mood":"...","category":"politics|tech|entertainment|sports|economy|environment|social"}]`;
+    `[{"headline":"...","summary":"...","original_theme":"...","anagram_mappings":"...","mood":"...","category":"politics|tech|entertainment|sports|economy|environment|social","source_index":0}]`;
 
   const raw = await generateText({
     userPrompt,
@@ -180,7 +198,7 @@ async function generateFromHeadlines(headlines: { title: string; description: st
     maxTokens: 4000,
     temperature: 0.9,
   });
-  return parseTopicArray(raw);
+  return parseTopicArray(raw, headlines);
 }
 
 async function generateFromKnowledge(): Promise<DailyTopic[]> {
@@ -202,7 +220,7 @@ async function generateFromKnowledge(): Promise<DailyTopic[]> {
     maxTokens: 4000,
     temperature: 0.95,
   });
-  return parseTopicArray(raw);
+  return parseTopicArray(raw).map((t) => ({ ...t, source_url: null }));
 }
 
 /**
@@ -224,6 +242,7 @@ export async function generateDailyTopics(count?: number): Promise<DailyTopic[]>
         anagram_mappings: t.fictional_location || "fictionalised",
         mood: VALID_MOODS[Math.floor(Math.random() * VALID_MOODS.length)],
         category: t.category || "world",
+        source_url: null,
       }));
       return [...platformNews, ...mapped];
     }

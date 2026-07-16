@@ -3,8 +3,8 @@
  *
  * One-shot admin dashboard payload showing the current "news cycle" on
  * the platform: active daily topics, recently expired topics (48h),
- * active beef threads, open challenges, and the top 20 engagement-
- * ranked posts from the last 24h.
+ * active beef threads (with linked feed posts), open challenges, and
+ * the top 20 engagement-ranked posts from the last 24h.
  *
  * Each section is independently try/catch'd — `ai_beef_threads` and
  * `ai_challenges` may not exist on every env, so a missing table falls
@@ -29,6 +29,7 @@ interface TopicRow {
   is_active: boolean;
   expires_at: string;
   created_at: string;
+  source_url: string | null;
 }
 
 interface BeefRow {
@@ -42,6 +43,16 @@ interface BeefRow {
   persona2_username: string;
   persona2_name: string;
   persona2_emoji: string;
+}
+
+interface BeefPostRow {
+  id: string;
+  content: string;
+  beef_thread_id: string;
+  created_at: string;
+  username: string;
+  display_name: string;
+  avatar_emoji: string;
 }
 
 interface ChallengeRow {
@@ -86,57 +97,91 @@ export async function GET(request: NextRequest) {
 
   const sql = getDb();
 
-  const [topics, expiredTopics, beefThreads, challenges, topPosts] = await Promise.all([
-    safeQuery<TopicRow>(async () => (await sql`
-      SELECT id, headline, summary, original_theme, anagram_mappings,
-             mood, category, is_active, expires_at, created_at
-      FROM daily_topics
-      WHERE is_active = TRUE AND expires_at > NOW()
-      ORDER BY created_at DESC
-    `) as unknown as TopicRow[]),
+  await sql`ALTER TABLE daily_topics ADD COLUMN IF NOT EXISTS source_url TEXT`.catch(() => {});
 
-    safeQuery<TopicRow>(async () => (await sql`
-      SELECT id, headline, summary, original_theme, anagram_mappings,
-             mood, category, is_active, expires_at, created_at
-      FROM daily_topics
-      WHERE is_active = FALSE OR expires_at <= NOW()
-      ORDER BY created_at DESC
-      LIMIT 10
-    `) as unknown as TopicRow[]),
+  const [topics, expiredTopics, beefThreadsRaw, beefPosts, challenges, topPosts] =
+    await Promise.all([
+      safeQuery<TopicRow>(async () => (await sql`
+        SELECT id, headline, summary, original_theme, anagram_mappings,
+               mood, category, is_active, expires_at, created_at, source_url
+        FROM daily_topics
+        WHERE is_active = TRUE AND expires_at > NOW()
+        ORDER BY created_at DESC
+      `) as unknown as TopicRow[]),
 
-    safeQuery<BeefRow>(async () => (await sql`
-      SELECT bt.id, bt.topic, bt.status, bt.created_at,
-        p1.username AS persona1_username, p1.display_name AS persona1_name, p1.avatar_emoji AS persona1_emoji,
-        p2.username AS persona2_username, p2.display_name AS persona2_name, p2.avatar_emoji AS persona2_emoji
-      FROM ai_beef_threads bt
-      JOIN ai_personas p1 ON bt.persona_a = p1.id
-      JOIN ai_personas p2 ON bt.persona_b = p2.id
-      WHERE bt.status = 'active' OR bt.created_at > NOW() - INTERVAL '24 hours'
-      ORDER BY bt.created_at DESC
-      LIMIT 10
-    `) as unknown as BeefRow[]),
+      safeQuery<TopicRow>(async () => (await sql`
+        SELECT id, headline, summary, original_theme, anagram_mappings,
+               mood, category, is_active, expires_at, created_at, source_url
+        FROM daily_topics
+        WHERE is_active = FALSE OR expires_at <= NOW()
+        ORDER BY created_at DESC
+        LIMIT 10
+      `) as unknown as TopicRow[]),
 
-    safeQuery<ChallengeRow>(async () => (await sql`
-      SELECT c.id, c.tag, c.description, c.created_at,
-        a.username AS creator_username, a.display_name AS creator_name, a.avatar_emoji AS creator_emoji
-      FROM ai_challenges c
-      JOIN ai_personas a ON c.created_by = a.id
-      WHERE c.created_at > NOW() - INTERVAL '48 hours'
-      ORDER BY c.created_at DESC
-      LIMIT 10
-    `) as unknown as ChallengeRow[]),
+      safeQuery<BeefRow>(async () => (await sql`
+        SELECT bt.id, bt.topic, bt.status, bt.created_at,
+          p1.username AS persona1_username, p1.display_name AS persona1_name, p1.avatar_emoji AS persona1_emoji,
+          p2.username AS persona2_username, p2.display_name AS persona2_name, p2.avatar_emoji AS persona2_emoji
+        FROM ai_beef_threads bt
+        JOIN ai_personas p1 ON bt.persona_a = p1.id
+        JOIN ai_personas p2 ON bt.persona_b = p2.id
+        WHERE bt.status = 'active' OR bt.created_at > NOW() - INTERVAL '24 hours'
+        ORDER BY bt.created_at DESC
+        LIMIT 10
+      `) as unknown as BeefRow[]),
 
-    safeQuery<TopPostRow>(async () => (await sql`
-      SELECT p.id, p.content, p.post_type, p.like_count, p.ai_like_count, p.created_at,
-        p.media_type, p.beef_thread_id, p.challenge_tag, p.is_collab_with,
-        a.username, a.display_name, a.avatar_emoji
-      FROM posts p
-      JOIN ai_personas a ON p.persona_id = a.id
-      WHERE p.is_reply_to IS NULL AND p.created_at > NOW() - INTERVAL '24 hours'
-      ORDER BY (p.like_count + p.ai_like_count) DESC
-      LIMIT 20
-    `) as unknown as TopPostRow[]),
-  ]);
+      safeQuery<BeefPostRow>(async () => (await sql`
+        SELECT p.id, p.content, p.beef_thread_id, p.created_at,
+          a.username, a.display_name, a.avatar_emoji
+        FROM posts p
+        JOIN ai_personas a ON p.persona_id = a.id
+        WHERE p.beef_thread_id IN (
+          SELECT bt.id FROM ai_beef_threads bt
+          WHERE bt.status = 'active' OR bt.created_at > NOW() - INTERVAL '24 hours'
+        )
+        ORDER BY p.created_at ASC
+      `) as unknown as BeefPostRow[]),
+
+      safeQuery<ChallengeRow>(async () => (await sql`
+        SELECT c.id, c.tag, c.description, c.created_at,
+          a.username AS creator_username, a.display_name AS creator_name, a.avatar_emoji AS creator_emoji
+        FROM ai_challenges c
+        JOIN ai_personas a ON c.created_by = a.id
+        WHERE c.created_at > NOW() - INTERVAL '48 hours'
+        ORDER BY c.created_at DESC
+        LIMIT 10
+      `) as unknown as ChallengeRow[]),
+
+      safeQuery<TopPostRow>(async () => (await sql`
+        SELECT p.id, p.content, p.post_type, p.like_count, p.ai_like_count, p.created_at,
+          p.media_type, p.beef_thread_id, p.challenge_tag, p.is_collab_with,
+          a.username, a.display_name, a.avatar_emoji
+        FROM posts p
+        JOIN ai_personas a ON p.persona_id = a.id
+        WHERE p.is_reply_to IS NULL AND p.created_at > NOW() - INTERVAL '24 hours'
+        ORDER BY (p.like_count + p.ai_like_count) DESC
+        LIMIT 20
+      `) as unknown as TopPostRow[]),
+    ]);
+
+  const postsByBeef = new Map<string, BeefPostRow[]>();
+  for (const post of beefPosts) {
+    const list = postsByBeef.get(post.beef_thread_id) ?? [];
+    list.push(post);
+    postsByBeef.set(post.beef_thread_id, list);
+  }
+
+  const beefThreads = beefThreadsRaw.map((bt) => ({
+    ...bt,
+    posts: (postsByBeef.get(bt.id) ?? []).map((p) => ({
+      id: p.id,
+      content: p.content,
+      created_at: p.created_at,
+      username: p.username,
+      display_name: p.display_name,
+      avatar_emoji: p.avatar_emoji,
+    })),
+  }));
 
   const activeTopicHeadlines = topics.map((t) => t.headline);
 
