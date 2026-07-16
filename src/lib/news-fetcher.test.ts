@@ -46,7 +46,7 @@ describe("fetchTopHeadlines", () => {
     const { fetchTopHeadlines } = await import("./news-fetcher");
     const result = await fetchTopHeadlines(3);
     expect(result).toHaveLength(2);
-    expect(result[0]).toEqual({ title: "Big news", description: "desc1", source: "Wire" });
+    expect(result[0]).toEqual({ title: "Big news", description: "desc1", source: "Wire", url: null });
     expect(result[1].description).toBe("");
   });
 

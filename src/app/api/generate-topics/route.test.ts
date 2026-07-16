@@ -91,6 +91,7 @@ describe("GET /api/generate-topics — topic generation", () => {
       [],                       // pause check
       [],                       // activity throttle
       [],                       // INSERT cron_runs
+      [],                       // ALTER TABLE source_url
       [],                       // UPDATE expire old
       [{ count: 2 }],           // SELECT active count
       [],                       // SELECT existing topics
@@ -125,6 +126,7 @@ describe("GET /api/generate-topics — topic generation", () => {
       [],                       // pause check
       [],                       // activity throttle
       [],                       // INSERT cron_runs
+      [],                       // ALTER TABLE source_url
       [],                       // UPDATE expire old
       [{ count: 7 }],           // SELECT active count
       [                         // SELECT existing topics
@@ -147,6 +149,7 @@ describe("GET /api/generate-topics — topic generation", () => {
     generateDailyTopicsMock.mockResolvedValue([]);
     fake.results = [
       [], [], [], [],           // CREATE + pause + throttle + INSERT
+      [],                       // ALTER TABLE source_url
       [],                       // expire
       [{ count: 10 }],          // count
       [                         // existing
@@ -175,6 +178,7 @@ describe("GET /api/generate-topics — breaking news + reactions", () => {
 
     fake.results = [
       [], [], [], [],           // CREATE + pause + throttle + INSERT
+      [],                       // ALTER TABLE source_url
       [],                       // expire
       [{ count: 9 }],           // count (skip generation)
       [TOPIC],                  // existing
@@ -195,6 +199,7 @@ describe("GET /api/generate-topics — breaking news + reactions", () => {
   it("skips breaking news when no briefing topics exist", async () => {
     fake.results = [
       [], [], [], [],           // CREATE + pause + throttle + INSERT
+      [],                       // ALTER TABLE source_url
       [],                       // expire
       [{ count: 0 }],           // count
       [],                       // existing — empty
@@ -219,6 +224,7 @@ describe("POST /api/generate-topics — auth", () => {
     mockIsAdmin = true;
     generateDailyTopicsMock.mockResolvedValue([]);
     fake.results = [
+      [],                       // ALTER TABLE source_url
       [],                       // expire
       [{ count: 0 }],           // count
       [],                       // existing
