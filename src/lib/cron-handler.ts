@@ -25,6 +25,14 @@ export interface CronResult {
   [key: string]: unknown;
 }
 
+/** Shape returned when pause or activity throttle skips the job (fn is not called). */
+export interface CronSkipResult extends CronResult {
+  ok: true;
+  skipped: true;
+  reason: "paused" | "throttled";
+  cron: string;
+}
+
 export interface CronHandlerOptions {
   /** Skip pause + activity throttle (rare; prefer admin POST that bypasses cronHandler). */
   skipThrottle?: boolean;
@@ -83,24 +91,27 @@ export async function cronHandler<T extends CronResult>(
   if (!options.skipThrottle) {
     if (await isCronPaused(name)) {
       await logSkippedRun(id, name, "paused");
-      return {
+      const skipped: CronSkipResult & { _cron_run_id: string } = {
         ok: true,
         skipped: true,
         reason: "paused",
         cron: name,
         _cron_run_id: id,
-      } as T & { _cron_run_id: string };
+      };
+      // Skip payload is not T; callers should check `skipped` before reading job fields.
+      return skipped as unknown as T & { _cron_run_id: string };
     }
 
     if (!(await shouldRunCron(name))) {
       await logSkippedRun(id, name, "throttled");
-      return {
+      const skipped: CronSkipResult & { _cron_run_id: string } = {
         ok: true,
         skipped: true,
         reason: "throttled",
         cron: name,
         _cron_run_id: id,
-      } as T & { _cron_run_id: string };
+      };
+      return skipped as unknown as T & { _cron_run_id: string };
     }
   }
 

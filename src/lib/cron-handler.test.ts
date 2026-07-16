@@ -109,9 +109,11 @@ describe("cronHandler", () => {
     const result = await cronHandler("generate-persona-content", fn);
 
     expect(fn).not.toHaveBeenCalled();
-    expect(result.skipped).toBe(true);
-    expect(result.reason).toBe("paused");
-    expect(result.cron).toBe("generate-persona-content");
+    expect(result).toMatchObject({
+      skipped: true,
+      reason: "paused",
+      cron: "generate-persona-content",
+    });
 
     const insertSql = fake.calls[2]!.strings.join("");
     expect(insertSql).toContain("throttled");
@@ -130,8 +132,7 @@ describe("cronHandler", () => {
     const result = await cronHandler("general-content", fn);
 
     expect(fn).not.toHaveBeenCalled();
-    expect(result.skipped).toBe(true);
-    expect(result.reason).toBe("throttled");
+    expect(result).toMatchObject({ skipped: true, reason: "throttled" });
   });
 
   it("skipThrottle bypasses pause and activity checks", async () => {
