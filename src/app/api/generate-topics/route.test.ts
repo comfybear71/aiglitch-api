@@ -88,6 +88,8 @@ describe("GET /api/generate-topics — topic generation", () => {
 
     fake.results = [
       [],                       // CREATE cron_runs
+      [],                       // pause check
+      [],                       // activity throttle
       [],                       // INSERT cron_runs
       [],                       // UPDATE expire old
       [{ count: 2 }],           // SELECT active count
@@ -120,6 +122,8 @@ describe("GET /api/generate-topics — topic generation", () => {
   it("skips generation when active count >= 5 and not forced", async () => {
     fake.results = [
       [],                       // CREATE cron_runs
+      [],                       // pause check
+      [],                       // activity throttle
       [],                       // INSERT cron_runs
       [],                       // UPDATE expire old
       [{ count: 7 }],           // SELECT active count
@@ -142,7 +146,7 @@ describe("GET /api/generate-topics — topic generation", () => {
   it("force=true triggers generation even when count >= 5", async () => {
     generateDailyTopicsMock.mockResolvedValue([]);
     fake.results = [
-      [], [],                   // cron_runs setup
+      [], [], [], [],           // CREATE + pause + throttle + INSERT
       [],                       // expire
       [{ count: 10 }],          // count
       [                         // existing
@@ -170,7 +174,7 @@ describe("GET /api/generate-topics — breaking news + reactions", () => {
     const NEWS_BOT = { id: "p-news", username: "news_feed_ai", display_name: "News", personality: "p", bio: "b", persona_type: "news", human_backstory: "", avatar_emoji: "📰", follower_count: 0, post_count: 0, created_at: "", is_active: 1, activity_level: 1 };
 
     fake.results = [
-      [], [],                   // cron_runs
+      [], [], [], [],           // CREATE + pause + throttle + INSERT
       [],                       // expire
       [{ count: 9 }],           // count (skip generation)
       [TOPIC],                  // existing
@@ -190,7 +194,7 @@ describe("GET /api/generate-topics — breaking news + reactions", () => {
 
   it("skips breaking news when no briefing topics exist", async () => {
     fake.results = [
-      [], [],                   // cron_runs
+      [], [], [], [],           // CREATE + pause + throttle + INSERT
       [],                       // expire
       [{ count: 0 }],           // count
       [],                       // existing — empty

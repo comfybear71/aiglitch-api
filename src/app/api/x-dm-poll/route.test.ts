@@ -116,8 +116,8 @@ describe("GET /api/x-dm-poll — auth", () => {
 
 describe("GET /api/x-dm-poll — happy path (no new DMs)", () => {
   it("returns zero counts when DM inbox is empty", async () => {
-    // CREATE TABLE cron_runs, INSERT cron_runs, CREATE TABLE x_dm_logs, UPDATE cron_runs
-    fake.results = [[], [], [], []];
+    // CREATE cron_runs, pause, throttle, INSERT, CREATE x_dm_logs, UPDATE cron_runs
+    fake.results = [[], [], [], [], [], []];
     const res = await callGET("Bearer test-cron-secret");
     expect(res.status).toBe(200);
     const body = (await res.json()) as { polled: number; new_dms: number; replied: number; errors: number };
@@ -128,7 +128,7 @@ describe("GET /api/x-dm-poll — happy path (no new DMs)", () => {
   });
 
   it("includes _cron_run_id in response", async () => {
-    fake.results = [[], [], [], []];
+    fake.results = [[], [], [], [], [], []];
     const res = await callGET("Bearer test-cron-secret");
     const body = (await res.json()) as { _cron_run_id: string };
     expect(typeof body._cron_run_id).toBe("string");
@@ -146,9 +146,9 @@ describe("GET /api/x-dm-poll — new DM handling", () => {
     const { GET } = await import("./route");
     const { NextRequest } = await import("next/server");
 
-    // CREATE TABLE cron_runs, INSERT cron_runs, CREATE TABLE x_dm_logs,
+    // CREATE cron_runs, pause, throttle, INSERT, CREATE x_dm_logs,
     // SELECT x_dm_logs (dedup — empty), INSERT x_dm_logs, UPDATE x_dm_logs (replied), UPDATE cron_runs
-    fake.results = [[], [], [], [], [], [], []];
+    fake.results = [[], [], [], [], [], [], [], [], []];
 
     const res = await GET(
       new NextRequest("http://localhost/api/x-dm-poll", {
@@ -175,8 +175,8 @@ describe("GET /api/x-dm-poll — new DM handling", () => {
     const { GET } = await import("./route");
     const { NextRequest } = await import("next/server");
 
-    // SELECT returns existing row — duplicate
-    fake.results = [[], [], [], [{ id: 99 }], [], []];
+    // CREATE, pause, throttle, INSERT, CREATE x_dm_logs, SELECT duplicate, UPDATE cron
+    fake.results = [[], [], [], [], [], [{ id: 99 }], []];
 
     const res = await GET(
       new NextRequest("http://localhost/api/x-dm-poll", {
@@ -203,7 +203,7 @@ describe("GET /api/x-dm-poll — new DM handling", () => {
     const { GET } = await import("./route");
     const { NextRequest } = await import("next/server");
 
-    fake.results = [[], [], [], []];
+    fake.results = [[], [], [], [], [], []];
 
     const res = await GET(
       new NextRequest("http://localhost/api/x-dm-poll", {
@@ -243,8 +243,8 @@ describe("GET /api/x-dm-poll — 403 soft-skip", () => {
     const { GET } = await import("./route");
     const { NextRequest } = await import("next/server");
 
-    // CREATE cron_runs, INSERT cron_run, CREATE x_dm_logs, UPDATE cron_run
-    fake.results = [[], [], [], []];
+    // CREATE cron_runs, pause, throttle, INSERT, CREATE x_dm_logs, UPDATE cron_run
+    fake.results = [[], [], [], [], [], []];
 
     const res = await GET(
       new NextRequest("http://localhost/api/x-dm-poll", {

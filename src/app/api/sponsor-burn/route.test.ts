@@ -96,6 +96,8 @@ describe("GET /api/sponsor-burn (Vercel cron)", () => {
     fake.results = [
       [],         // ALTER TABLE
       [],         // cron_runs CREATE TABLE
+      [],         // pause check
+      [],         // activity throttle
       [],         // cron_runs INSERT running
       [CAMPAIGN], // SELECT campaigns
       [SPONSOR],  // SELECT sponsors
@@ -114,6 +116,8 @@ describe("GET /api/sponsor-burn (Vercel cron)", () => {
     fake.results = [
       [],         // ALTER TABLE
       [],         // cron CREATE
+      [],         // pause check
+      [],         // activity throttle
       [],         // cron INSERT
       [CAMPAIGN], // SELECT campaigns
       [],         // SELECT sponsors — no match
@@ -126,7 +130,8 @@ describe("GET /api/sponsor-burn (Vercel cron)", () => {
   });
 
   it("includes _cron_run_id in response", async () => {
-    fake.results = [[], [], [], [], []];
+    // ALTER + CREATE + pause + throttle + INSERT + SELECT campaigns empty + UPDATE
+    fake.results = [[], [], [], [], [], [], []];
     const res = await callGET("Bearer test-cron-secret");
     const body = (await res.json()) as { _cron_run_id: string };
     expect(typeof body._cron_run_id).toBe("string");

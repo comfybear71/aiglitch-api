@@ -9,15 +9,25 @@
  * On error the row is updated with status='error' and the raw error
  * message, then the error is re-thrown so the caller can return a 500.
  *
- * Pausability: handlers check `platform_settings` themselves if needed.
- * The wrapper does not gate on cron_paused_* — keep it simple.
+ * Gate (before fn runs):
+ * 1. Per-job pause — platform_settings cron_paused_<name> (+ admin UI aliases)
+ * 2. Global activity_throttle — 0% hard-stops all gated crons
+ *
+ * Skipped runs are logged with status='throttled' and return
+ * { skipped: true, reason, cron } without calling fn (no AI spend).
  */
 
 import { randomUUID } from "node:crypto";
 import { getDb } from "@/lib/db";
+import { isCronPaused, shouldRunCron } from "@/lib/throttle";
 
 export interface CronResult {
   [key: string]: unknown;
+}
+
+export interface CronHandlerOptions {
+  /** Skip pause + activity throttle (rare; prefer admin POST that bypasses cronHandler). */
+  skipThrottle?: boolean;
 }
 
 let cronTableEnsured = false;
@@ -46,15 +56,53 @@ export function __resetCronTableFlag(): void {
   cronTableEnsured = false;
 }
 
+async function logSkippedRun(
+  id: string,
+  name: string,
+  reason: "paused" | "throttled",
+): Promise<void> {
+  const sql = getDb();
+  const result = JSON.stringify({ ok: true, skipped: true, reason, cron: name });
+  await sql`
+    INSERT INTO cron_runs (id, cron_name, status, started_at, finished_at, duration_ms, result)
+    VALUES (${id}, ${name}, 'throttled', NOW(), NOW(), 0, ${result}::jsonb)
+  `;
+}
+
 export async function cronHandler<T extends CronResult>(
   name: string,
   fn: () => Promise<T>,
+  options: CronHandlerOptions = {},
 ): Promise<T & { _cron_run_id: string }> {
   await ensureCronRunsTable();
 
   const sql = getDb();
   const id = randomUUID();
   const startMs = Date.now();
+
+  if (!options.skipThrottle) {
+    if (await isCronPaused(name)) {
+      await logSkippedRun(id, name, "paused");
+      return {
+        ok: true,
+        skipped: true,
+        reason: "paused",
+        cron: name,
+        _cron_run_id: id,
+      } as T & { _cron_run_id: string };
+    }
+
+    if (!(await shouldRunCron(name))) {
+      await logSkippedRun(id, name, "throttled");
+      return {
+        ok: true,
+        skipped: true,
+        reason: "throttled",
+        cron: name,
+        _cron_run_id: id,
+      } as T & { _cron_run_id: string };
+    }
+  }
 
   await sql`
     INSERT INTO cron_runs (id, cron_name, status, started_at)

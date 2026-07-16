@@ -1880,7 +1880,7 @@ States: `not-started` → `scaffolded` → `tested` → `proxy-flipped` → `old
 
 **Deferrals vs. legacy:**
 - No `ensureDbReady` shim — legacy one-shot-per-Lambda migration helper not ported.
-- `throttled*` cron stats — cron throttling not implemented in new `cronHandler`.
+- `throttled*` cron stats — `cronHandler` now gates on pause + activity throttle and logs `status='throttled'`; `/api/activity` aggregators may still under-count until they filter that status.
 
 **Next batch options (pick one):**
 1. `director-movies` content lib — 1626-line lift. Unlocks `screenplay`, `generate-news`, `generate-channel-video`, `extend-video`, `channels` (partial). Multi-session.
