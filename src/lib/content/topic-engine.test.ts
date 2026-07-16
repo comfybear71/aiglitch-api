@@ -44,17 +44,19 @@ describe("generateDailyTopics — source fallback order", () => {
   it("falls through to NewsAPI+AI when MasterHQ returns empty", async () => {
     fetchMasterHQMock.mockResolvedValue([]);
     fetchHeadlinesMock.mockResolvedValue([
-      { title: "Real headline", description: "desc", source: "Wire" },
+      { title: "Real headline", description: "desc", source: "Wire", url: "https://news.test/story" },
     ]);
     generateTextMock.mockResolvedValue(
-      '[{"headline":"Satirised","summary":"s","mood":"amused","category":"tech"}]',
+      '[{"headline":"Satirised","summary":"s","mood":"amused","category":"tech","source_index":0}]',
     );
 
     const { generateDailyTopics } = await import("./topic-engine");
     const result = await generateDailyTopics(3);
 
     expect(generateTextMock).toHaveBeenCalledOnce();
-    expect(result.some((t) => t.headline === "Satirised")).toBe(true);
+    const t = result.find((x) => x.headline === "Satirised");
+    expect(t).toBeDefined();
+    expect(t?.source_url).toBe("https://news.test/story");
   });
 
   it("falls through to AI-only when NewsAPI returns no headlines", async () => {

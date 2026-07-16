@@ -14,6 +14,7 @@
 interface NewsArticle {
   title: string;
   description: string | null;
+  url: string | null;
   source: { name: string };
   publishedAt: string;
 }
@@ -28,6 +29,8 @@ export interface NewsHeadline {
   title: string;
   description: string;
   source: string;
+  /** NewsAPI article URL — null when unavailable or stripped. */
+  url: string | null;
 }
 
 /** Top NewsAPI headlines, or [] if NEWS_API_KEY is unset or the call fails. */
@@ -52,6 +55,7 @@ export async function fetchTopHeadlines(count = 10): Promise<NewsHeadline[]> {
         title: a.title,
         description: a.description ?? "",
         source: a.source?.name ?? "Unknown",
+        url: a.url && a.url.startsWith("http") ? a.url : null,
       }));
   } catch (err) {
     console.error("[news-fetcher] error:", err instanceof Error ? err.message : err);

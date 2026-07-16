@@ -48,7 +48,7 @@ describe("GET /api/admin/briefing", () => {
 
   it("returns empty sections gracefully on fresh DB", async () => {
     mockIsAdmin = true;
-    fake.results = [[], [], [], [], []];
+    fake.results = [[], [], [], [], [], [], []]; // ALTER + 6 queries
     const res = await callGET();
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
@@ -66,9 +66,11 @@ describe("GET /api/admin/briefing", () => {
   it("populates sections when tables return data", async () => {
     mockIsAdmin = true;
     fake.results = [
+      [],                                               // ALTER TABLE
       [{ id: "t1", headline: "Big News" }],          // active topics
       [],                                             // expired
       [{ id: "b1", topic: "beef" }],                  // beef threads
+      [{ id: "bp1", beef_thread_id: "b1", content: "take 1" }], // beef posts
       [{ id: "c1", tag: "challenge" }],               // challenges
       [{ id: "p1", content: "post" }],                // top posts
     ];
@@ -76,12 +78,14 @@ describe("GET /api/admin/briefing", () => {
     const body = (await res.json()) as {
       activeTopics: { headline: string }[];
       activeTopicHeadlines: string[];
-      beefThreads: unknown[];
+      beefThreads: { id: string; posts: { id: string }[] }[];
       challenges: unknown[];
       topPosts: unknown[];
     };
     expect(body.activeTopicHeadlines).toEqual(["Big News"]);
     expect(body.beefThreads).toHaveLength(1);
+    expect(body.beefThreads[0]!.posts).toHaveLength(1);
+    expect(body.beefThreads[0]!.posts[0]!.id).toBe("bp1");
     expect(body.challenges).toHaveLength(1);
     expect(body.topPosts).toHaveLength(1);
   });
@@ -89,8 +93,10 @@ describe("GET /api/admin/briefing", () => {
   it("falls back to empty arrays when beef/challenges tables are missing", async () => {
     mockIsAdmin = true;
     fake.results = [
+      [],                                               // ALTER TABLE
       [{ id: "t1", headline: "Story" }],
       [],
+      new Error("relation \"ai_beef_threads\" does not exist"),
       new Error("relation \"ai_beef_threads\" does not exist"),
       new Error("relation \"ai_challenges\" does not exist"),
       [{ id: "p1" }],

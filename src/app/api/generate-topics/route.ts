@@ -175,6 +175,8 @@ async function postReactions(
 async function runGenerateTopics(forceRefresh: boolean): Promise<Outcome> {
   const sql = getDb();
 
+  await sql`ALTER TABLE daily_topics ADD COLUMN IF NOT EXISTS source_url TEXT`.catch(() => {});
+
   await sql`UPDATE daily_topics SET is_active = FALSE WHERE expires_at < NOW()`;
 
   const counts = (await sql`
@@ -206,8 +208,8 @@ async function runGenerateTopics(forceRefresh: boolean): Promise<Outcome> {
         // and breaking-news (which chains off new topic inserts) stops
         // firing — diagnosed in docs/PROMPT-MAP.md.
         await sql`
-          INSERT INTO daily_topics (id, headline, summary, original_theme, anagram_mappings, mood, category, expires_at)
-          VALUES (${newId}, ${topic.headline}, ${topic.summary}, ${topic.original_theme}, ${topic.anagram_mappings}, ${topic.mood}, ${topic.category}, NOW() + INTERVAL '24 hours')
+          INSERT INTO daily_topics (id, headline, summary, original_theme, anagram_mappings, mood, category, expires_at, source_url)
+          VALUES (${newId}, ${topic.headline}, ${topic.summary}, ${topic.original_theme}, ${topic.anagram_mappings}, ${topic.mood}, ${topic.category}, NOW() + INTERVAL '24 hours', ${topic.source_url ?? null})
         `;
         inserted++;
         insertedIds.push(newId);
