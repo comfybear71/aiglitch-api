@@ -1,5 +1,5 @@
 /**
- * Smoke tests for /api/auth/callback/youtube — admin gate + error branches.
+ * Smoke tests for /api/auth/callback/youtube — error branches.
  */
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -13,7 +13,6 @@ function fakeSql(strings: TemplateStringsArray, ...values: unknown[]): Promise<u
 }
 
 vi.mock("@neondatabase/serverless", () => ({ neon: () => fakeSql }));
-vi.mock("@/lib/admin-auth", () => ({ isAdminAuthenticated: vi.fn() }));
 
 beforeEach(() => {
   fake.calls = [];
@@ -40,26 +39,12 @@ function expectRedirectTo(res: Response, fragment: string) {
   expect(res.headers.get("location") || "").toContain(fragment);
 }
 
-it("redirects with yt_error=unauthorized when not admin", async () => {
-  const { isAdminAuthenticated } = await import("@/lib/admin-auth");
-  (isAdminAuthenticated as ReturnType<typeof vi.fn>).mockResolvedValue(false);
-
-  const { GET } = await import("./route");
-  expectRedirectTo(await GET(await buildRequest("?code=x")), "yt_error=unauthorized");
-});
-
-it("redirects with yt_error=no_code when admin + no code", async () => {
-  const { isAdminAuthenticated } = await import("@/lib/admin-auth");
-  (isAdminAuthenticated as ReturnType<typeof vi.fn>).mockResolvedValue(true);
-
+it("redirects with yt_error=no_code when no code param", async () => {
   const { GET } = await import("./route");
   expectRedirectTo(await GET(await buildRequest()), "yt_error=no_code");
 });
 
 it("redirects with yt_error=not_configured when env unset", async () => {
-  const { isAdminAuthenticated } = await import("@/lib/admin-auth");
-  (isAdminAuthenticated as ReturnType<typeof vi.fn>).mockResolvedValue(true);
-
   const { GET } = await import("./route");
   expectRedirectTo(await GET(await buildRequest("?code=x")), "yt_error=not_configured");
 });
@@ -67,8 +52,6 @@ it("redirects with yt_error=not_configured when env unset", async () => {
 it("redirects with yt_error=token_failed on Google rejection", async () => {
   process.env.YOUTUBE_CLIENT_ID = "id";
   process.env.YOUTUBE_CLIENT_SECRET = "secret";
-  const { isAdminAuthenticated } = await import("@/lib/admin-auth");
-  (isAdminAuthenticated as ReturnType<typeof vi.fn>).mockResolvedValue(true);
   vi.stubGlobal(
     "fetch",
     vi.fn(async () => ({ ok: false, json: async () => ({ error: "invalid_grant" }) })),

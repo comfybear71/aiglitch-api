@@ -258,14 +258,22 @@ describe("postToPlatform — deferred platforms", () => {
     expect(result.error?.toLowerCase()).toContain("facebook");
   });
 
-  it("returns success:false with deferral message for youtube", async () => {
+  it("returns success:false when youtube has no video URL", async () => {
     const result = await postToPlatform(
       "youtube",
-      { ...X_ACCOUNT, platform: "youtube" },
-      "x",
+      { ...X_ACCOUNT, platform: "youtube", access_token: "tok" },
+      "hello",
+      null,
+      {
+        youtube: {
+          title: "Test title",
+          description: "Test description",
+          privacyStatus: "public",
+        },
+      },
     );
     expect(result.success).toBe(false);
-    expect(result.error).toContain("youtube");
+    expect(result.error?.toLowerCase()).toContain("video");
   });
 
   it("catches unexpected exceptions in the dispatcher", async () => {
