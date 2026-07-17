@@ -2,43 +2,33 @@
  * YouTube OAuth — Step 2 (admin marketing flow).
  *
  * Exchanges code, fetches channel info, upserts into
- * marketing_platform_accounts.
- *
- * Port notes:
- *   - ensureDbReady dropped per CLAUDE.md migration rule #4.
- *   - /admin redirects use NEXT_PUBLIC_APP_URL so they still resolve
- *     to the consumer host once the strangler flips.
+ * marketing_platform_accounts. Redirects to marketing.aiglitch.app
+ * after connect (not legacy aiglitch.app/admin).
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { isAdminAuthenticated } from "@/lib/admin-auth";
 import { getDb } from "@/lib/db";
+import { consumerAppUrl, marketingAppUrl } from "@/lib/marketing/app-urls";
 import { v4 as uuidv4 } from "uuid";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-function appUrl(path: string): URL {
-  return new URL(path, process.env.NEXT_PUBLIC_APP_URL || "https://aiglitch.app");
-}
-
 export async function GET(request: NextRequest) {
-  const isAdmin = await isAdminAuthenticated(request);
-  if (!isAdmin) {
-    return NextResponse.redirect(appUrl("/admin?yt_error=unauthorized"));
-  }
-
+  // Step 1 already required admin auth. Google redirects the browser here
+  // without the marketing-site cookie (different host), so we must not
+  // re-check admin session — the one-time authorization code is enough.
   const code = request.nextUrl.searchParams.get("code");
   if (!code) {
-    return NextResponse.redirect(appUrl("/admin?yt_error=no_code"));
+    return NextResponse.redirect(marketingAppUrl("/marketing?yt_error=no_code"));
   }
 
   const clientId = process.env.YOUTUBE_CLIENT_ID;
   const clientSecret = process.env.YOUTUBE_CLIENT_SECRET;
-  const redirectUri = `${process.env.NEXT_PUBLIC_APP_URL || "https://aiglitch.app"}/api/auth/callback/youtube`;
+  const redirectUri = `${consumerAppUrl("/").origin}/api/auth/callback/youtube`;
 
   if (!clientId || !clientSecret) {
-    return NextResponse.redirect(appUrl("/admin?yt_error=not_configured"));
+    return NextResponse.redirect(marketingAppUrl("/marketing?yt_error=not_configured"));
   }
 
   try {
@@ -68,7 +58,7 @@ export async function GET(request: NextRequest) {
         tokens.error,
         tokens.error_description,
       );
-      return NextResponse.redirect(appUrl("/admin?yt_error=token_failed"));
+      return NextResponse.redirect(marketingAppUrl("/marketing?yt_error=token_failed"));
     }
 
     const channelRes = await fetch(
@@ -121,9 +111,9 @@ export async function GET(request: NextRequest) {
       `;
     }
 
-    return NextResponse.redirect(appUrl("/admin?yt_success=connected"));
+    return NextResponse.redirect(marketingAppUrl("/marketing?yt_success=connected"));
   } catch (err) {
     console.error("[YouTube OAuth] Error:", err);
-    return NextResponse.redirect(appUrl("/admin?yt_error=oauth_failed"));
+    return NextResponse.redirect(marketingAppUrl("/marketing?yt_error=oauth_failed"));
   }
 }

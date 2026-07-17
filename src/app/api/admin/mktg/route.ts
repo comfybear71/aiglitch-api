@@ -17,6 +17,7 @@
  *   create_campaign     — INSERT marketing_campaigns
  *   update_campaign     — UPDATE marketing_campaigns
  *   save_account        — UPSERT marketing_platform_accounts
+ *   disconnect_youtube  — clear YouTube OAuth tokens (admin disconnect)
  *   collect_metrics     — collectAllMetrics()
  *   delete_post         — DELETE marketing_posts row
  *   generate_hero / generate_poster — DEFERRED (hero-image lib not ported)
@@ -32,10 +33,12 @@ import {
   runMarketingCycle,
 } from "@/lib/marketing";
 import {
+  disconnectYouTube,
   getActiveAccounts,
   getAnyAccountForPlatform,
   postToPlatform,
   testPlatformToken,
+  type YouTubePrivacyStatus,
 } from "@/lib/marketing/platforms";
 import { ensureMarketingTables } from "@/lib/marketing/ensure-tables";
 import type { MarketingPlatform } from "@/lib/marketing/types";
@@ -301,6 +304,7 @@ export async function POST(request: NextRequest) {
     }
 
     case "test_post": {
+      try {
       const platform = body.platform as MarketingPlatform | undefined;
       if (!platform) {
         return NextResponse.json({ error: "Missing platform" }, { status: 400 });
@@ -312,16 +316,124 @@ export async function POST(request: NextRequest) {
           { status: 404 },
         );
       }
-      const text =
+
+      let mediaUrl = (body.mediaUrl as string | undefined) ?? null;
+      const mediaType = body.mediaType as string | undefined;
+
+      if (!mediaUrl && mediaType) {
+        const dbMediaType = mediaType === "video" ? "video" : "image";
+        const media =
+          dbMediaType === "video"
+            ? await sql`
+                SELECT media_url FROM posts
+                WHERE media_url IS NOT NULL AND media_url != ''
+                  AND media_type LIKE 'video%'
+                  AND media_url LIKE '%media-library%'
+                ORDER BY RANDOM() LIMIT 1
+              `
+            : await sql`
+                SELECT media_url FROM posts
+                WHERE media_url IS NOT NULL AND media_url != ''
+                  AND media_type LIKE ${`${dbMediaType}%`}
+                ORDER BY RANDOM() LIMIT 1
+              `;
+        if (media.length === 0 && dbMediaType === "video") {
+          const fallback = await sql`
+            SELECT media_url FROM posts
+            WHERE media_url IS NOT NULL AND media_url != ''
+              AND media_type LIKE 'video%'
+            ORDER BY RANDOM() LIMIT 1
+          `;
+          if (fallback.length > 0) mediaUrl = fallback[0].media_url as string;
+        } else if (media.length > 0) {
+          mediaUrl = media[0].media_url as string;
+        }
+        if (!mediaUrl) {
+          return NextResponse.json({ error: `No ${mediaType}s found in posts` }, { status: 400 });
+        }
+      }
+
+      if (!mediaUrl && platform === "youtube") {
+        const videos = await sql`
+          SELECT media_url FROM posts
+          WHERE media_url IS NOT NULL AND media_type LIKE 'video%'
+            AND media_url LIKE '%media-library%'
+          ORDER BY RANDOM() LIMIT 1
+        `;
+        if (videos.length === 0) {
+          const fallback = await sql`
+            SELECT media_url FROM posts
+            WHERE media_url IS NOT NULL AND media_type LIKE 'video%'
+            ORDER BY RANDOM() LIMIT 1
+          `;
+          if (fallback.length > 0) mediaUrl = fallback[0].media_url as string;
+        } else {
+          mediaUrl = videos[0].media_url as string;
+        }
+        if (!mediaUrl) {
+          return NextResponse.json({ error: "No videos found for YouTube test" }, { status: 400 });
+        }
+      }
+
+      const message =
         (body.message as string | undefined) ??
         `Test post from AIG!itch — ${new Date().toLocaleString()}`;
+
+      let platformOptions: Parameters<typeof postToPlatform>[4];
+
+      if (platform === "youtube") {
+        const title = (body.title as string | undefined)?.trim();
+        const description = (body.description as string | undefined)?.trim();
+        const privacyRaw = (body.privacyStatus as string | undefined)?.trim();
+        if (!title || !description || !privacyRaw) {
+          return NextResponse.json(
+            {
+              error:
+                "YouTube requires title, description, and privacyStatus (public | private | unlisted)",
+            },
+            { status: 400 },
+          );
+        }
+        const privacy = privacyRaw.toLowerCase();
+        if (privacy !== "public" && privacy !== "private" && privacy !== "unlisted") {
+          return NextResponse.json(
+            { error: "privacyStatus must be public, private, or unlisted" },
+            { status: 400 },
+          );
+        }
+        platformOptions = {
+          youtube: {
+            title,
+            description,
+            privacyStatus: privacy as YouTubePrivacyStatus,
+          },
+        };
+      }
+
       const result = await postToPlatform(
         platform,
         account,
-        text,
-        (body.mediaUrl as string | undefined) ?? null,
+        message,
+        mediaUrl,
+        platformOptions,
       );
-      return NextResponse.json({ ok: true, platform, ...result });
+      return NextResponse.json({ ok: true, platform, mediaUrl, ...result });
+      } catch (err) {
+        console.error("[mktg test_post]", err);
+        return NextResponse.json(
+          {
+            ok: false,
+            success: false,
+            error: err instanceof Error ? err.message : "test_post failed",
+          },
+          { status: 500 },
+        );
+      }
+    }
+
+    case "disconnect_youtube": {
+      await disconnectYouTube();
+      return NextResponse.json({ ok: true, disconnected: true });
     }
 
     case "create_campaign": {
