@@ -17,6 +17,10 @@ function fakeSql(strings: TemplateStringsArray, ...values: unknown[]): Promise<R
 
 vi.mock("@neondatabase/serverless", () => ({ neon: () => fakeSql }));
 
+vi.mock("./ensure-tables", () => ({
+  ensureMarketingTables: vi.fn().mockResolvedValue(undefined),
+}));
+
 function makeFetch(responses: { ok: boolean; body: unknown; status?: number }[]) {
   const queue = [...responses];
   return vi.fn().mockImplementation(() => {
@@ -39,6 +43,8 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env.DATABASE_URL;
+  delete process.env.TELEGRAM_GROUP_ID;
+  delete process.env.TELEGRAM_CHANNEL_ID;
   delete process.env.X_CONSUMER_KEY;
   delete process.env.X_CONSUMER_SECRET;
   delete process.env.X_ACCESS_TOKEN;
@@ -79,9 +85,30 @@ const X_POST = {
   created_at: "2026-04-20T00:00:00Z",
 };
 
+describe("pickInstagramInsightMetrics", () => {
+  it("uses Reels-safe metrics without impressions", async () => {
+    const { pickInstagramInsightMetrics } = await import("./metrics-collector");
+    expect(pickInstagramInsightMetrics("REELS")).toBe("reach,shares,saved");
+    expect(pickInstagramInsightMetrics("FEED")).toBe(
+      "reach,likes,comments,shares,saved",
+    );
+  });
+});
+
+describe("resolveTelegramChatId", () => {
+  it("prefers group id and skips stale DM ids", async () => {
+    const { resolveTelegramChatId } = await import("./platforms");
+    process.env.TELEGRAM_GROUP_ID = "-1003743754075";
+    process.env.TELEGRAM_CHANNEL_ID = "481619402";
+    expect(resolveTelegramChatId({ account_id: "481619402" })).toBe(
+      "-1003743754075",
+    );
+  });
+});
+
 describe("collectAllMetrics", () => {
   it("returns zeros when no posted marketing_posts", async () => {
-    fake.results = [[]]; // SELECT posts → empty
+    fake.results = [[], [], [], []]; // telegram, instagram, facebook accounts, posts → empty
     const result = await loadAndRun();
     expect(result.updated).toBe(0);
     expect(result.failed).toBe(0);
@@ -90,9 +117,12 @@ describe("collectAllMetrics", () => {
 
   it("skips platform when no active account exists", async () => {
     fake.results = [
-      [X_POST],  // SELECT posts
-      [],        // SELECT account for x — empty, no env creds
-      [],        // rollup aggregates — empty
+      [], // telegram account lookup
+      [], // instagram account lookup
+      [], // facebook account lookup
+      [X_POST], // SELECT posts
+      [], // SELECT account for x — empty, no env creds
+      [], // rollup aggregates — empty
     ];
     const result = await loadAndRun();
     expect(result.updated).toBe(0);
@@ -127,10 +157,13 @@ describe("collectAllMetrics", () => {
     }]));
 
     fake.results = [
-      [X_POST],                                               // SELECT posts
+      [], // telegram account lookup
+      [], // instagram account lookup
+      [], // facebook account lookup
+      [X_POST], // SELECT posts
       [{ platform: "x", access_token: "unused", is_active: true, id: "a-1" }], // SELECT account
-      [],                                                     // UPDATE marketing_posts
-      [],                                                     // SELECT aggregates (empty)
+      [], // UPDATE marketing_posts
+      [], // rollup aggregates — empty
     ];
 
     const result = await loadAndRun();
@@ -147,6 +180,9 @@ describe("collectAllMetrics", () => {
     vi.stubGlobal("fetch", makeFetch([{ ok: true, body: { data: null } }]));
 
     fake.results = [
+      [], // telegram account lookup
+      [], // instagram account lookup
+      [], // facebook account lookup
       [X_POST],
       [{ platform: "x", access_token: "x", is_active: true, id: "a-1" }],
       [],

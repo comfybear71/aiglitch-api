@@ -7,7 +7,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { isAdminAuthenticated } from "@/lib/admin-auth";
-import { consumerAppUrl } from "@/lib/marketing/app-urls";
+import { youtubeOAuthCallbackUrl } from "@/lib/marketing/app-urls";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -24,7 +24,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "YOUTUBE_CLIENT_ID not configured" }, { status: 501 });
     }
 
-    const redirectUri = `${consumerAppUrl("/").origin}/api/auth/callback/youtube`;
+    const redirectUri = youtubeOAuthCallbackUrl().href;
     const scope = encodeURIComponent(
       "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly",
     );

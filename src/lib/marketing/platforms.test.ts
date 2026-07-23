@@ -23,9 +23,16 @@ vi.mock("@/lib/telegram", () => ({
 
 import { getAppCredentials } from "@/lib/x-oauth";
 import {
+  buildFacebookPlatformUrl,
+  facebookGraphIdsMatch,
+  facebookSpreadNote,
+  fetchFacebookPostEngagement,
+  findFacebookEngagementViaPublishedPosts,
   getActiveAccounts,
   getAnyAccountForPlatform,
+  normalizeFacebookPostId,
   postToPlatform,
+  resolveFacebookMetricsPostId,
   testPlatformToken,
   type PostResult,
 } from "./platforms";
@@ -66,6 +73,8 @@ afterEach(() => {
   delete process.env.INSTAGRAM_USER_ID;
   delete process.env.FACEBOOK_ACCESS_TOKEN;
   delete process.env.FACEBOOK_PAGE_ID;
+  delete process.env.FACEBOOK_GROUP_ID;
+  delete process.env.FACEBOOK_DAILY_POST_LIMIT;
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -248,14 +257,353 @@ describe("postToPlatform — deferred platforms", () => {
     expect(result.error?.toLowerCase()).toContain("instagram");
   });
 
-  it("returns success:false with deferral message for facebook", async () => {
+  it("returns success:false when facebook page credentials are missing", async () => {
     const result = await postToPlatform(
       "facebook",
-      { ...X_ACCOUNT, platform: "facebook" },
+      { ...X_ACCOUNT, platform: "facebook", access_token: "", account_id: "" },
       "x",
     );
     expect(result.success).toBe(false);
     expect(result.error?.toLowerCase()).toContain("facebook");
+  });
+
+  it("fetchFacebookPostEngagement resolves feed post_id for photo uploads", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: () =>
+          Promise.resolve(
+            JSON.stringify({
+              reactions: { summary: { total_count: 0 } },
+              comments: { summary: { total_count: 0 } },
+            }),
+          ),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            post_id: "1041648825691964_999888777666",
+          }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: () =>
+          Promise.resolve(
+            JSON.stringify({
+              reactions: { summary: { total_count: 2 } },
+              comments: { summary: { total_count: 1 } },
+              shares: { count: 0 },
+            }),
+          ),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const engagement = await fetchFacebookPostEngagement(
+      "1041648825691964",
+      "1731588724411517",
+      "fb-tok",
+    );
+    expect(engagement?.comments).toBe(1);
+    expect(engagement?.feedPostId).toBe("1041648825691964_999888777666");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("fetchFacebookPostEngagement reads comments on feed posts directly", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: () =>
+        Promise.resolve(
+          JSON.stringify({
+            reactions: { summary: { total_count: 1 } },
+            comments: { summary: { total_count: 2 } },
+            shares: { count: 0 },
+          }),
+        ),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const engagement = await fetchFacebookPostEngagement(
+      "1041648825691964",
+      "1041648825691964_1731588724411517",
+      "fb-tok",
+    );
+    expect(engagement?.comments).toBe(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolveFacebookMetricsPostId uses feed post_id for photo uploads", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: () =>
+          Promise.resolve(
+            JSON.stringify({
+              reactions: { summary: { total_count: 0 } },
+              comments: { summary: { total_count: 0 } },
+            }),
+          ),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            post_id: "1041648825691964_999888777666",
+          }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: () =>
+          Promise.resolve(
+            JSON.stringify({
+              reactions: { summary: { total_count: 0 } },
+              comments: { summary: { total_count: 1 } },
+            }),
+          ),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const resolved = await resolveFacebookMetricsPostId(
+      "1041648825691964",
+      "1731588724411517",
+      "fb-tok",
+    );
+    expect(resolved).toBe("1041648825691964_999888777666");
+  });
+
+  it("normalizeFacebookPostId prefixes bare photo ids with page id", () => {
+    expect(
+      normalizeFacebookPostId("1041648825691964", "1731588724411517"),
+    ).toBe("1041648825691964_1731588724411517");
+    expect(
+      normalizeFacebookPostId(
+        "1041648825691964",
+        "1041648825691964_122119083495145886",
+      ),
+    ).toBe("1041648825691964_122119083495145886");
+  });
+
+  it("facebookGraphIdsMatch treats bare photo ids as equivalent to feed post suffix", () => {
+    expect(
+      facebookGraphIdsMatch(
+        "1041648825691964",
+        "1731588724411517",
+        "1041648825691964_1731588724411517",
+      ),
+    ).toBe(true);
+    expect(
+      facebookGraphIdsMatch(
+        "1041648825691964",
+        "1041648825691964_122119095897145886",
+        "1041648825691964_122119095897145886",
+      ),
+    ).toBe(true);
+  });
+
+  it("fetchFacebookPostEngagement falls back to published_posts when direct photo read is blocked", async () => {
+    const postedAt = "2026-05-03T14:53:18+0000";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        text: () =>
+          Promise.resolve(
+            JSON.stringify({
+              error: { message: "(#200) Missing Permissions", code: 200 },
+            }),
+          ),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        json: () =>
+          Promise.resolve({
+            error: { message: "(#200) Missing Permissions", code: 200 },
+          }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            data: [
+              {
+                id: "1041648825691964_122119095897145886",
+                created_time: postedAt,
+                reactions: { summary: { total_count: 3 } },
+                comments: { summary: { total_count: 2 } },
+                shares: { count: 1 },
+              },
+            ],
+          }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const engagement = await fetchFacebookPostEngagement(
+      "1041648825691964",
+      "1731588724411517",
+      "fb-tok",
+      { postedAt },
+    );
+    expect(engagement?.comments).toBe(2);
+    expect(engagement?.likes).toBe(3);
+    expect(engagement?.feedPostId).toBe("1041648825691964_122119095897145886");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("findFacebookEngagementViaPublishedPosts matches by posted_at when ids differ", async () => {
+    const postedAt = "2026-05-03T14:53:18+0000";
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          data: [
+            {
+              id: "1041648825691964_122119095897145886",
+              created_time: postedAt,
+              reactions: { summary: { total_count: 1 } },
+              comments: { summary: { total_count: 4 } },
+            },
+          ],
+        }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const found = await findFacebookEngagementViaPublishedPosts(
+      "1041648825691964",
+      "1731588724411517",
+      "fb-tok",
+      { postedAt: "2026-05-03T14:53:20.000Z" },
+    );
+    expect(found?.feedPostId).toBe("1041648825691964_122119095897145886");
+    expect(found?.engagement.comments).toBe(4);
+  });
+
+  it("buildFacebookPlatformUrl uses feed post permalink for page photos", () => {
+    const url = buildFacebookPlatformUrl("1041648825691964", "1041648825691964_122119083495145886", {
+      isVideo: false,
+      hasMedia: true,
+    });
+    expect(url).toBe(
+      "https://www.facebook.com/1041648825691964/posts/122119083495145886",
+    );
+    expect(url).not.toContain("photo/?fbid=");
+  });
+
+  it("fetches permalink_url for page photo posts when Graph provides it", async () => {
+    process.env.FACEBOOK_GROUP_ID = "1608814267525689";
+    fake.results = [[{ count: 0 }]];
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            id: "1041648825691964_122119083495145886",
+            post_id: "1041648825691964_122119083495145886",
+          }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            permalink_url: "https://www.facebook.com/share/p/1CnQ8Qq9Hk/",
+          }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await postToPlatform(
+      "facebook",
+      {
+        ...X_ACCOUNT,
+        platform: "facebook",
+        account_id: "1041648825691964",
+        access_token: "fb-tok",
+      },
+      "hello fb",
+      "https://blob.test/ad.png",
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.platformUrl).toBe("https://www.facebook.com/share/p/1CnQ8Qq9Hk/");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("adds manual group share note when FACEBOOK_GROUP_ID is set (Groups API dead)", async () => {
+    process.env.FACEBOOK_GROUP_ID = "1608814267525689";
+    fake.results = [[{ count: 0 }]]; // throttle COUNT query
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ id: "111" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: () =>
+          Promise.resolve(
+            JSON.stringify({
+              reactions: { summary: { total_count: 0 } },
+              comments: { summary: { total_count: 0 } },
+            }),
+          ),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ post_id: "fb-page_999feedpost" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: () =>
+          Promise.resolve(
+            JSON.stringify({
+              reactions: { summary: { total_count: 0 } },
+              comments: { summary: { total_count: 0 } },
+            }),
+          ),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ permalink_url: undefined }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await postToPlatform(
+      "facebook",
+      {
+        ...X_ACCOUNT,
+        platform: "facebook",
+        account_id: "fb-page",
+        access_token: "fb-tok",
+      },
+      "hello fb",
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.platformPostId).toBe("fb-page_999feedpost");
+    expect(fetchMock).toHaveBeenCalledTimes(5); // post + engagement + probe + feed + permalink
+    expect(result.secondaryError).toContain("Meta removed Groups API");
+    expect(facebookSpreadNote(result)).toContain("manual");
   });
 
   it("returns success:false when youtube has no video URL", async () => {
@@ -299,6 +647,33 @@ describe("postToPlatform — Telegram media dispatch", () => {
     access_token: "bot-token",
   };
 
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url =
+          typeof input === "string"
+            ? input
+            : input instanceof URL
+              ? input.href
+              : input.url;
+        if (init?.method === "HEAD") {
+          return new Response(null, {
+            status: 200,
+            headers: { "content-length": "1000000" },
+          });
+        }
+        if (url.includes("api.telegram.org")) {
+          return new Response(
+            JSON.stringify({ ok: true, result: { message_id: 99 } }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+  });
+
   it("routes MP4 URLs through sendTelegramVideo (not sendPhoto)", async () => {
     sendTelegramVideoMock.mockResolvedValue({ ok: true, messageId: 42 });
     const result = await postToPlatform(
@@ -339,7 +714,7 @@ describe("postToPlatform — Telegram media dispatch", () => {
     expect(sendTelegramPhotoMock).not.toHaveBeenCalled();
   });
 
-  it("surfaces video upload failure with 'video' label in error", async () => {
+  it("falls back to text-only when video upload exceeds Telegram size cap", async () => {
     sendTelegramVideoMock.mockResolvedValue({
       ok: false,
       error: "file too big",
@@ -350,8 +725,8 @@ describe("postToPlatform — Telegram media dispatch", () => {
       "c",
       "https://blob.test/v.mp4",
     );
-    expect(result.success).toBe(false);
-    expect(result.error).toContain("Telegram video upload failed");
-    expect(result.error).toContain("file too big");
+    expect(result.success).toBe(true);
+    expect(result.error).toContain("text-only");
+    expect(result.error).toContain("50MB");
   });
 });

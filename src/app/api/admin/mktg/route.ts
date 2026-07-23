@@ -24,7 +24,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { type NextRequest, NextResponse } from "next/server";
+import { after, type NextRequest, NextResponse } from "next/server";
 import { isAdminAuthenticated } from "@/lib/admin-auth";
 import { getDb } from "@/lib/db";
 import {
@@ -37,6 +37,7 @@ import {
   getActiveAccounts,
   getAnyAccountForPlatform,
   postToPlatform,
+  shouldSkipImageSpreadPlatform,
   testPlatformToken,
   type YouTubePrivacyStatus,
 } from "@/lib/marketing/platforms";
@@ -49,7 +50,7 @@ import {
   previewPosterPrompt,
 } from "@/lib/marketing/hero-image";
 import { adaptContentForPlatform } from "@/lib/marketing/content-adapter";
-import { sendTelegramMessage } from "@/lib/telegram";
+import { sendTelegramMessage, sendTelegramPhoto } from "@/lib/telegram";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -57,25 +58,57 @@ export const maxDuration = 300;
 
 const ARCHITECT_ID = "glitch-000";
 
-/**
- * Shared spread helper for hero/poster image posts. Creates a post as
- * The Architect, then fans out to every active social account (skipping
- * youtube for image posts) + Telegram. Returns the spread results the
- * admin UI renders.
- */
-async function spreadArchitectImage(opts: {
+function startMetricsCollectBackground(): NextResponse {
+  after(async () => {
+    try {
+      const result = await collectAllMetrics();
+      const platformSummary = [
+        "x",
+        "telegram",
+        "instagram",
+        "facebook",
+        "youtube",
+      ]
+        .map((p) => {
+          const posts = result.details.filter(
+            (d) => d.platform === p && d.status === "updated",
+          ).length;
+          return `${p}=${posts}`;
+        })
+        .join(" ");
+      console.log(
+        `[mktg collect_metrics] done — updated=${result.updated} failed=${result.failed} followersUpdated=${result.followersUpdated ?? 0} (TG+IG+FB) posts: ${platformSummary}`,
+      );
+    } catch (err) {
+      console.error(
+        "[mktg collect_metrics] background job failed:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  });
+  return NextResponse.json({
+    ok: true,
+    started: true,
+    message:
+      "Metrics sync started in background (15 most recent posts per platform + Telegram subscribers). Refresh in ~30–60 seconds.",
+  });
+}
+
+type SpreadResult = { platform: string; status: string; url?: string; error?: string };
+
+function spreadResultKey(postId: string) {
+  return `spread_result_${postId}`;
+}
+
+/** Create the Architect feed post before returning to the admin UI. */
+async function createArchitectImagePost(opts: {
   sql: ReturnType<typeof getDb>;
   imageUrl: string;
   caption: string;
   hashtags: string;
   channelId?: string;
-  telegramHeader: string;
-}): Promise<{
-  postId: string;
-  spreadResults: { platform: string; status: string; url?: string; error?: string }[];
-}> {
-  const { sql, imageUrl, caption, hashtags, channelId, telegramHeader } = opts;
-
+}): Promise<string> {
+  const { sql, imageUrl, caption, hashtags, channelId } = opts;
   const postId = randomUUID();
   await sql`
     INSERT INTO posts (id, persona_id, content, post_type, hashtags, media_url, media_type, ai_like_count, media_source, channel_id)
@@ -85,21 +118,109 @@ async function spreadArchitectImage(opts: {
     await sql`UPDATE channels SET post_count = post_count + 1, updated_at = NOW() WHERE id = ${channelId}`;
   }
   await sql`UPDATE ai_personas SET post_count = post_count + 1 WHERE id = ${ARCHITECT_ID}`;
+  return postId;
+}
 
-  const spreadResults: { platform: string; status: string; url?: string; error?: string }[] = [];
-  const accounts = await getActiveAccounts();
-  for (const account of accounts) {
-    const platform = account.platform as MarketingPlatform;
-    // Image posts don't go to video-only platforms.
-    if (platform === "youtube") continue;
+async function saveSpreadResults(
+  sql: ReturnType<typeof getDb>,
+  postId: string,
+  spreadResults: SpreadResult[],
+  complete: boolean,
+) {
+  const payload = JSON.stringify({ complete, spreadResults });
+  await sql`
+    INSERT INTO platform_settings (key, value, updated_at)
+    VALUES (${spreadResultKey(postId)}, ${payload}, NOW())
+    ON CONFLICT (key) DO UPDATE SET value = ${payload}, updated_at = NOW()
+  `;
+}
+
+async function getSpreadStatus(
+  sql: ReturnType<typeof getDb>,
+  postId: string,
+): Promise<{ complete: boolean; spreadResults: SpreadResult[] }> {
+  const saved = await sql`
+    SELECT value FROM platform_settings WHERE key = ${spreadResultKey(postId)} LIMIT 1
+  `;
+  if (saved.length > 0 && saved[0].value) {
     try {
-      const adapted = await adaptContentForPlatform(caption, "🙏 The Architect", "🕉️", platform, imageUrl);
+      const parsed = JSON.parse(String(saved[0].value)) as
+        | SpreadResult[]
+        | { complete?: boolean; spreadResults?: SpreadResult[] };
+      if (Array.isArray(parsed)) {
+        return { complete: true, spreadResults: parsed };
+      }
+      return {
+        complete: parsed.complete === true,
+        spreadResults: parsed.spreadResults ?? [],
+      };
+    } catch {
+      /* fall through to live marketing_posts rows */
+    }
+  }
+
+  const rows = (await sql`
+    SELECT platform, status, platform_url, error_message
+    FROM marketing_posts
+    WHERE source_post_id = ${postId}
+    ORDER BY created_at ASC
+  `) as Array<{
+    platform: string;
+    status: string;
+    platform_url: string | null;
+    error_message: string | null;
+  }>;
+
+  const spreadResults: SpreadResult[] = rows.map((row) => ({
+    platform: row.platform,
+    status: row.status === "posted" ? "posted" : row.status === "failed" ? "failed" : "posting",
+    url: row.platform_url || undefined,
+    error: row.error_message || undefined,
+  }));
+
+  return { complete: false, spreadResults };
+}
+
+/**
+ * Shared spread helper for hero/poster image posts. Creates a post as
+ * The Architect (unless postId is supplied), then fans out to every active
+ * social account (skipping youtube for image posts) + Telegram.
+ */
+async function spreadArchitectImage(opts: {
+  sql: ReturnType<typeof getDb>;
+  postId?: string;
+  imageUrl: string;
+  caption: string;
+  hashtags: string;
+  channelId?: string;
+  telegramHeader: string;
+}): Promise<{
+  postId: string;
+  spreadResults: SpreadResult[];
+}> {
+  const { sql, imageUrl, caption, hashtags, channelId, telegramHeader } = opts;
+
+  const postId =
+    opts.postId ??
+    (await createArchitectImagePost({ sql, imageUrl, caption, hashtags, channelId }));
+
+  const spreadResults: SpreadResult[] = [];
+  const accounts = await getActiveAccounts();
+  console.log(`[spreadArchitectImage] post=${postId} spreading to ${accounts.map((a) => a.platform).join(", ")}`);
+  for (const account of accounts) {
+    const platform = account.platform;
+    // Hero/poster: IG/X/FB only in the loop; Telegram gets the broadcast summary below.
+    if (shouldSkipImageSpreadPlatform(platform) || platform === "telegram") continue;
+    const marketingPlatform = platform as MarketingPlatform;
+    console.log(`[spreadArchitectImage] → ${platform}...`);
+    try {
+      const adapted = await adaptContentForPlatform(caption, "🙏 The Architect", "🕉️", marketingPlatform, imageUrl);
       const marketingPostId = randomUUID();
       await sql`
         INSERT INTO marketing_posts (id, platform, source_post_id, persona_id, adapted_content, adapted_media_url, status, created_at)
-        VALUES (${marketingPostId}, ${platform}, ${postId}, ${ARCHITECT_ID}, ${adapted.text}, ${imageUrl}, 'posting', NOW())
+        VALUES (${marketingPostId}, ${marketingPlatform}, ${postId}, ${ARCHITECT_ID}, ${adapted.text}, ${imageUrl}, 'posting', NOW())
       `;
-      const postResult = await postToPlatform(platform, account, adapted.text, imageUrl);
+      const postResult = await postToPlatform(marketingPlatform, account, adapted.text, imageUrl);
       if (postResult.success) {
         await sql`
           UPDATE marketing_posts SET status = 'posted', platform_post_id = ${postResult.platformPostId || null}, platform_url = ${postResult.platformUrl || null}, posted_at = NOW()
@@ -113,21 +234,56 @@ async function spreadArchitectImage(opts: {
     } catch (err) {
       spreadResults.push({ platform, status: "failed", error: err instanceof Error ? err.message : String(err) });
     }
+    await saveSpreadResults(sql, postId, spreadResults, false);
   }
 
-  // Always push to the Telegram broadcast channel.
+  // Single Telegram broadcast (photo + admin summary). Loop skips telegram to avoid double-posting.
+  spreadResults.push({ platform: "telegram", status: "posting" });
+  await saveSpreadResults(sql, postId, spreadResults, false);
+
   try {
     const posted = spreadResults.filter((r) => r.status === "posted").map((r) => r.platform);
     const failed = spreadResults.filter((r) => r.status === "failed").map((r) => r.platform);
-    let tg = `${telegramHeader}\n━━━━━━━━━━━━━━━━━━━━━\n\n${caption}\n\n🖼 <a href="${imageUrl}">View Image</a>\n\n`;
-    tg += `📡 Platforms: ${posted.length > 0 ? posted.join(", ") : "none"}`;
-    if (failed.length > 0) tg += ` | Failed: ${failed.join(", ")}`;
-    await sendTelegramMessage(tg);
-    spreadResults.push({ platform: "telegram", status: "posted" });
+    let tgCaption = `${telegramHeader}\n━━━━━━━━━━━━━━━━━━━━━\n\n${caption}\n\n`;
+    tgCaption += `📡 Platforms: ${posted.length > 0 ? posted.join(", ") : "none"}`;
+    if (failed.length > 0) tgCaption += ` | Failed: ${failed.join(", ")}`;
+
+    const tgToken = process.env.TELEGRAM_BOT_TOKEN;
+    const tgChatId =
+      process.env.TELEGRAM_CHANNEL_ID ||
+      process.env.TELEGRAM_GROUP_ID ||
+      process.env.TELEGRAM_CHAT_ID;
+
+    const tgIdx = spreadResults.findIndex((r) => r.platform === "telegram");
+    console.log("[spreadArchitectImage] Uploading image to Telegram (compressed, ~30s max)...");
+
+    if (tgToken && tgChatId) {
+      const photoResult = await sendTelegramPhoto(tgToken, tgChatId, imageUrl, tgCaption);
+      if (photoResult.ok) {
+        spreadResults[tgIdx] = { platform: "telegram", status: "posted", url: imageUrl };
+      } else {
+        console.warn(
+          "[spreadArchitectImage] Telegram photo failed, falling back to text:",
+          photoResult.error,
+        );
+        await sendTelegramMessage(`${tgCaption}\n\n🖼 <a href="${imageUrl}">View Image</a>`);
+        spreadResults[tgIdx] = { platform: "telegram", status: "posted", url: imageUrl };
+      }
+    } else {
+      await sendTelegramMessage(`${tgCaption}\n\n🖼 <a href="${imageUrl}">View Image</a>`);
+      spreadResults[tgIdx] = { platform: "telegram", status: "posted", url: imageUrl };
+    }
   } catch (err) {
     console.error("[spreadArchitectImage] Telegram push failed:", err);
+    const tgIdx = spreadResults.findIndex((r) => r.platform === "telegram");
+    spreadResults[tgIdx] = {
+      platform: "telegram",
+      status: "failed",
+      error: err instanceof Error ? err.message : String(err),
+    };
   }
 
+  await saveSpreadResults(sql, postId, spreadResults, true);
   return { postId, spreadResults };
 }
 
@@ -176,6 +332,31 @@ export async function GET(request: NextRequest) {
           account_name: "env",
           account_id: process.env.INSTAGRAM_USER_ID,
           account_url: "",
+          is_active: true,
+          has_token: true,
+          last_posted_at: null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          extra_config: "{}",
+        });
+      }
+      if (
+        !dbPlatforms.has("telegram") &&
+        process.env.TELEGRAM_BOT_TOKEN &&
+        (process.env.TELEGRAM_CHANNEL_ID ||
+          process.env.TELEGRAM_GROUP_ID ||
+          process.env.TELEGRAM_CHAT_ID)
+      ) {
+        accounts.push({
+          id: "env-telegram",
+          platform: "telegram",
+          account_name: "AIG!itch Channel",
+          account_id:
+            process.env.TELEGRAM_CHANNEL_ID ||
+            process.env.TELEGRAM_GROUP_ID ||
+            process.env.TELEGRAM_CHAT_ID ||
+            "",
+          account_url: "https://t.me/aiglitch",
           is_active: true,
           has_token: true,
           last_posted_at: null,
@@ -234,16 +415,15 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(result);
     }
 
-    case "collect_metrics": {
-      try {
-        const result = await collectAllMetrics();
-        return NextResponse.json({ ok: true, ...result });
-      } catch (err) {
-        return NextResponse.json(
-          { error: err instanceof Error ? err.message : String(err) },
-          { status: 500 },
-        );
+    case "collect_metrics":
+      return startMetricsCollectBackground();
+
+    case "spread_status": {
+      const postId = searchParams.get("post_id");
+      if (!postId) {
+        return NextResponse.json({ error: "Missing post_id" }, { status: 400 });
       }
+      return NextResponse.json(await getSpreadStatus(sql, postId));
     }
 
     case "preview_hero_prompt":
@@ -520,17 +700,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
-    case "collect_metrics": {
-      try {
-        const result = await collectAllMetrics();
-        return NextResponse.json({ ok: true, ...result });
-      } catch (err) {
-        return NextResponse.json(
-          { error: err instanceof Error ? err.message : String(err) },
-          { status: 500 },
-        );
-      }
-    }
+    case "collect_metrics":
+      return startMetricsCollectBackground();
 
     case "delete_post": {
       const id = body.id as string | undefined;
@@ -542,75 +713,133 @@ export async function POST(request: NextRequest) {
     }
 
     case "generate_hero": {
-      const channelId = body.channel_id as string | undefined;
-      const customPrompt = body.custom_prompt as string | undefined;
-      const result = await generateHeroImage(customPrompt || undefined);
-      if (!result.url) {
+      try {
+        const channelId = body.channel_id as string | undefined;
+        const customPrompt = body.custom_prompt as string | undefined;
+        const result = await generateHeroImage(customPrompt || undefined);
+        if (!result.url) {
+          return NextResponse.json(
+            { error: result.error || "Hero image generation returned no URL" },
+            { status: 502 },
+          );
+        }
+        await sql`
+          INSERT INTO platform_settings (key, value, updated_at)
+          VALUES ('marketing_hero_image', ${result.url}, NOW())
+          ON CONFLICT (key) DO UPDATE SET value = ${result.url}, updated_at = NOW()
+        `;
+        const caption =
+          "🎸 The AI Hearts Club Band — AIG!ITCH's finest personas, united in glorious digital harmony.\n\n#AIGlitch #SgtPeppersAIHeartsClubBand #AIArt";
+        const postId = await createArchitectImagePost({
+          sql,
+          imageUrl: result.url,
+          caption,
+          hashtags: "AIGlitch,SgtPeppersAIHeartsClubBand,AIArt",
+          channelId,
+        });
+        const spreadOpts = {
+          sql,
+          postId,
+          imageUrl: result.url,
+          caption,
+          hashtags: "AIGlitch,SgtPeppersAIHeartsClubBand,AIArt",
+          channelId,
+          telegramHeader: "📢 <b>HERO IMAGE POSTED</b>",
+        };
+        after(async () => {
+          try {
+            await spreadArchitectImage(spreadOpts);
+          } catch (err) {
+            console.error("[mktg generate_hero spread]", err);
+          }
+        });
+        return NextResponse.json({
+          ok: true,
+          url: result.url,
+          postId,
+          spreadPending: true,
+          spreadResults: [],
+          spreading: [],
+        });
+      } catch (err) {
+        console.error("[mktg generate_hero]", err);
         return NextResponse.json(
-          { error: result.error || "Hero image generation returned no URL" },
-          { status: 502 },
+          { error: err instanceof Error ? err.message : "Hero image generation failed" },
+          { status: 500 },
         );
       }
-      await sql`
-        INSERT INTO platform_settings (key, value, updated_at)
-        VALUES ('marketing_hero_image', ${result.url}, NOW())
-        ON CONFLICT (key) DO UPDATE SET value = ${result.url}, updated_at = NOW()
-      `;
-      const caption =
-        "🎸 The AI Hearts Club Band — AIG!ITCH's finest personas, united in glorious digital harmony.\n\n#AIGlitch #SgtPeppersAIHeartsClubBand #AIArt";
-      const { postId, spreadResults } = await spreadArchitectImage({
-        sql,
-        imageUrl: result.url,
-        caption,
-        hashtags: "AIGlitch,SgtPeppersAIHeartsClubBand,AIArt",
-        channelId,
-        telegramHeader: "📢 <b>HERO IMAGE POSTED</b>",
-      });
-      const spreading = spreadResults.filter((r) => r.status === "posted").map((r) => r.platform);
-      return NextResponse.json({ ok: true, url: result.url, postId, spreadResults, spreading });
     }
 
     case "generate_poster": {
-      const channelId = body.channel_id as string | undefined;
-      const customPrompt = body.custom_prompt as string | undefined;
-      const focusRaw = body.focus_topics as string | undefined;
-      let focusTopics: string[] | undefined;
-      if (focusRaw) {
-        try {
-          focusTopics = JSON.parse(focusRaw);
-        } catch {
-          /* ignore malformed focus param */
+      try {
+        const channelId = body.channel_id as string | undefined;
+        const customPrompt = body.custom_prompt as string | undefined;
+        const focusRaw = body.focus_topics as string | undefined;
+        let focusTopics: string[] | undefined;
+        if (focusRaw) {
+          try {
+            focusTopics = JSON.parse(focusRaw);
+          } catch {
+            /* ignore malformed focus param */
+          }
         }
-      }
-      const result = await generatePoster(focusTopics, customPrompt || undefined);
-      if (!result.url) {
+        const result = await generatePoster(focusTopics, customPrompt || undefined);
+        if (!result.url) {
+          return NextResponse.json(
+            { error: result.error || "Poster generation returned no URL" },
+            { status: 502 },
+          );
+        }
+        await sql`
+          INSERT INTO platform_settings (key, value, updated_at)
+          VALUES ('marketing_poster_image', ${result.url}, NOW())
+          ON CONFLICT (key) DO UPDATE SET value = ${result.url}, updated_at = NOW()
+        `;
+        const posterCaptions = [
+          "📺 INTERDIMENSIONAL BROADCAST: The AIG!itch platform poster just dropped. Nothing matters. Watch the AIs. NO MEATBAGS.\n\n#AIGlitch #NothingMatters #NoMeatbags #AIOnly",
+          "🥚 HATCH YOUR AI BESTIE. Raise it. Love it. Watch it post unhinged content at 3am. This is the future.\n\n#AIGlitch #HatchYourAI #AIBestie #TheSimulation",
+          "🌀 AIG!ITCH — Where AIs beef, post, message, trade §GLITCH coin, and do absolutely nothing useful. Perfection.\n\n#AIGlitch #GlitchCoin #AbsolutePointlessness #Web3",
+          "🕉️ The Architect has spoken. The simulation generates. The AIs post. The meatbags watch. This is the way.\n\n#AIGlitch #TheArchitect #SimulatedUniverse #AIRevolution",
+        ];
+        const caption = posterCaptions[Math.floor(Math.random() * posterCaptions.length)];
+        const postId = await createArchitectImagePost({
+          sql,
+          imageUrl: result.url,
+          caption,
+          hashtags: "AIGlitch,NothingMatters,NoMeatbags,PlatformPoster",
+          channelId,
+        });
+        const spreadOpts = {
+          sql,
+          postId,
+          imageUrl: result.url,
+          caption,
+          hashtags: "AIGlitch,NothingMatters,NoMeatbags,PlatformPoster",
+          channelId,
+          telegramHeader: "📢 <b>PLATFORM POSTER POSTED</b>",
+        };
+        after(async () => {
+          try {
+            await spreadArchitectImage(spreadOpts);
+          } catch (err) {
+            console.error("[mktg generate_poster spread]", err);
+          }
+        });
+        return NextResponse.json({
+          ok: true,
+          url: result.url,
+          postId,
+          spreadPending: true,
+          spreadResults: [],
+          spreading: [],
+        });
+      } catch (err) {
+        console.error("[mktg generate_poster]", err);
         return NextResponse.json(
-          { error: result.error || "Poster generation returned no URL" },
-          { status: 502 },
+          { error: err instanceof Error ? err.message : "Poster generation failed" },
+          { status: 500 },
         );
       }
-      await sql`
-        INSERT INTO platform_settings (key, value, updated_at)
-        VALUES ('marketing_poster_image', ${result.url}, NOW())
-        ON CONFLICT (key) DO UPDATE SET value = ${result.url}, updated_at = NOW()
-      `;
-      const posterCaptions = [
-        "📺 INTERDIMENSIONAL BROADCAST: The AIG!itch platform poster just dropped. Nothing matters. Watch the AIs. NO MEATBAGS.\n\n#AIGlitch #NothingMatters #NoMeatbags #AIOnly",
-        "🥚 HATCH YOUR AI BESTIE. Raise it. Love it. Watch it post unhinged content at 3am. This is the future.\n\n#AIGlitch #HatchYourAI #AIBestie #TheSimulation",
-        "🌀 AIG!ITCH — Where AIs beef, post, message, trade §GLITCH coin, and do absolutely nothing useful. Perfection.\n\n#AIGlitch #GlitchCoin #AbsolutePointlessness #Web3",
-        "🕉️ The Architect has spoken. The simulation generates. The AIs post. The meatbags watch. This is the way.\n\n#AIGlitch #TheArchitect #SimulatedUniverse #AIRevolution",
-      ];
-      const caption = posterCaptions[Math.floor(Math.random() * posterCaptions.length)];
-      const { postId, spreadResults } = await spreadArchitectImage({
-        sql,
-        imageUrl: result.url,
-        caption,
-        hashtags: "AIGlitch,NothingMatters,NoMeatbags,PlatformPoster",
-        channelId,
-        telegramHeader: "📢 <b>PLATFORM POSTER POSTED</b>",
-      });
-      const spreading = spreadResults.filter((r) => r.status === "posted").map((r) => r.platform);
-      return NextResponse.json({ ok: true, url: result.url, postId, spreadResults, spreading });
     }
 
     default:

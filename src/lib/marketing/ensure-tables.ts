@@ -47,6 +47,33 @@ export async function ensureMarketingTables(): Promise<void> {
       )
     `;
     await sql`
+      ALTER TABLE marketing_posts
+      ADD COLUMN IF NOT EXISTS metrics_updated_at TIMESTAMPTZ
+    `.catch(() => undefined);
+    await sql`
+      CREATE TABLE IF NOT EXISTS marketing_metrics_daily (
+        id                 TEXT PRIMARY KEY,
+        platform           TEXT NOT NULL,
+        date               TEXT NOT NULL,
+        posts_published    INTEGER NOT NULL DEFAULT 0,
+        total_impressions  INTEGER NOT NULL DEFAULT 0,
+        total_likes        INTEGER NOT NULL DEFAULT 0,
+        total_shares       INTEGER NOT NULL DEFAULT 0,
+        total_comments     INTEGER NOT NULL DEFAULT 0,
+        total_views        INTEGER NOT NULL DEFAULT 0,
+        total_clicks       INTEGER NOT NULL DEFAULT 0,
+        follower_count     INTEGER NOT NULL DEFAULT 0,
+        follower_growth    INTEGER NOT NULL DEFAULT 0,
+        top_post_id        TEXT,
+        collected_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (platform, date)
+      )
+    `.catch(() => undefined);
+    await sql`
+      CREATE UNIQUE INDEX IF NOT EXISTS marketing_metrics_daily_platform_date_idx
+      ON marketing_metrics_daily (platform, date)
+    `.catch(() => undefined);
+    await sql`
       CREATE TABLE IF NOT EXISTS marketing_platform_accounts (
         id                 TEXT PRIMARY KEY,
         platform           TEXT UNIQUE NOT NULL,

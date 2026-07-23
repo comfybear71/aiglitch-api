@@ -23,7 +23,36 @@ import { sendTelegramPhoto, sendTelegramVideo } from "@/lib/telegram";
 import { put } from "@vercel/blob";
 import { randomUUID } from "node:crypto";
 import sharp from "sharp";
-import type { MarketingPlatform, PlatformAccount } from "./types";
+import { ALL_PLATFORMS, type MarketingPlatform, type PlatformAccount } from "./types";
+
+/** Skip stale DB rows (e.g. tiktok) and video-only platforms for still-image spread. */
+export function shouldSkipImageSpreadPlatform(platform: string): boolean {
+  if (platform === "youtube" || platform === "tiktok") return true;
+  return !ALL_PLATFORMS.includes(platform as MarketingPlatform);
+}
+
+/** TikTok is manual-only (TikTok Blaster); skip unknown platform strings from DB. */
+export function shouldSkipAutoSpreadPlatform(platform: string): boolean {
+  if (platform === "tiktok") return true;
+  return !ALL_PLATFORMS.includes(platform as MarketingPlatform);
+}
+
+/** Telegram Bot API sendVideo cap is 50 MB — stay under with headroom. */
+const TELEGRAM_VIDEO_MAX_BYTES = 48 * 1024 * 1024;
+
+async function getRemoteContentLength(url: string): Promise<number | null> {
+  try {
+    const res = await fetch(url, {
+      method: "HEAD",
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) return null;
+    const len = res.headers.get("content-length");
+    return len ? Number.parseInt(len, 10) : null;
+  } catch {
+    return null;
+  }
+}
 
 /** Env var that overrides the DB access_token when set. */
 const ENV_TOKEN_KEYS: Record<string, string> = {
@@ -36,7 +65,52 @@ const ENV_TOKEN_KEYS: Record<string, string> = {
 function applyEnvTokens(account: PlatformAccount): PlatformAccount {
   const envKey = ENV_TOKEN_KEYS[account.platform];
   const envToken = envKey ? process.env[envKey] : undefined;
-  return envToken ? { ...account, access_token: envToken } : account;
+  let next = envToken ? { ...account, access_token: envToken } : account;
+  if (account.platform === "telegram") {
+    const chatId = resolveTelegramChatId(next);
+    if (chatId) next = { ...next, account_id: chatId };
+  }
+  if (account.platform === "facebook") {
+    const pageId = resolveFacebookPageId(next);
+    if (pageId) next = { ...next, account_id: pageId };
+  }
+  return next;
+}
+
+/** Prefer FACEBOOK_PAGE_ID env over stale DB account_id. */
+export function resolveFacebookPageId(
+  account?: { account_id?: string } | null,
+): string | null {
+  return (
+    process.env.FACEBOOK_PAGE_ID?.trim() ||
+    account?.account_id?.trim() ||
+    null
+  );
+}
+
+/** Positive numeric IDs are user DMs — not group/channel targets. */
+export function isTelegramGroupOrChannelId(chatId: string): boolean {
+  const trimmed = chatId.trim();
+  if (trimmed.startsWith("@")) return true;
+  const n = Number(trimmed);
+  return Number.isFinite(n) && n < 0;
+}
+
+/** Prefer TELEGRAM_GROUP_ID, skip stale DM ids (e.g. 481619402). */
+export function resolveTelegramChatId(
+  account?: { account_id?: string } | null,
+): string | null {
+  const candidates = [
+    process.env.TELEGRAM_GROUP_ID?.trim(),
+    process.env.TELEGRAM_CHANNEL_ID?.trim(),
+    process.env.TELEGRAM_CHAT_ID?.trim(),
+    account?.account_id?.trim(),
+  ].filter((id): id is string => Boolean(id));
+
+  for (const id of candidates) {
+    if (isTelegramGroupOrChannelId(id)) return id;
+  }
+  return null;
 }
 
 /**
@@ -68,7 +142,7 @@ function getEnvOnlyAccounts(): PlatformAccount[] {
   }
 
   const fbToken = process.env.FACEBOOK_ACCESS_TOKEN;
-  const fbPageId = process.env.FACEBOOK_PAGE_ID;
+  const fbPageId = resolveFacebookPageId();
   if (fbToken && fbPageId) {
     accounts.push({
       id: "env-facebook",
@@ -88,7 +162,7 @@ function getEnvOnlyAccounts(): PlatformAccount[] {
   }
 
   const tgToken = process.env.TELEGRAM_BOT_TOKEN;
-  const tgChatId = process.env.TELEGRAM_CHANNEL_ID || process.env.TELEGRAM_GROUP_ID || process.env.TELEGRAM_CHAT_ID;
+  const tgChatId = resolveTelegramChatId();
   if (tgToken && tgChatId) {
     accounts.push({
       id: "env-telegram",
@@ -201,6 +275,17 @@ export interface PostResult {
   platformPostId?: string;
   platformUrl?: string;
   error?: string;
+  /** Set when FACEBOOK_GROUP_ID dual-post succeeds (page URL stays in platformUrl). */
+  secondaryUrl?: string;
+  /** Group post failure while page succeeded, or other secondary note. */
+  secondaryError?: string;
+}
+
+/** Persist-friendly note for marketing_posts.error_message after a Facebook dual-post. */
+export function facebookSpreadNote(result: PostResult): string | null {
+  if (result.secondaryError) return result.secondaryError;
+  if (result.secondaryUrl) return `Group: ${result.secondaryUrl}`;
+  return result.error ?? null;
 }
 
 export type YouTubePrivacyStatus = "public" | "private" | "unlisted";
@@ -353,7 +438,11 @@ async function uploadMediaToX(
     let mediaBuffer: Buffer;
     let mediaType: string;
     try {
-      const imgRes = await fetch(mediaUrl, { signal: AbortSignal.timeout(30000) });
+      const isLikelyVideo = /\.(mp4|mov|webm|m4v)(\?|$)/i.test(mediaUrl);
+      const downloadTimeout = isLikelyVideo ? 120_000 : 30_000;
+      const imgRes = await fetch(mediaUrl, {
+        signal: AbortSignal.timeout(downloadTimeout),
+      });
       if (!imgRes.ok) {
         return {
           mediaId: null,
@@ -694,10 +783,426 @@ async function postToX(
 //   text   →  POST /{page}/feed?message=<text>
 //
 // Daily throttle: FACEBOOK_DAILY_POST_LIMIT env var controls how many
-// FB posts are allowed per rolling 24h window. Default = 1 (safe-by-
-// default after the May 2026 page-suspension incident — too many posts
-// triggers Meta's spam classifier and demotes reach). Set to 0 to
-// disable. Throttle check uses a single COUNT(*) on marketing_posts.
+// FB posts are allowed per rolling 24h window. Default = 10 (was 1 after
+// May 2026 page-suspension; restored Jul 2026 once FB posting stabilised).
+// Set to 0 to disable the throttle. Uses COUNT(*) on marketing_posts.
+//
+// Group mirror: FACEBOOK_GROUP_ID triggers a yellow admin note after a
+// successful Page post. Meta removed the Groups API (incl. publish_to_groups)
+// in Graph API v19 — Apr 22, 2024 — so automated group posts always 403.
+// Operators paste the page post URL into the group manually.
+
+/** Shown in admin spread rows when FACEBOOK_GROUP_ID is set (Page still posts). */
+export const FACEBOOK_GROUP_MANUAL_NOTE =
+  "Group: paste page link manually — Meta removed Groups API (Apr 2024)";
+
+/** Build a public Facebook URL from Graph post/photo ids (fallback when permalink fetch fails). */
+export function normalizeFacebookPostId(
+  pageId: string,
+  postId: string,
+): string {
+  const trimmed = postId.trim();
+  if (trimmed.includes("_")) return trimmed;
+  const page = pageId.trim();
+  if (!page) return trimmed;
+  // Photo/video uploads often return a bare media id — Graph metrics need page_id_media_id.
+  return `${page}_${trimmed}`;
+}
+
+const FB_GRAPH = "https://graph.facebook.com/v21.0";
+
+/**
+ * Photo/video uploads store a media id; comments live on the feed `post_id`.
+ * Probe Graph for post_id before fetching engagement metrics.
+ */
+export async function resolveFacebookMetricsPostId(
+  pageId: string,
+  postId: string,
+  accessToken: string,
+): Promise<string> {
+  const engagement = await fetchFacebookPostEngagement(
+    pageId,
+    postId,
+    accessToken,
+  );
+  if (engagement?.feedPostId) return engagement.feedPostId;
+  return normalizeFacebookPostId(pageId, postId);
+}
+
+export interface FacebookPostEngagement {
+  likes: number;
+  comments: number;
+  shares: number;
+  /** Feed post id when resolved from a photo/video id. */
+  feedPostId?: string;
+}
+
+const FB_ENGAGEMENT_FIELDS =
+  "reactions.summary(true),comments.summary(true),shares";
+
+const FB_PUBLISHED_POSTS_PAGE_SIZE = 50;
+const FB_PUBLISHED_POSTS_MAX_PAGES = 3;
+/** Match spread rows to feed posts when Graph blocks direct photo-id reads. */
+const FB_POSTED_AT_MATCH_MS = 15 * 60 * 1000;
+
+export function facebookGraphPostSuffix(
+  pageId: string,
+  postId: string,
+): string {
+  const trimmed = postId.trim();
+  if (trimmed.includes("_")) {
+    return trimmed.slice(trimmed.indexOf("_") + 1);
+  }
+  const page = pageId.trim();
+  if (page && trimmed.startsWith(`${page}_`)) {
+    return trimmed.slice(page.length + 1);
+  }
+  return trimmed;
+}
+
+/** True when a published_posts row corresponds to the id we stored at spread time. */
+export function facebookGraphIdsMatch(
+  pageId: string,
+  storedId: string,
+  graphId: string,
+): boolean {
+  const stored = storedId.trim();
+  const graph = graphId.trim();
+  if (!stored || !graph) return false;
+  if (stored === graph) return true;
+  if (normalizeFacebookPostId(pageId, stored) === graph) return true;
+  return facebookGraphPostSuffix(pageId, stored) === facebookGraphPostSuffix(pageId, graph);
+}
+
+interface PublishedPostEngagementRow {
+  id: string;
+  created_time?: string;
+  reactions?: { summary?: { total_count?: number } };
+  comments?: { summary?: { total_count?: number } };
+  shares?: { count?: number };
+}
+
+/**
+ * Legacy photo uploads store bare media ids Graph refuses to read directly.
+ * Scan recent feed posts and match by id suffix or posted_at proximity.
+ */
+export async function findFacebookEngagementViaPublishedPosts(
+  pageId: string,
+  postId: string,
+  accessToken: string,
+  opts?: { postedAt?: string | null },
+): Promise<{ engagement: FacebookPostEngagement; feedPostId: string } | null> {
+  const page = pageId.trim();
+  if (!page) return null;
+
+  let url: URL | null = new URL(`${FB_GRAPH}/${page}/published_posts`);
+  url.searchParams.set("fields", `id,created_time,${FB_ENGAGEMENT_FIELDS}`);
+  url.searchParams.set("limit", String(FB_PUBLISHED_POSTS_PAGE_SIZE));
+  url.searchParams.set("access_token", accessToken);
+
+  const postedAtMs = opts?.postedAt ? Date.parse(opts.postedAt) : Number.NaN;
+  const rows: PublishedPostEngagementRow[] = [];
+
+  for (let pageNum = 0; pageNum < FB_PUBLISHED_POSTS_MAX_PAGES && url; pageNum++) {
+    const res = await fetch(url.toString(), {
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!res.ok) {
+      console.error(
+        `[FB metrics] published_posts HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`,
+      );
+      return null;
+    }
+    const batch = (await res.json()) as {
+      data?: PublishedPostEngagementRow[];
+      paging?: { next?: string };
+    };
+    rows.push(...(batch.data ?? []));
+    url = batch.paging?.next ? new URL(batch.paging.next) : null;
+  }
+
+  for (const row of rows) {
+    if (facebookGraphIdsMatch(page, postId, row.id)) {
+      return {
+        feedPostId: row.id,
+        engagement: parseFacebookEngagement(row),
+      };
+    }
+  }
+
+  if (Number.isFinite(postedAtMs)) {
+    let best: { row: PublishedPostEngagementRow; delta: number } | null = null;
+    for (const row of rows) {
+      if (!row.created_time) continue;
+      const delta = Math.abs(Date.parse(row.created_time) - postedAtMs);
+      if (delta <= FB_POSTED_AT_MATCH_MS && (!best || delta < best.delta)) {
+        best = { row, delta };
+      }
+    }
+    if (best) {
+      console.log(
+        `[FB metrics] resolved stale id ${postId} → feed post ${best.row.id} via posted_at (Δ${Math.round(best.delta / 1000)}s)`,
+      );
+      return {
+        feedPostId: best.row.id,
+        engagement: parseFacebookEngagement(best.row),
+      };
+    }
+  }
+
+  return null;
+}
+
+function parseFacebookEngagement(data: {
+  reactions?: { summary?: { total_count?: number } };
+  comments?: { summary?: { total_count?: number } };
+  shares?: { count?: number };
+}): FacebookPostEngagement {
+  return {
+    likes: data.reactions?.summary?.total_count ?? 0,
+    comments: data.comments?.summary?.total_count ?? 0,
+    shares: data.shares?.count ?? 0,
+  };
+}
+
+export interface FetchFacebookPostEngagementOpts {
+  /** Spread timestamp — used to match feed posts when Graph blocks photo-id reads. */
+  postedAt?: string | null;
+}
+
+/** Read likes/comments/shares; for bare photo ids, follows Graph `post_id` to the feed post. */
+export async function fetchFacebookPostEngagement(
+  pageId: string,
+  postId: string,
+  accessToken: string,
+  opts?: FetchFacebookPostEngagementOpts,
+): Promise<FacebookPostEngagement | null> {
+  const normalized = normalizeFacebookPostId(pageId, postId);
+
+  async function pullEngagement(id: string) {
+    const url = new URL(`${FB_GRAPH}/${id}`);
+    url.searchParams.set("fields", FB_ENGAGEMENT_FIELDS);
+    url.searchParams.set("access_token", accessToken);
+    const res = await fetch(url.toString(), {
+      signal: AbortSignal.timeout(15_000),
+    });
+    const body = await res.text();
+    if (!res.ok) {
+      return {
+        ok: false as const,
+        status: res.status,
+        body,
+        id,
+      };
+    }
+    const data = JSON.parse(body) as {
+      reactions?: { summary?: { total_count?: number } };
+      comments?: { summary?: { total_count?: number } };
+      shares?: { count?: number };
+    };
+    return { ok: true as const, id, data };
+  }
+
+  async function probeFeedPostId(id: string): Promise<string | null> {
+    const url = new URL(`${FB_GRAPH}/${id}`);
+    url.searchParams.set("fields", "post_id");
+    url.searchParams.set("access_token", accessToken);
+    const res = await fetch(url.toString(), {
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { post_id?: string };
+    return data.post_id?.trim() || null;
+  }
+
+  function logPullFailure(
+    result: { status: number; body: string; id: string },
+    storedId: string,
+  ) {
+    console.error(
+      `[FB metrics] HTTP ${result.status} for ${result.id}${result.id !== storedId ? ` (stored as ${storedId})` : ""}: ${result.body.slice(0, 200)}`,
+    );
+    if (result.status === 403) {
+      console.error(
+        "[FB metrics] direct Graph read blocked — often a stale photo id; will try published_posts feed",
+      );
+    }
+  }
+
+  async function tryPublishedPostsFallback(): Promise<FacebookPostEngagement | null> {
+    const found = await findFacebookEngagementViaPublishedPosts(
+      pageId,
+      postId,
+      accessToken,
+      opts,
+    );
+    if (!found) return null;
+    return { ...found.engagement, feedPostId: found.feedPostId };
+  }
+
+  let feedPostId: string | undefined;
+  let current = await pullEngagement(normalized);
+
+  if (!current.ok) {
+    logPullFailure(current, postId);
+    const resolved = await probeFeedPostId(normalized);
+    if (resolved && resolved !== normalized) {
+      feedPostId = resolved;
+      current = await pullEngagement(resolved);
+    }
+    if (!current.ok) {
+      if (current.id !== normalized) {
+        logPullFailure(current, postId);
+      }
+      const fromFeed = await tryPublishedPostsFallback();
+      if (fromFeed) return fromFeed;
+      return null;
+    }
+  } else {
+    let engagement = parseFacebookEngagement(current.data);
+    const hasSignal =
+      engagement.likes + engagement.comments + engagement.shares > 0;
+    if (!hasSignal) {
+      const resolved = await probeFeedPostId(normalized);
+      if (resolved && resolved !== normalized) {
+        const feed = await pullEngagement(resolved);
+        if (feed.ok) {
+          engagement = parseFacebookEngagement(feed.data);
+          feedPostId = resolved;
+        }
+      } else if (opts?.postedAt) {
+        const fromFeed = await tryPublishedPostsFallback();
+        if (fromFeed) return fromFeed;
+      }
+    }
+    if (engagement.comments > 0 && feedPostId) {
+      console.log(
+        `[FB metrics] ${engagement.comments} comments on feed post ${feedPostId}`,
+      );
+    }
+    return { ...engagement, feedPostId };
+  }
+
+  const engagement = {
+    ...parseFacebookEngagement(current.data),
+    feedPostId,
+  };
+  if (engagement.comments > 0 && feedPostId) {
+    console.log(
+      `[FB metrics] ${engagement.comments} comments on feed post ${feedPostId}`,
+    );
+  }
+  return engagement;
+}
+
+/** Build a public Facebook URL from Graph post/photo ids (fallback when permalink fetch fails). */
+export function buildFacebookPlatformUrl(
+  graphId: string,
+  postId: string,
+  opts: { isVideo: boolean; hasMedia: boolean },
+): string {
+  if (postId.includes("_")) {
+    const underscore = postId.indexOf("_");
+    const pgId = postId.slice(0, underscore);
+    const pId = postId.slice(underscore + 1);
+    if (opts.isVideo) {
+      return `https://www.facebook.com/${pgId}/videos/${pId}`;
+    }
+    // Page photo uploads return post_id — use feed permalink, not photo/?fbid (404s).
+    return `https://www.facebook.com/${pgId}/posts/${pId}`;
+  }
+  if (opts.isVideo) {
+    return `https://www.facebook.com/${graphId}/videos/${postId}`;
+  }
+  if (opts.hasMedia) {
+    return `https://www.facebook.com/photo/?fbid=${postId}`;
+  }
+  if (graphId.startsWith("160") || graphId.length > 12) {
+    return `https://www.facebook.com/groups/${graphId}`;
+  }
+  return `https://facebook.com/${postId}`;
+}
+
+async function fetchFacebookPermalink(
+  postId: string,
+  accessToken: string,
+): Promise<string | undefined> {
+  try {
+    const url = new URL(`https://graph.facebook.com/v21.0/${postId}`);
+    url.searchParams.set("fields", "permalink_url");
+    url.searchParams.set("access_token", accessToken);
+    const res = await fetch(url.toString(), { signal: AbortSignal.timeout(15_000) });
+    if (!res.ok) return undefined;
+    const data = (await res.json()) as { permalink_url?: string };
+    return data.permalink_url?.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function postFacebookGraphTarget(
+  graphId: string,
+  accessToken: string,
+  text: string,
+  mediaUrl?: string | null,
+): Promise<PostResult> {
+  const isVideo =
+    !!mediaUrl && (mediaUrl.includes(".mp4") || mediaUrl.toLowerCase().includes("video"));
+  const graphBase = `https://graph.facebook.com/v21.0/${graphId}`;
+  let endpoint: string;
+  const params: Record<string, string> = { access_token: accessToken };
+
+  if (mediaUrl && isVideo) {
+    endpoint = `${graphBase}/videos`;
+    params.file_url = mediaUrl;
+    params.description = text;
+  } else if (mediaUrl) {
+    endpoint = `${graphBase}/photos`;
+    params.url = mediaUrl;
+    params.message = text;
+  } else {
+    endpoint = `${graphBase}/feed`;
+    params.message = text;
+  }
+
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams(params).toString(),
+    signal: AbortSignal.timeout(60_000),
+  });
+
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => "(unreadable)");
+    return {
+      success: false,
+      error: `Facebook API ${res.status}: ${errBody.slice(0, 300)}`,
+    };
+  }
+
+  const data = (await res.json()) as { id?: string; post_id?: string };
+  let postId: string | undefined;
+  if (data.post_id) {
+    postId = normalizeFacebookPostId(graphId, data.post_id);
+  } else if (data.id) {
+    postId = await resolveFacebookMetricsPostId(graphId, data.id, accessToken);
+  }
+
+  let platformUrl: string | undefined;
+  if (postId) {
+    platformUrl = buildFacebookPlatformUrl(graphId, postId, {
+      isVideo,
+      hasMedia: !!mediaUrl,
+    });
+    // Prefer Graph permalink (often facebook.com/share/p/…) over constructed URLs.
+    if (postId.includes("_")) {
+      const permalink = await fetchFacebookPermalink(postId, accessToken);
+      if (permalink) platformUrl = permalink;
+    }
+  }
+
+  return { success: true, platformPostId: postId, platformUrl };
+}
 
 async function postToFacebook(
   account: PlatformAccount,
@@ -716,7 +1221,7 @@ async function postToFacebook(
 
   // Daily throttle.
   const limitRaw = process.env.FACEBOOK_DAILY_POST_LIMIT;
-  const dailyLimit = limitRaw === undefined ? 1 : Number.parseInt(limitRaw, 10);
+  const dailyLimit = limitRaw === undefined ? 10 : Number.parseInt(limitRaw, 10);
   if (Number.isFinite(dailyLimit) && dailyLimit > 0) {
     try {
       const sql = getDb();
@@ -744,67 +1249,34 @@ async function postToFacebook(
     }
   }
 
-  // Route to the right Graph endpoint based on media type.
-  const isVideo =
-    !!mediaUrl && (mediaUrl.includes(".mp4") || mediaUrl.toLowerCase().includes("video"));
-  const graphBase = `https://graph.facebook.com/v21.0/${pageId}`;
-  let endpoint: string;
-  const params: Record<string, string> = { access_token: accessToken };
-
-  if (mediaUrl && isVideo) {
-    endpoint = `${graphBase}/videos`;
-    params.file_url = mediaUrl;
-    params.description = text;
-  } else if (mediaUrl) {
-    endpoint = `${graphBase}/photos`;
-    params.url = mediaUrl;
-    params.message = text;
-  } else {
-    endpoint = `${graphBase}/feed`;
-    params.message = text;
-  }
-
+  let pageResult: PostResult;
   try {
-    const res = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams(params).toString(),
-      signal: AbortSignal.timeout(60_000),
-    });
-
-    if (!res.ok) {
-      const errBody = await res.text().catch(() => "(unreadable)");
-      return {
-        success: false,
-        error: `Facebook API ${res.status}: ${errBody.slice(0, 300)}`,
-      };
-    }
-
-    const data = (await res.json()) as { id?: string; post_id?: string };
-    const postId = data.post_id ?? data.id;
-
-    // Build the right public URL for the post type.
-    let platformUrl: string | undefined;
-    if (postId) {
-      if (isVideo) {
-        platformUrl = `https://www.facebook.com/${pageId}/videos/${postId.replace(`${pageId}_`, "")}`;
-      } else if (mediaUrl) {
-        platformUrl = `https://www.facebook.com/photo/?fbid=${postId.replace(`${pageId}_`, "")}`;
-      } else if (postId.includes("_")) {
-        const [pgId, pId] = postId.split("_");
-        platformUrl = `https://www.facebook.com/${pgId}/posts/${pId}`;
-      } else {
-        platformUrl = `https://facebook.com/${postId}`;
-      }
-    }
-
-    return { success: true, platformPostId: postId, platformUrl };
+    pageResult = await postFacebookGraphTarget(pageId, accessToken, text, mediaUrl);
   } catch (err) {
     return {
       success: false,
       error: `Facebook error: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
+
+  if (!pageResult.success) {
+    return pageResult;
+  }
+
+  const groupId = process.env.FACEBOOK_GROUP_ID?.trim();
+  if (groupId) {
+    const groupUrl = `https://www.facebook.com/groups/${groupId}`;
+    console.log(
+      `[facebook] Page OK — group ${groupId} skipped (Groups API deprecated; manual share: ${groupUrl})`,
+    );
+    return {
+      ...pageResult,
+      secondaryUrl: groupUrl,
+      secondaryError: FACEBOOK_GROUP_MANUAL_NOTE,
+    };
+  }
+
+  return pageResult;
 }
 
 // ── Telegram poster ─────────────────────────────────────────────────────────
@@ -825,62 +1297,88 @@ async function postToTelegram(
   }
 
   try {
-    if (mediaUrl) {
-      // Use download+multipart for media (Telegram can't reliably fetch Blob URLs).
-      // sendPhoto caps at 10 MB; breaking-news MP4s are ~15-20 MB, so route
-      // video extensions through sendVideo (50 MB cap, inline player).
-      const isVideo = /\.(mp4|mov|webm|m4v)(\?|$)/i.test(mediaUrl);
-      const result = isVideo
-        ? await sendTelegramVideo(botToken, chatId, mediaUrl, text)
-        : await sendTelegramPhoto(botToken, chatId, mediaUrl, text);
-      if (!result.ok) {
-        return {
-          success: false,
-          error: `Telegram ${isVideo ? "video" : "photo"} upload failed: ${result.error}`,
-        };
-      }
-      return {
-        success: true,
-        platformPostId: result.messageId?.toString(),
-        platformUrl: result.messageId
-          ? `https://t.me/${account.account_name}/${result.messageId}`
-          : undefined,
-      };
-    } else {
-      // Text-only via JSON API
-      const tgApiUrl = `https://api.telegram.org/bot${botToken}/sendMessage`;
-      const res = await fetch(tgApiUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text,
-          parse_mode: "HTML",
-        }),
-      });
+    let effectiveMediaUrl = mediaUrl;
+    let hadOversizedVideo = false;
 
-      if (!res.ok) {
-        const errBody = await res.text().catch(() => "(unreadable)");
-        return {
-          success: false,
-          error: `Telegram API ${res.status}: ${errBody.slice(0, 300)}`,
-        };
+    if (effectiveMediaUrl) {
+      const isVideo = /\.(mp4|mov|webm|m4v)(\?|$)/i.test(effectiveMediaUrl);
+      if (isVideo) {
+        const bytes = await getRemoteContentLength(effectiveMediaUrl);
+        if (bytes !== null && bytes > TELEGRAM_VIDEO_MAX_BYTES) {
+          console.warn(
+            `[postToTelegram] Video ${(bytes / 1024 / 1024).toFixed(1)}MB exceeds Telegram cap — text + link only`,
+          );
+          effectiveMediaUrl = null;
+          hadOversizedVideo = true;
+        }
       }
 
-      const data = (await res.json()) as {
-        ok: boolean;
-        result?: { message_id?: number };
-      };
-      const messageId = data.result?.message_id;
+      if (effectiveMediaUrl) {
+        const result = isVideo
+          ? await sendTelegramVideo(botToken, chatId, effectiveMediaUrl, text)
+          : await sendTelegramPhoto(botToken, chatId, effectiveMediaUrl, text);
+        if (result.ok) {
+          return {
+            success: true,
+            platformPostId: result.messageId?.toString(),
+            platformUrl: result.messageId
+              ? `https://t.me/${account.account_name}/${result.messageId}`
+              : undefined,
+          };
+        }
+        const tooLarge = /entity too large|file is too big|file too big|request entity too large/i.test(
+          result.error ?? "",
+        );
+        if (tooLarge && isVideo) {
+          console.warn(
+            `[postToTelegram] Upload rejected as too large — retrying text-only`,
+          );
+          hadOversizedVideo = true;
+        } else {
+          return {
+            success: false,
+            error: `Telegram ${isVideo ? "video" : "photo"} upload failed: ${result.error}`,
+          };
+        }
+      }
+    }
 
+    // Text-only — no media, oversized video, or upload rejected
+    const tgApiUrl = `https://api.telegram.org/bot${botToken}/sendMessage`;
+    const res = await fetch(tgApiUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        parse_mode: "HTML",
+      }),
+    });
+
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => "(unreadable)");
       return {
-        success: data.ok,
-        platformPostId: messageId?.toString(),
-        platformUrl: messageId
-          ? `https://t.me/${account.account_name}/${messageId}`
-          : undefined,
+        success: false,
+        error: `Telegram API ${res.status}: ${errBody.slice(0, 300)}`,
       };
     }
+
+    const data = (await res.json()) as {
+      ok: boolean;
+      result?: { message_id?: number };
+    };
+    const messageId = data.result?.message_id;
+
+    return {
+      success: data.ok,
+      platformPostId: messageId?.toString(),
+      platformUrl: messageId
+        ? `https://t.me/${account.account_name}/${messageId}`
+        : undefined,
+      error: hadOversizedVideo
+        ? "posted text-only (video exceeds Telegram 50MB cap)"
+        : undefined,
+    };
   } catch (err) {
     return {
       success: false,
@@ -1174,7 +1672,7 @@ function resolveYouTubeMetadata(
   };
 }
 
-async function refreshYouTubeToken(): Promise<string | null> {
+export async function refreshYouTubeToken(): Promise<string | null> {
   const clientId = process.env.YOUTUBE_CLIENT_ID;
   const clientSecret = process.env.YOUTUBE_CLIENT_SECRET;
   let refreshToken = process.env.YOUTUBE_REFRESH_TOKEN;
