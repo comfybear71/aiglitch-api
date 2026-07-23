@@ -126,7 +126,7 @@ export function enrichPlatformBreakdown(
         ? primaryRaw
         : null
       : cfg.postMetricsSupported
-        ? primaryRaw > 0 || row.lastMetricsSync
+        ? primaryRaw != null && (primaryRaw > 0 || row.lastMetricsSync)
           ? primaryRaw
           : null
         : primaryRaw != null && primaryRaw > 0
