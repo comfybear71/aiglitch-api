@@ -2,6 +2,12 @@ import { randomUUID } from "node:crypto";
 import { getDb } from "@/lib/db";
 import { adaptContentForPlatform, pickTopPosts } from "./content-adapter";
 import { ensureMarketingTables } from "./ensure-tables";
+import {
+  computeOperationalSummary,
+  enrichPlatformBreakdown,
+  type EnrichedPlatformBreakdown,
+  type PlatformBreakdownRow,
+} from "./platform-metrics";
 import { getActiveAccounts, postToPlatform } from "./platforms";
 import { generatePostImage } from "./post-image";
 import { pickFallbackMedia } from "./spread-post";
@@ -16,7 +22,7 @@ export { getAccountForPlatform } from "./platforms";
 export { collectAllMetrics } from "./metrics-collector";
 export type { CollectResult, CollectDetail } from "./metrics-collector";
 export { pickTopPosts } from "./content-adapter";
-export { getActiveAccounts } from "./platforms";
+export type { EnrichedPlatformBreakdown, PlatformBreakdownRow } from "./platform-metrics";
 
 interface MarketingDetail {
   platform: string;
@@ -221,15 +227,20 @@ export async function runMarketingCycle(): Promise<MarketingCycleResult> {
   return { posted, failed, skipped, details };
 }
 
-interface PlatformBreakdown {
-  platform: string;
-  posted: number;
-  queued: number;
-  failed: number;
-  impressions: number;
-  likes: number;
-  views: number;
-  lastPostedAt: string | null;
+interface PlatformBreakdown extends PlatformBreakdownRow {}
+
+export interface MarketingStats {
+  totalPosted: number;
+  totalQueued: number;
+  totalFailed: number;
+  totalImpressions: number;
+  totalLikes: number;
+  totalViews: number;
+  successRate: number;
+  platformBreakdown: EnrichedPlatformBreakdown[];
+  recentPosts: RecentMarketingPost[];
+  dailyMetrics: DailyMetric[];
+  campaigns: CampaignRow[];
 }
 
 interface RecentMarketingPost {
@@ -266,19 +277,6 @@ interface CampaignRow {
   posts_per_day: number;
   created_at: string;
   updated_at: string;
-}
-
-export interface MarketingStats {
-  totalPosted: number;
-  totalQueued: number;
-  totalFailed: number;
-  totalImpressions: number;
-  totalLikes: number;
-  totalViews: number;
-  platformBreakdown: PlatformBreakdown[];
-  recentPosts: RecentMarketingPost[];
-  dailyMetrics: DailyMetric[];
-  campaigns: CampaignRow[];
 }
 
 /**
@@ -323,9 +321,12 @@ export async function getMarketingStats(): Promise<MarketingStats> {
       COUNT(*) FILTER (WHERE mp.status = 'posted') AS posted,
       COUNT(*) FILTER (WHERE mp.status = 'queued') AS queued,
       COUNT(*) FILTER (WHERE mp.status = 'failed') AS failed,
-      COALESCE(SUM(mp.impressions), 0) AS impressions,
-      COALESCE(SUM(mp.likes), 0) AS likes,
-      COALESCE(SUM(mp.views), 0) AS views,
+      COALESCE(SUM(mp.impressions) FILTER (WHERE mp.status = 'posted'), 0) AS impressions,
+      COALESCE(SUM(mp.likes) FILTER (WHERE mp.status = 'posted'), 0) AS likes,
+      COALESCE(SUM(mp.views) FILTER (WHERE mp.status = 'posted'), 0) AS views,
+      COALESCE(SUM(mp.shares) FILTER (WHERE mp.status = 'posted'), 0) AS shares,
+      COALESCE(SUM(mp.comments) FILTER (WHERE mp.status = 'posted'), 0) AS comments,
+      MAX(mp.metrics_updated_at) AS last_metrics_sync,
       (
         SELECT mpa.last_posted_at FROM marketing_platform_accounts mpa
         WHERE mpa.platform = mp.platform AND mpa.is_active = true LIMIT 1
@@ -334,8 +335,22 @@ export async function getMarketingStats(): Promise<MarketingStats> {
     GROUP BY mp.platform
     ORDER BY posted DESC
   `) as unknown as Array<
-    Omit<PlatformBreakdown, "lastPostedAt"> & { last_posted_at: string | null }
+    Omit<PlatformBreakdownRow, "followers" | "lastMetricsSync" | "lastPostedAt"> & {
+      last_posted_at: string | null;
+      last_metrics_sync: string | null;
+    }
   >;
+
+  const followerRows = (await sql`
+    SELECT DISTINCT ON (platform) platform, follower_count
+    FROM marketing_metrics_daily
+    WHERE follower_count > 0
+    ORDER BY platform, date DESC
+  `.catch(() => [])) as unknown as Array<{ platform: string; follower_count: number }>;
+
+  const followersByPlatform = new Map(
+    followerRows.map((r) => [r.platform, Number(r.follower_count)]),
+  );
 
   const recentPosts = (await sql`
     SELECT
@@ -362,23 +377,36 @@ export async function getMarketingStats(): Promise<MarketingStats> {
     ORDER BY updated_at DESC
   `.catch(() => [])) as unknown as CampaignRow[];
 
-  return {
+  const platformRows: PlatformBreakdownRow[] = breakdown.map((b) => ({
+    platform: b.platform,
+    posted: Number(b.posted),
+    queued: Number(b.queued),
+    failed: Number(b.failed),
+    impressions: Number(b.impressions),
+    likes: Number(b.likes),
+    views: Number(b.views),
+    shares: Number(b.shares),
+    comments: Number(b.comments),
+    lastPostedAt: b.last_posted_at,
+    lastMetricsSync: b.last_metrics_sync,
+    followers: followersByPlatform.get(b.platform) ?? null,
+  }));
+
+  const operational = computeOperationalSummary(platformRows, {
     totalPosted: Number(t.total_posted),
     totalQueued: Number(t.total_queued),
     totalFailed: Number(t.total_failed),
+  });
+
+  return {
+    totalPosted: operational.totalPosted,
+    totalQueued: operational.totalQueued,
+    totalFailed: operational.totalFailed,
     totalImpressions: Number(t.total_impressions),
     totalLikes: Number(t.total_likes),
     totalViews: Number(t.total_views),
-    platformBreakdown: breakdown.map((b) => ({
-      platform: b.platform,
-      posted: Number(b.posted),
-      queued: Number(b.queued),
-      failed: Number(b.failed),
-      impressions: Number(b.impressions),
-      likes: Number(b.likes),
-      views: Number(b.views),
-      lastPostedAt: b.last_posted_at,
-    })),
+    successRate: operational.successRate,
+    platformBreakdown: platformRows.map(enrichPlatformBreakdown),
     recentPosts,
     dailyMetrics,
     campaigns,
