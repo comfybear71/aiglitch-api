@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { marketingEnsureSqlStubs } from "@/lib/marketing/ensure-tables";
 
 type RowSet = unknown[];
 const fake: { results: RowSet[] } = { results: [] };
@@ -56,6 +57,16 @@ vi.mock("@/lib/marketing/content-adapter", () => ({
 vi.mock("@/lib/telegram", () => ({
   sendTelegramMessage: vi.fn().mockResolvedValue(undefined),
 }));
+
+vi.mock("next/server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/server")>();
+  return {
+    ...actual,
+    after: (fn: () => void | Promise<void>) => {
+      void fn();
+    },
+  };
+});
 
 beforeEach(() => {
   fake.results = [];
@@ -123,7 +134,7 @@ describe("auth", () => {
 describe("GET actions", () => {
   it("default action 'stats' returns getMarketingStats payload", async () => {
     mockIsAdmin = true;
-    fake.results = [[], []]; // ensure tables
+    fake.results = [...marketingEnsureSqlStubs()]; // ensure tables
     getMarketingStatsMock.mockResolvedValue({ totalPosted: 5 });
     const res = await callGET();
     expect(res.status).toBe(200);
@@ -133,13 +144,13 @@ describe("GET actions", () => {
 
   it("test_token returns 400 without ?platform=", async () => {
     mockIsAdmin = true;
-    fake.results = [[], []];
+    fake.results = [...marketingEnsureSqlStubs()];
     expect((await callGET("action=test_token")).status).toBe(400);
   });
 
   it("test_token forwards platform to testPlatformToken", async () => {
     mockIsAdmin = true;
-    fake.results = [[], []];
+    fake.results = [...marketingEnsureSqlStubs()];
     testPlatformTokenMock.mockResolvedValue({ ok: true });
     const res = await callGET("action=test_token&platform=x");
     expect(res.status).toBe(200);
@@ -148,7 +159,7 @@ describe("GET actions", () => {
 
   it("preview_hero_prompt returns 200 with prompt", async () => {
     mockIsAdmin = true;
-    fake.results = [[], []];
+    fake.results = [...marketingEnsureSqlStubs()];
     previewHeroPromptMock.mockResolvedValue("HERO PROMPT TEXT");
     const res = await callGET("action=preview_hero_prompt");
     expect(res.status).toBe(200);
@@ -157,7 +168,7 @@ describe("GET actions", () => {
 
   it("unknown action returns 400", async () => {
     mockIsAdmin = true;
-    fake.results = [[], []];
+    fake.results = [...marketingEnsureSqlStubs()];
     expect((await callGET("action=does-not-exist")).status).toBe(400);
   });
 });
@@ -165,13 +176,13 @@ describe("GET actions", () => {
 describe("POST actions", () => {
   it("missing action returns 400", async () => {
     mockIsAdmin = true;
-    fake.results = [[], []];
+    fake.results = [...marketingEnsureSqlStubs()];
     expect((await callPOST({})).status).toBe(400);
   });
 
   it("run_cycle delegates to runMarketingCycle", async () => {
     mockIsAdmin = true;
-    fake.results = [[], []];
+    fake.results = [...marketingEnsureSqlStubs()];
     runMarketingCycleMock.mockResolvedValue({
       posted: 1,
       failed: 0,
@@ -185,7 +196,7 @@ describe("POST actions", () => {
 
   it("create_campaign INSERTs and returns the new id", async () => {
     mockIsAdmin = true;
-    fake.results = [[], [], []]; // ensure + INSERT
+    fake.results = [...marketingEnsureSqlStubs(), []]; // ensure + INSERT
     const res = await callPOST({ action: "create_campaign", name: "Test" });
     const body = (await res.json()) as { id: string };
     expect(body.id).toMatch(/^[0-9a-f-]{36}$/);
@@ -194,7 +205,7 @@ describe("POST actions", () => {
   it("save_account inserts when none exists, updates when one does", async () => {
     mockIsAdmin = true;
     // First call: no existing → INSERT path
-    fake.results = [[], [], [], []]; // ensure + SELECT existing (empty) + INSERT
+    fake.results = [...marketingEnsureSqlStubs(), [], []]; // ensure + SELECT existing (empty) + INSERT
     let res = await callPOST({
       action: "save_account",
       platform: "x",
@@ -203,7 +214,7 @@ describe("POST actions", () => {
     expect(res.status).toBe(200);
 
     // Second call: existing → UPDATE path
-    fake.results = [[], [], [{ id: "acc-1" }], []];
+    fake.results = [...marketingEnsureSqlStubs(), [{ id: "acc-1" }], []];
     res = await callPOST({
       action: "save_account",
       platform: "x",
@@ -214,7 +225,7 @@ describe("POST actions", () => {
 
   it("test_post 404 when no account configured", async () => {
     mockIsAdmin = true;
-    fake.results = [[], []];
+    fake.results = [...marketingEnsureSqlStubs()];
     getAnyAccountForPlatformMock.mockResolvedValue(null);
     const res = await callPOST({ action: "test_post", platform: "x" });
     expect(res.status).toBe(404);
@@ -222,7 +233,7 @@ describe("POST actions", () => {
 
   it("test_post forwards to postToPlatform when account exists", async () => {
     mockIsAdmin = true;
-    fake.results = [[], []];
+    fake.results = [...marketingEnsureSqlStubs()];
     getAnyAccountForPlatformMock.mockResolvedValue({
       id: "a",
       platform: "x",
@@ -237,10 +248,10 @@ describe("POST actions", () => {
 
   it("delete_post 400 without id, 200 with id", async () => {
     mockIsAdmin = true;
-    fake.results = [[], []];
+    fake.results = [...marketingEnsureSqlStubs()];
     expect((await callPOST({ action: "delete_post" })).status).toBe(400);
 
-    fake.results = [[], [], []]; // ensure + DELETE
+    fake.results = [...marketingEnsureSqlStubs(), []]; // ensure + DELETE
     expect(
       (await callPOST({ action: "delete_post", id: "p1" })).status,
     ).toBe(200);
@@ -251,7 +262,7 @@ describe("POST actions", () => {
     generateHeroImageMock.mockResolvedValue({ url: "https://blob/hero.jpg" });
     getActiveAccountsMock.mockResolvedValue([]);
     // ensure + settings UPSERT + posts INSERT + persona UPDATE
-    fake.results = [[], [], [], []];
+    fake.results = [...marketingEnsureSqlStubs(), [], [], []];
     const res = await callPOST({ action: "generate_hero" });
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -264,7 +275,7 @@ describe("POST actions", () => {
     mockIsAdmin = true;
     generatePosterMock.mockResolvedValue({ url: "https://blob/poster.jpg" });
     getActiveAccountsMock.mockResolvedValue([]);
-    fake.results = [[], [], [], []];
+    fake.results = [...marketingEnsureSqlStubs(), [], [], []];
     const res = await callPOST({
       action: "generate_poster",
       focus_topics: JSON.stringify(["channels"]),
@@ -278,7 +289,7 @@ describe("POST actions", () => {
   it("generate_hero returns 502 when generator yields no url", async () => {
     mockIsAdmin = true;
     generateHeroImageMock.mockResolvedValue({ url: null, error: "xAI down" });
-    fake.results = [[]]; // ensure only
+    fake.results = [...marketingEnsureSqlStubs()]; // ensure only
     const res = await callPOST({ action: "generate_hero" });
     expect(res.status).toBe(502);
   });

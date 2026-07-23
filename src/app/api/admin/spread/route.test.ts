@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { marketingEnsureSqlStubs } from "@/lib/marketing/ensure-tables";
 
 type RowSet = unknown[];
 type SqlCall = { strings: TemplateStringsArray; values: unknown[] };
@@ -112,7 +113,7 @@ describe("POST /api/admin/spread — auth + validation", () => {
   it("400 when no active accounts", async () => {
     mockIsAdmin = true;
     getActiveAccountsMock.mockResolvedValue([]);
-    fake.results = [[], []]; // ensure tables
+    fake.results = [...marketingEnsureSqlStubs()];
     const res = await callPOST({ post_id: "p-1" });
     expect(res.status).toBe(400);
   });
@@ -120,7 +121,7 @@ describe("POST /api/admin/spread — auth + validation", () => {
   it("400 when no post_id, post_ids, or text given", async () => {
     mockIsAdmin = true;
     getActiveAccountsMock.mockResolvedValue([X_ACCOUNT]);
-    fake.results = [[], []];
+    fake.results = [...marketingEnsureSqlStubs()];
     const res = await callPOST({});
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string };
@@ -131,8 +132,7 @@ describe("POST /api/admin/spread — auth + validation", () => {
     mockIsAdmin = true;
     getActiveAccountsMock.mockResolvedValue([X_ACCOUNT]);
     fake.results = [
-      [], // ensure
-      [],
+      ...marketingEnsureSqlStubs(),
       [], // UPDATE channel-tag (skipped because no channel)
       [], // SELECT join → empty
     ];
@@ -150,8 +150,7 @@ describe("POST /api/admin/spread — text mode", () => {
       platformPostId: "tw-1",
     });
     fake.results = [
-      [], // ensure marketing_posts
-      [], // ensure marketing_platform_accounts
+      ...marketingEnsureSqlStubs(),
       [], // INSERT posts
       [], // UPDATE persona post_count
       [], // INSERT marketing_posts (X)
@@ -176,8 +175,7 @@ describe("POST /api/admin/spread — text mode", () => {
     getActiveAccountsMock.mockResolvedValue([X_ACCOUNT]);
     postToPlatformMock.mockResolvedValue({ success: true });
     fake.results = [
-      [], // ensure
-      [],
+      ...marketingEnsureSqlStubs(),
       [], // INSERT posts
       [], // UPDATE persona
       [], // UPDATE channels.post_count
@@ -199,8 +197,7 @@ describe("POST /api/admin/spread — text mode", () => {
     postToPlatformMock.mockResolvedValue({ success: true });
     pickFallbackMediaMock.mockResolvedValue("https://cdn/fallback.jpg");
     fake.results = [
-      [], // ensure
-      [],
+      ...marketingEnsureSqlStubs(),
       [], // INSERT posts
       [], // UPDATE persona
       [], // INSERT marketing_posts
@@ -220,8 +217,7 @@ describe("POST /api/admin/spread — post-id mode", () => {
     getActiveAccountsMock.mockResolvedValue([X_ACCOUNT]);
     postToPlatformMock.mockResolvedValue({ success: true });
     fake.results = [
-      [], // ensure
-      [],
+      ...marketingEnsureSqlStubs(),
       [
         {
           id: "p-1",
@@ -266,8 +262,7 @@ describe("GET /api/admin/spread", () => {
     mockIsAdmin = true;
     getActiveAccountsMock.mockResolvedValue([X_ACCOUNT]);
     fake.results = [
-      [], // ensure marketing_posts
-      [], // ensure marketing_platform_accounts
+      ...marketingEnsureSqlStubs(),
       [
         {
           id: "mp-1",

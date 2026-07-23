@@ -17,6 +17,11 @@ export function __resetMarketingTablesFlag(): void {
   _tablesEnsured = false;
 }
 
+/** Empty DB stub rows for each SQL call on first ensureMarketingTables() — tests only. */
+export function marketingEnsureSqlStubs(): unknown[][] {
+  return [[], [], [], [], []];
+}
+
 export async function ensureMarketingTables(): Promise<void> {
   if (_tablesEnsured) return;
   const sql = getDb();

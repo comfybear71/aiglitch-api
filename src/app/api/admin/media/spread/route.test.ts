@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { marketingEnsureSqlStubs } from "@/lib/marketing/ensure-tables";
 
 type RowSet = unknown[];
 type SqlCall = { strings: TemplateStringsArray; values: unknown[] };
@@ -95,10 +96,7 @@ describe("POST /api/admin/media/spread — happy paths", () => {
   it("400 when no active accounts configured", async () => {
     mockIsAdmin = true;
     getActiveAccountsMock.mockResolvedValue([]);
-    fake.results = [
-      [], // ensure marketing_posts
-      [], // ensure marketing_platform_accounts
-    ];
+    fake.results = [...marketingEnsureSqlStubs()];
     const res = await callPOST({});
     expect(res.status).toBe(400);
   });
@@ -106,11 +104,7 @@ describe("POST /api/admin/media/spread — happy paths", () => {
   it("returns spread:0 when nothing to spread", async () => {
     mockIsAdmin = true;
     getActiveAccountsMock.mockResolvedValue([X_ACCOUNT]);
-    fake.results = [
-      [], // ensure marketing_posts
-      [], // ensure marketing_platform_accounts
-      [], // SELECT architect posts → empty
-    ];
+    fake.results = [...marketingEnsureSqlStubs(), []];
     const res = await callPOST({});
     const body = (await res.json()) as { spread: number };
     expect(body.spread).toBe(0);
@@ -125,8 +119,7 @@ describe("POST /api/admin/media/spread — happy paths", () => {
       platformUrl: "https://x.com/tw-1",
     });
     fake.results = [
-      [], // ensure marketing_posts
-      [], // ensure marketing_platform_accounts
+      ...marketingEnsureSqlStubs(),
       [
         {
           id: "post-1",
@@ -159,8 +152,7 @@ describe("POST /api/admin/media/spread — happy paths", () => {
       error: "rate limited",
     });
     fake.results = [
-      [], // ensure tables
-      [],
+      ...marketingEnsureSqlStubs(),
       [
         {
           id: "p-1",
@@ -184,8 +176,7 @@ describe("POST /api/admin/media/spread — happy paths", () => {
     getActiveAccountsMock.mockResolvedValue([YT_ACCOUNT]);
     postToPlatformMock.mockResolvedValue({ success: true });
     fake.results = [
-      [], // ensure
-      [],
+      ...marketingEnsureSqlStubs(),
       [
         {
           id: "p-1",
