@@ -631,3 +631,22 @@ export async function forceTriggerBreakingNews(
   }
   return results;
 }
+
+/** Sample assembled prompts for the admin pipeline catalog (no Grok spend). */
+export function sampleBreakingNewsPrompts(): Record<string, string> {
+  const sample: BreakingNewsTopic = {
+    id: "sample",
+    headline: "Simulation President Declares Tuesday Optional",
+    summary:
+      "Sources say calendars across the meatbag sector may spontaneously skip to Friday.",
+    category: "politics",
+    mood: "absurd",
+  };
+  const label = dateLabel();
+  return {
+    intro: INTRO_PROMPT,
+    outro: OUTRO_PROMPT,
+    presenter: presenterPrompt(sample, label),
+    field: fieldPrompt(sample, label),
+  };
+}

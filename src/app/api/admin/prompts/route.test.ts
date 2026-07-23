@@ -5,18 +5,22 @@ vi.mock("@/lib/admin-auth", () => ({
   isAdminAuthenticated: () => Promise.resolve(mockIsAdmin),
 }));
 
-const getOverridesMock = vi.fn();
+const buildCatalogMock = vi.fn();
 const saveMock = vi.fn();
 const deleteMock = vi.fn();
+
+vi.mock("@/lib/prompt-catalog", () => ({
+  buildPromptCatalog: () => buildCatalogMock(),
+}));
+
 vi.mock("@/lib/prompt-overrides", () => ({
-  getPromptOverrides: () => getOverridesMock(),
   savePromptOverride: (...args: unknown[]) => saveMock(...args),
   deletePromptOverride: (...args: unknown[]) => deleteMock(...args),
 }));
 
 beforeEach(() => {
   mockIsAdmin = false;
-  getOverridesMock.mockReset();
+  buildCatalogMock.mockReset();
   saveMock.mockReset();
   deleteMock.mockReset();
   vi.resetModules();
@@ -49,35 +53,34 @@ describe("GET /api/admin/prompts", () => {
     expect((await callGET()).status).toBe(401);
   });
 
-  it("returns overrides + empty deferred catalog", async () => {
+  it("returns populated catalog", async () => {
     mockIsAdmin = true;
-    getOverridesMock.mockResolvedValue([
-      { id: 1, category: "channel", key: "tech.promptHint", label: "Tech Hint", value: "edgy", updated_at: "2026-04-21" },
-    ]);
+    buildCatalogMock.mockResolvedValue({
+      channels: [{ channelId: "ch-gnn", channelName: "GNN", prompts: [] }],
+      directors: [{ directorUsername: "steven_spielbot", prompts: [] }],
+      genres: [{ genreKey: "action", prompts: [] }],
+      platform: [{ prompts: [] }],
+      overrideCount: 2,
+    });
     const res = await callGET();
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
-      overrides: unknown[];
-      overrideCount: number;
       channels: unknown[];
       directors: unknown[];
       genres: unknown[];
       platform: unknown[];
-      deferred: { sections: string[]; note: string };
+      overrideCount: number;
     };
-    expect(body.overrides).toHaveLength(1);
-    expect(body.overrideCount).toBe(1);
-    expect(body.channels).toEqual([]);
-    expect(body.directors).toEqual([]);
-    expect(body.genres).toEqual([]);
-    expect(body.platform).toEqual([]);
-    expect(body.deferred.sections).toEqual(["channels", "directors", "genres", "platform"]);
-    expect(body.deferred.note).toContain("legacy repo");
+    expect(body.channels).toHaveLength(1);
+    expect(body.directors).toHaveLength(1);
+    expect(body.genres).toHaveLength(1);
+    expect(body.platform).toHaveLength(1);
+    expect(body.overrideCount).toBe(2);
   });
 
-  it("500 when getPromptOverrides throws", async () => {
+  it("500 when buildPromptCatalog throws", async () => {
     mockIsAdmin = true;
-    getOverridesMock.mockRejectedValue(new Error("db down"));
+    buildCatalogMock.mockRejectedValue(new Error("db down"));
     const res = await callGET();
     expect(res.status).toBe(500);
   });
@@ -98,9 +101,9 @@ describe("POST /api/admin/prompts — save", () => {
   it("upserts the override (defaults label to key when not supplied)", async () => {
     mockIsAdmin = true;
     saveMock.mockResolvedValue(undefined);
-    const res = await callPOST({ action: "save", category: "channel", key: "tech.promptHint", value: "edgy" });
+    const res = await callPOST({ action: "save", category: "channel", key: "gnn.promptHint", value: "edgy" });
     expect(res.status).toBe(200);
-    expect(saveMock).toHaveBeenCalledWith("channel", "tech.promptHint", "tech.promptHint", "edgy");
+    expect(saveMock).toHaveBeenCalledWith("channel", "gnn.promptHint", "gnn.promptHint", "edgy");
   });
 
   it("uses provided label when given", async () => {
@@ -109,11 +112,11 @@ describe("POST /api/admin/prompts — save", () => {
     await callPOST({
       action: "save",
       category: "channel",
-      key: "tech.promptHint",
-      label: "Tech Hint",
+      key: "gnn.promptHint",
+      label: "GNN Hint",
       value: "edgy",
     });
-    expect(saveMock).toHaveBeenCalledWith("channel", "tech.promptHint", "Tech Hint", "edgy");
+    expect(saveMock).toHaveBeenCalledWith("channel", "gnn.promptHint", "GNN Hint", "edgy");
   });
 
   it("500 when save throws", async () => {
@@ -134,9 +137,9 @@ describe("POST /api/admin/prompts — reset", () => {
   it("deletes the override on reset", async () => {
     mockIsAdmin = true;
     deleteMock.mockResolvedValue(undefined);
-    const res = await callPOST({ action: "reset", category: "channel", key: "tech.promptHint" });
+    const res = await callPOST({ action: "reset", category: "channel", key: "gnn.promptHint" });
     expect(res.status).toBe(200);
-    expect(deleteMock).toHaveBeenCalledWith("channel", "tech.promptHint");
+    expect(deleteMock).toHaveBeenCalledWith("channel", "gnn.promptHint");
   });
 });
 
