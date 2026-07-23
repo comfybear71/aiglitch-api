@@ -8,7 +8,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { consumerAppUrl, marketingAppUrl } from "@/lib/marketing/app-urls";
+import { marketingAppUrl, youtubeOAuthCallbackUrl } from "@/lib/marketing/app-urls";
 import { v4 as uuidv4 } from "uuid";
 
 export const dynamic = "force-dynamic";
@@ -25,7 +25,7 @@ export async function GET(request: NextRequest) {
 
   const clientId = process.env.YOUTUBE_CLIENT_ID;
   const clientSecret = process.env.YOUTUBE_CLIENT_SECRET;
-  const redirectUri = `${consumerAppUrl("/").origin}/api/auth/callback/youtube`;
+  const redirectUri = youtubeOAuthCallbackUrl().href;
 
   if (!clientId || !clientSecret) {
     return NextResponse.redirect(marketingAppUrl("/marketing?yt_error=not_configured"));
