@@ -39,6 +39,8 @@ afterEach(() => {
   delete process.env.VERCEL_TOKEN;
   delete process.env.ANTHROPIC_MONTHLY_BUDGET;
   delete process.env.XAI_MONTHLY_BUDGET;
+  delete process.env.CURSOR_MONTHLY_BUDGET;
+  delete process.env.CURSOR_MONTHLY_SPENT;
   vi.restoreAllMocks();
 });
 
@@ -117,6 +119,17 @@ describe("GET /api/admin/costs", () => {
       credit_balances: { xai: { remaining: number | null } };
     };
     expect(body.credit_balances.xai.remaining).toBeNull();
+  });
+
+  it("computes cursor credit balance from env (manual spend, no API)", async () => {
+    mockIsAdmin = true;
+    process.env.CURSOR_MONTHLY_BUDGET = "200";
+    process.env.CURSOR_MONTHLY_SPENT = "87.5";
+    const res = await callGET();
+    const body = (await res.json()) as {
+      credit_balances: { cursor: { budget: number; spent: number; remaining: number } };
+    };
+    expect(body.credit_balances.cursor).toEqual({ budget: 200, spent: 87.5, remaining: 112.5 });
   });
 
   it("vercel.available:false when VERCEL_TOKEN unset (no outbound call)", async () => {
