@@ -123,9 +123,10 @@ export async function GET(request: NextRequest) {
     for (const mint of mints) {
       const sym = MINT_TO_SYMBOL[mint];
       if (!sym) continue;
-      let usd = byMint[mint];
+      let usd: number | undefined = byMint[mint];
       if (usd == null) {
-        usd = (await usdViaQuote(mint)) ?? undefined;
+        const fromQuote = await usdViaQuote(mint);
+        if (fromQuote != null) usd = fromQuote;
       }
       if (usd != null && Number.isFinite(usd)) prices[sym] = usd;
     }
