@@ -84,12 +84,8 @@ export async function buildJupiterSwapTransaction(params: {
       userPublicKey: params.userPublicKey,
       wrapAndUnwrapSol: true,
       dynamicComputeUnitLimit: true,
-      prioritizationFeeLamports: {
-        priorityLevelWithMaxLamports: {
-          maxLamports: TRADE_MAX_PRIORITY_FEE_LAMPORTS,
-          priorityLevel: "low",
-        },
-      },
+      // Jupiter accepts medium | high | veryHigh (not "low") — or a plain lamports integer.
+      prioritizationFeeLamports: TRADE_MAX_PRIORITY_FEE_LAMPORTS,
     }),
     signal: AbortSignal.timeout(15_000),
   });
@@ -114,7 +110,7 @@ export function getTradeSwapFeeMeta(slippageBps = TRADE_DEFAULT_SLIPPAGE_BPS) {
     slippageBps,
     maxPriorityFeeLamports: TRADE_MAX_PRIORITY_FEE_LAMPORTS,
     maxPriorityFeeSol: getTradeMaxPriorityFeeSol(),
-    priorityLevel: "low" as const,
+    priorityLevel: "medium" as const,
     router: "Jupiter",
   };
 }
