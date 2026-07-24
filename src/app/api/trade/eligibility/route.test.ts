@@ -51,6 +51,6 @@ describe("GET /api/trade/eligibility", () => {
     const res = await getEligibility("7SGf93WGk7VpSmreARzNujPbEpyABq2Em9YvaCirWi56");
     const body = await res.json();
     expect(body.eligible).toBe(false);
-    expect(body.budju_shortfall).toBe(9_950_000);
+    expect(body.budju_shortfall).toBe(950_000);
   });
 });
