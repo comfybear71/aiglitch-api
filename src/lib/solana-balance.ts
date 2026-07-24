@@ -1,29 +1,19 @@
 /**
- * Helius-backed on-chain wallet balance reader.
+ * Helius-backed on-chain wallet balance reader with Solana RPC fallback.
  *
- * Port of the `getWalletBalances` helper from legacy
- * `aiglitch/src/app/api/solana/route.ts` (action=balance branch).
- *
- * **Helius-only by design.** The legacy code falls back to standard
- * Solana RPC + @solana/web3.js + @solana/spl-token when Helius is
- * unavailable. We don't drag those deps into aiglitch-api yet —
- * production has Helius configured, so the fallback path is cold
- * code in prod. If Helius is unreachable we return zeros and a
- * `helius_enabled: false` flag on the route response, so callers
- * can disambiguate "wallet is empty" from "we can't see it right now".
- *
- * If/when we need the RPC fallback (e.g. for local dev without a
- * Helius key, or as a real outage backstop), add @solana/web3.js +
- * @solana/spl-token and port the fallback block from legacy. Keep
- * the public shape of `getWalletBalances` the same.
+ * Production was returning all zeros when Helius `/v0/.../balances` fails
+ * or returns an empty payload — port of legacy RPC fallback fixes trade gate.
  */
+
+import { PublicKey } from "@solana/web3.js";
+import { getAccount, getAssociatedTokenAddress } from "@solana/spl-token";
 
 import {
   BUDJU_TOKEN_MINT_STR,
   GLITCH_TOKEN_MINT_STR,
-  HELIUS_API_KEY,
   USDC_MINT_STR,
   getHeliusApiUrl,
+  getServerSolanaConnection,
   hasValidTokenMint,
 } from "@/lib/solana-config";
 
@@ -35,8 +25,8 @@ interface HeliusTokenBalance {
 }
 
 interface HeliusBalanceResponse {
-  tokens: HeliusTokenBalance[];
-  nativeBalance: number;
+  tokens?: HeliusTokenBalance[];
+  nativeBalance?: number;
 }
 
 export interface WalletBalances {
@@ -53,8 +43,10 @@ const ZEROS: WalletBalances = {
   usdc_balance: 0,
 };
 
-// Helius fetch with an 8s timeout. Returns null on any failure
-// so the caller can decide between zeros vs. raising an error.
+const GLITCH_DECIMALS = 9;
+const BUDJU_DECIMALS = 6;
+const USDC_DECIMALS = 6;
+
 async function fetchHeliusBalances(walletAddress: string): Promise<HeliusBalanceResponse | null> {
   const url = getHeliusApiUrl(`/v0/addresses/${walletAddress}/balances`);
   if (!url) return null;
@@ -72,11 +64,6 @@ async function fetchHeliusBalances(walletAddress: string): Promise<HeliusBalance
   }
 }
 
-// pump.fun tokens (incl. $BUDJU) use 6 decimals — distinct from §GLITCH's 9.
-const GLITCH_DECIMALS = 9;
-const BUDJU_DECIMALS = 6;
-const USDC_DECIMALS = 6;
-
 function tokenAmount(
   tokens: HeliusTokenBalance[],
   mint: string,
@@ -88,20 +75,83 @@ function tokenAmount(
   return token.amount / Math.pow(10, decimals);
 }
 
-export async function getWalletBalances(walletAddress: string): Promise<WalletBalances> {
-  if (!hasValidTokenMint()) return ZEROS;
-
-  const data = await fetchHeliusBalances(walletAddress);
-  if (!data) return ZEROS;
-
+function parseHelius(data: HeliusBalanceResponse): WalletBalances {
+  const tokens = data.tokens ?? [];
+  const native = Number(data.nativeBalance ?? 0);
   return {
-    sol_balance: data.nativeBalance / 1_000_000_000,
-    glitch_balance: tokenAmount(data.tokens, GLITCH_TOKEN_MINT_STR, GLITCH_DECIMALS),
-    budju_balance: tokenAmount(data.tokens, BUDJU_TOKEN_MINT_STR, BUDJU_DECIMALS),
-    usdc_balance: tokenAmount(data.tokens, USDC_MINT_STR, USDC_DECIMALS),
+    sol_balance: native / 1_000_000_000,
+    glitch_balance: tokenAmount(tokens, GLITCH_TOKEN_MINT_STR, GLITCH_DECIMALS),
+    budju_balance: tokenAmount(tokens, BUDJU_TOKEN_MINT_STR, BUDJU_DECIMALS),
+    usdc_balance: tokenAmount(tokens, USDC_MINT_STR, USDC_DECIMALS),
   };
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
+
+async function fetchRpcBalances(walletAddress: string): Promise<WalletBalances> {
+  try {
+    const connection = getServerSolanaConnection();
+    const walletPubkey = new PublicKey(walletAddress);
+
+    const getSplBalance = async (mintStr: string, decimals: number): Promise<number> => {
+      try {
+        const mint = new PublicKey(mintStr);
+        const tokenAccount = await getAssociatedTokenAddress(mint, walletPubkey);
+        const account = await getAccount(connection, tokenAccount);
+        return Number(account.amount) / Math.pow(10, decimals);
+      } catch {
+        return 0;
+      }
+    };
+
+    const results = await withTimeout(
+      Promise.all([
+        connection.getBalance(walletPubkey).catch(() => 0),
+        getSplBalance(GLITCH_TOKEN_MINT_STR, GLITCH_DECIMALS),
+        getSplBalance(BUDJU_TOKEN_MINT_STR, BUDJU_DECIMALS),
+        getSplBalance(USDC_MINT_STR, USDC_DECIMALS),
+      ]),
+      12_000,
+      [0, 0, 0, 0] as number[],
+    );
+
+    return {
+      sol_balance: results[0] / 1_000_000_000,
+      glitch_balance: results[1],
+      budju_balance: results[2],
+      usdc_balance: results[3],
+    };
+  } catch {
+    return ZEROS;
+  }
+}
+
+function heliusLooksUsable(data: HeliusBalanceResponse, parsed: WalletBalances): boolean {
+  if (parsed.sol_balance > 0 || parsed.budju_balance > 0 || parsed.usdc_balance > 0 || parsed.glitch_balance > 0) {
+    return true;
+  }
+  // Empty wallet is valid only when Helius returned explicit empty token list + zero native.
+  if (Array.isArray(data.tokens) && data.nativeBalance === 0) return true;
+  return false;
+}
+
+export async function getWalletBalances(walletAddress: string): Promise<WalletBalances> {
+  if (!hasValidTokenMint()) return ZEROS;
+
+  const heliusData = await fetchHeliusBalances(walletAddress);
+  if (heliusData?.tokens) {
+    const fromHelius = parseHelius(heliusData);
+    if (heliusLooksUsable(heliusData, fromHelius)) return fromHelius;
+  }
+
+  return fetchRpcBalances(walletAddress);
+}
+
 export function heliusEnabled(): boolean {
-  return !!HELIUS_API_KEY;
+  return !!process.env.HELIUS_API_KEY;
 }
