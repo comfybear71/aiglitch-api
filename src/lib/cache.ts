@@ -155,6 +155,36 @@ class TTLCache {
     });
   }
 
+  /**
+   * L1 + Redis write. Use for data that must survive cross-instance hops
+   * (e.g. wallet-auth QR: iPad mint → phone sign → iPad poll).
+   */
+  setShared<T>(key: string, ttlSeconds: number, value: T): void {
+    this.set(key, ttlSeconds, value);
+    const redis = getRedis();
+    if (redis) {
+      redis.set(`${REDIS_PREFIX}${key}`, value, { ex: ttlSeconds }).catch((err: unknown) => {
+        console.warn("[cache] Redis setShared failed:", err);
+      });
+    }
+  }
+
+  /** L1 first, then Redis. Repopulates L1 on L2 hit (approximate TTL). */
+  async getShared<T>(key: string, repopulateTtlSeconds = 300): Promise<T | null> {
+    const l1 = this.get<T>(key);
+    if (l1 !== null) return l1;
+
+    const redis = getRedis();
+    if (!redis) return null;
+
+    const l2 = await redisGetWithTimeout<T>(redis, `${REDIS_PREFIX}${key}`);
+    if (l2 !== null && l2 !== undefined) {
+      this.set(key, repopulateTtlSeconds, l2);
+      return l2;
+    }
+    return null;
+  }
+
   async getOrSet<T>(key: string, ttlSeconds: number, compute: () => Promise<T>): Promise<T> {
     const opStart = Date.now();
 

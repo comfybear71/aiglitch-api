@@ -21,14 +21,10 @@
  * Plus `?session={token}` mode that validates an existing session token
  * (returns `{ valid, wallet }` or 401).
  *
- * **L1-only cache caveat (preserved from legacy).** Both the challenge
- * and session records are stored via `cache.set()` which writes to L1
- * in-memory only — not Redis. If the QR flow's three HTTP calls land on
- * different Vercel instances, the challenge will appear "expired" or the
- * session will fail to validate. In practice this works because Vercel
- * keeps the same instance warm for the ~10 seconds the flow needs. If
- * this becomes a real problem, the fix is to extend `lib/cache.ts` with
- * a Redis-backed `setPersistent` + `getPersistent` pair.
+ * **Cross-instance storage.** Challenge + session records use
+ * `cache.setShared` / `cache.getShared` so the QR flow works when
+ * iPad, phone, and poll hit different Vercel instances (requires
+ * Upstash Redis env vars on the API project).
  *
  * **Ed25519 verification.** Uses Node's `crypto.verify` with a DER-wrapped
  * raw public key (RFC 8410). Same byte-exact pattern as legacy so existing
@@ -85,7 +81,10 @@ export async function GET(request: NextRequest) {
 
   // Mode 3: validate session token.
   if (sessionToken) {
-    const session = cache.get<SessionRecord>(`${SESSION_PREFIX}${sessionToken}`);
+    const session = await cache.getShared<SessionRecord>(
+      `${SESSION_PREFIX}${sessionToken}`,
+      SESSION_TTL,
+    );
     if (session) {
       return NextResponse.json({ valid: true, wallet: session.wallet });
     }
@@ -94,7 +93,10 @@ export async function GET(request: NextRequest) {
 
   // Mode 2: poll challenge status.
   if (challengeId) {
-    const challenge = cache.get<ChallengeRecord>(`${CACHE_PREFIX}${challengeId}`);
+    const challenge = await cache.getShared<ChallengeRecord>(
+      `${CACHE_PREFIX}${challengeId}`,
+      CHALLENGE_TTL,
+    );
 
     if (!challenge) {
       return NextResponse.json({ status: "expired" });
@@ -114,7 +116,7 @@ export async function GET(request: NextRequest) {
   const nonce = randomBytes(32).toString("hex");
   const message = `AIG!itch Trading Access\n\nSign this message to authorize trading controls.\n\nChallenge: ${nonce}\nTimestamp: ${new Date().toISOString()}`;
 
-  cache.set<ChallengeRecord>(`${CACHE_PREFIX}${id}`, CHALLENGE_TTL, {
+  cache.setShared<ChallengeRecord>(`${CACHE_PREFIX}${id}`, CHALLENGE_TTL, {
     message,
     nonce,
     status: "pending",
@@ -146,7 +148,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const challenge = cache.get<ChallengeRecord>(`${CACHE_PREFIX}${challengeId}`);
+    const challenge = await cache.getShared<ChallengeRecord>(
+      `${CACHE_PREFIX}${challengeId}`,
+      CHALLENGE_TTL,
+    );
     if (!challenge) {
       return NextResponse.json(
         { error: "Challenge expired or not found" },
@@ -167,7 +172,7 @@ export async function POST(request: NextRequest) {
 
     if (publicKey !== adminWallet) {
       // Mark rejected so the iPad's poll surfaces the failure quickly.
-      cache.set<ChallengeRecord>(`${CACHE_PREFIX}${challengeId}`, CHALLENGE_TTL, {
+      cache.setShared<ChallengeRecord>(`${CACHE_PREFIX}${challengeId}`, CHALLENGE_TTL, {
         ...challenge,
         status: "rejected",
       });
@@ -188,12 +193,12 @@ export async function POST(request: NextRequest) {
       .update(`${publicKey}:${Date.now()}:${challenge.nonce}`)
       .digest("hex");
 
-    cache.set<SessionRecord>(`${SESSION_PREFIX}${sessionToken}`, SESSION_TTL, {
+    cache.setShared<SessionRecord>(`${SESSION_PREFIX}${sessionToken}`, SESSION_TTL, {
       wallet: publicKey,
       created: Date.now(),
     });
 
-    cache.set<ChallengeRecord>(`${CACHE_PREFIX}${challengeId}`, CHALLENGE_TTL, {
+    cache.setShared<ChallengeRecord>(`${CACHE_PREFIX}${challengeId}`, CHALLENGE_TTL, {
       ...challenge,
       status: "approved",
       sessionToken,
@@ -222,7 +227,10 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: "Missing challengeId" }, { status: 400 });
     }
 
-    const challenge = cache.get<ChallengeRecord>(`${CACHE_PREFIX}${challengeId}`);
+    const challenge = await cache.getShared<ChallengeRecord>(
+      `${CACHE_PREFIX}${challengeId}`,
+      CHALLENGE_TTL,
+    );
     if (!challenge || challenge.status !== "pending") {
       return NextResponse.json(
         { error: "Challenge expired or already used" },
