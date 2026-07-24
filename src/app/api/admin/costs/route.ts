@@ -137,6 +137,8 @@ async function fetchVercelUsage(): Promise<VercelUsageResult> {
 interface CreditBalances {
   anthropic: { budget: number | null; spent: number; remaining: number | null };
   xai:       { budget: number | null; spent: number; remaining: number | null };
+  /** Cursor has no usage API — spent comes from CURSOR_MONTHLY_SPENT env (update from dashboard). */
+  cursor:    { budget: number | null; spent: number; remaining: number | null };
 }
 
 function computeCreditBalances(providerTotals: ProviderTotal[]): CreditBalances {
@@ -155,6 +157,14 @@ function computeCreditBalances(providerTotals: ProviderTotal[]): CreditBalances 
     if (pt.provider === "xai" || pt.provider.startsWith("grok")) xaiSpent += cost;
   }
 
+  const cursorBudget = process.env.CURSOR_MONTHLY_BUDGET
+    ? Number(process.env.CURSOR_MONTHLY_BUDGET)
+    : null;
+  const cursorSpentRaw = process.env.CURSOR_MONTHLY_SPENT
+    ? Number(process.env.CURSOR_MONTHLY_SPENT)
+    : 0;
+  const cursorSpent = Number.isFinite(cursorSpentRaw) ? cursorSpentRaw : 0;
+
   return {
     anthropic: {
       budget:    anthropicBudget,
@@ -168,6 +178,13 @@ function computeCreditBalances(providerTotals: ProviderTotal[]): CreditBalances 
       spent:     Math.round(xaiSpent * 100) / 100,
       remaining: xaiBudget != null
         ? Math.round((xaiBudget - xaiSpent) * 100) / 100
+        : null,
+    },
+    cursor: {
+      budget:    cursorBudget,
+      spent:     Math.round(cursorSpent * 100) / 100,
+      remaining: cursorBudget != null
+        ? Math.round((cursorBudget - cursorSpent) * 100) / 100
         : null,
     },
   };
@@ -196,7 +213,12 @@ export async function GET(request: NextRequest) {
         total_calls: lifetime.totalCalls,
       },
       history,
-      top_tasks:       topTasks,
+      top_tasks:       topTasks.map((t) => ({
+        task: t.task_type,
+        provider: t.provider,
+        total_usd: t.total_usd,
+        count: t.count,
+      })),
       provider_totals: providerTotals,
       daily_totals:    dailyTotals,
       credit_balances: computeCreditBalances(providerTotals),
