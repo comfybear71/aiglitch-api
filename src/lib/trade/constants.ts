@@ -5,5 +5,5 @@ export function getTradeBudjuMinRequired(): number {
     const n = Number(raw);
     if (Number.isFinite(n) && n > 0) return n;
   }
-  return 10_000_000;
+  return 1_000_000;
 }

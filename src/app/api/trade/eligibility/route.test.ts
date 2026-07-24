@@ -24,11 +24,11 @@ describe("GET /api/trade/eligibility", () => {
     expect(res.status).toBe(400);
   });
 
-  it("eligible when budju >= 10M", async () => {
+  it("eligible when budju >= required minimum", async () => {
     vi.mocked(getWalletBalances).mockResolvedValue({
       sol_balance: 1,
       glitch_balance: 0,
-      budju_balance: 12_000_000,
+      budju_balance: 2_000_000,
       usdc_balance: 0,
     });
 
@@ -36,7 +36,7 @@ describe("GET /api/trade/eligibility", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.eligible).toBe(true);
-    expect(body.budju_required).toBe(10_000_000);
+    expect(body.budju_required).toBe(1_000_000);
     expect(body.budju_shortfall).toBe(0);
   });
 
@@ -51,6 +51,6 @@ describe("GET /api/trade/eligibility", () => {
     const res = await getEligibility("7SGf93WGk7VpSmreARzNujPbEpyABq2Em9YvaCirWi56");
     const body = await res.json();
     expect(body.eligible).toBe(false);
-    expect(body.budju_shortfall).toBe(9_950_000);
+    expect(body.budju_shortfall).toBe(950_000);
   });
 });

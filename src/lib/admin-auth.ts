@@ -77,7 +77,11 @@ export async function isAdminAuthenticated(
   }
 
   if (request) {
-    const adminWallet = process.env.ADMIN_WALLET;
+    const adminWallet =
+      process.env.ADMIN_WALLET ??
+      process.env.ADMIN_WALLET_PUBKEY ??
+      process.env.NEXT_PUBLIC_ADMIN_WALLET ??
+      null;
     if (adminWallet) {
       const url = new URL(request.url);
       const authHeader = request.headers.get("authorization");
