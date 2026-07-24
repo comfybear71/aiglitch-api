@@ -7,6 +7,17 @@
 
 ## Session log (newest first)
 
+### 2026-07-24 — trade.aiglitch.app Phase 2 API (branch `claude/trade-phase-2-eligibility`)
+
+**New public routes (no treasury signing):**
+- `GET /api/trade/eligibility?wallet=` — on-chain $BUDJU vs `TRADE_BUDJU_MIN_BALANCE` (default 10M)
+- `GET /api/trade/jupiter/quote` — quote proxy (SOL · USDC · BUDJU · GLITCH mints only)
+- `POST /api/trade/jupiter/swap` — unsigned tx for Phantom (403 if below BUDJU gate)
+
+**Merge before** trading-aiglitch Phase 2 UI PR. Needs `HELIUS_API_KEY` + `JUPITER_API_KEY` on Vercel.
+
+---
+
 ### 2026-06-18 — HeyGen Avatar V live for breaking news + ROADMAP.md locked
 
 **Status:** Breaking-news anchor now generated via HeyGen Avatar V (Mode B). Multi-session roadmap captured in `docs/ROADMAP.md`. 20 sessions planned across 4 repos (this one + admin-aiglitch + 2 new sister repos to be created: marketing-aiglitch, trading-aiglitch).
