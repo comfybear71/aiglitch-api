@@ -8,6 +8,11 @@ import {
   GLITCH_TOKEN_MINT_STR,
   USDC_MINT_STR,
 } from "@/lib/solana-config";
+import {
+  TRADE_DEFAULT_SLIPPAGE_BPS,
+  TRADE_MAX_PRIORITY_FEE_LAMPORTS,
+  getTradeMaxPriorityFeeSol,
+} from "@/lib/trade/constants";
 
 const JUPITER_QUOTE_API = "https://api.jup.ag/swap/v1/quote";
 const JUPITER_SWAP_API = "https://api.jup.ag/swap/v1/swap";
@@ -45,7 +50,7 @@ export async function fetchJupiterQuote(params: {
   assertAllowedMint(params.inputMint);
   assertAllowedMint(params.outputMint);
 
-  const slippageBps = params.slippageBps ?? 100;
+  const slippageBps = params.slippageBps ?? TRADE_DEFAULT_SLIPPAGE_BPS;
   const url = `${JUPITER_QUOTE_API}?inputMint=${params.inputMint}&outputMint=${params.outputMint}&amount=${params.amount}&slippageBps=${slippageBps}&restrictIntermediateTokens=true`;
 
   const res = await fetch(url, {
@@ -81,7 +86,7 @@ export async function buildJupiterSwapTransaction(params: {
       dynamicComputeUnitLimit: true,
       prioritizationFeeLamports: {
         priorityLevelWithMaxLamports: {
-          maxLamports: 100_000,
+          maxLamports: TRADE_MAX_PRIORITY_FEE_LAMPORTS,
           priorityLevel: "low",
         },
       },
@@ -102,3 +107,14 @@ export async function buildJupiterSwapTransaction(params: {
 }
 
 export { SOL_MINT };
+
+/** Shown on trade UI — must match buildJupiterSwapTransaction caps. */
+export function getTradeSwapFeeMeta(slippageBps = TRADE_DEFAULT_SLIPPAGE_BPS) {
+  return {
+    slippageBps,
+    maxPriorityFeeLamports: TRADE_MAX_PRIORITY_FEE_LAMPORTS,
+    maxPriorityFeeSol: getTradeMaxPriorityFeeSol(),
+    priorityLevel: "low" as const,
+    router: "Jupiter",
+  };
+}

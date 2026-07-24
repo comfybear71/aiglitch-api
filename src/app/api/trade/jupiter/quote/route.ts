@@ -4,7 +4,8 @@
 
 import { type NextRequest, NextResponse } from "next/server";
 
-import { fetchJupiterQuote } from "@/lib/trade/jupiter-client";
+import { fetchJupiterQuote, getTradeSwapFeeMeta } from "@/lib/trade/jupiter-client";
+import { TRADE_DEFAULT_SLIPPAGE_BPS } from "@/lib/trade/constants";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -24,13 +25,17 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    const slippage = slippageBps ? Number(slippageBps) : TRADE_DEFAULT_SLIPPAGE_BPS;
     const quote = await fetchJupiterQuote({
       inputMint,
       outputMint,
       amount,
-      slippageBps: slippageBps ? Number(slippageBps) : undefined,
+      slippageBps: slippage,
     });
-    return NextResponse.json({ quote });
+    return NextResponse.json({
+      quote,
+      fees: getTradeSwapFeeMeta(slippage),
+    });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json({ error: msg }, { status: 502 });
