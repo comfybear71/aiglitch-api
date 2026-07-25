@@ -60,7 +60,7 @@ export async function buildMagicCreateDepositTx(params: {
     .createDeposit(claimIdArr, new BN(params.amountAtomic), new BN(params.expiresAtSec))
     .accounts({
       sender,
-      claim,
+      escrow: claim,
       mint,
       senderTokenAccount: senderAta,
       vaultTokenAccount: vaultAta,
@@ -94,10 +94,10 @@ export async function buildMagicClaimTx(params: {
   const recipientAta = getAssociatedTokenAddressSync(mint, recipient);
 
   const tx = await prog.methods
-    .claim()
+    .claimTokens()
     .accounts({
       recipient,
-      claim,
+      escrow: claim,
       mint,
       vaultTokenAccount: vaultAta,
       recipientTokenAccount: recipientAta,
@@ -134,7 +134,7 @@ export async function buildMagicRefundTx(params: {
     .refund()
     .accounts({
       sender,
-      claim,
+      escrow: claim,
       mint,
       vaultTokenAccount: vaultAta,
       senderTokenAccount: senderAta,
