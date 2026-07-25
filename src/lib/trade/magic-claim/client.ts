@@ -34,7 +34,7 @@ function program(): Program {
     },
     { commitment: "confirmed" },
   );
-  return new Program(idl, provider);
+  return new Program(idl, provider, new PublicKey(programId));
 }
 
 function claimPda(claimId: Buffer, programId: PublicKey): PublicKey {
