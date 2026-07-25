@@ -21,12 +21,14 @@ import {
   USDC_MINT_STR,
 } from "@/lib/solana-config";
 import { assertAllowedMint, TRADE_ALLOWED_MINTS } from "@/lib/trade/jupiter-client";
+import { DEVNET_USDC_MINT } from "@/lib/trade/magic-claim/config";
 
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 
 const MINT_DECIMALS: Record<string, number> = {
   [SOL_MINT]: 9,
   [USDC_MINT_STR]: 6,
+  [DEVNET_USDC_MINT]: 6,
   [BUDJU_TOKEN_MINT_STR]: 6,
   [GLITCH_TOKEN_MINT_STR]: 9,
 };

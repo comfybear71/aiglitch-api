@@ -1,0 +1,67 @@
+{
+  "address": "Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcmtkgHYTKY35",
+  "metadata": {
+    "name": "aiglitch_magic_claim",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Magic link SPL escrow"
+  },
+  "instructions": [
+    {
+      "name": "create_deposit",
+      "discriminator": [157, 30, 11, 129, 16, 166, 115, 75],
+      "accounts": [
+        { "name": "sender", "writable": true, "signer": true },
+        { "name": "claim", "writable": true },
+        { "name": "mint" },
+        { "name": "sender_token_account", "writable": true },
+        { "name": "vault_token_account", "writable": true },
+        { "name": "token_program" },
+        { "name": "associated_token_program" },
+        { "name": "system_program" }
+      ],
+      "args": [
+        { "name": "claim_id", "type": { "array": ["u8", 16] } },
+        { "name": "amount", "type": "u64" },
+        { "name": "expires_at", "type": "i64" }
+      ]
+    },
+    {
+      "name": "claim",
+      "discriminator": [62, 198, 214, 193, 213, 159, 108, 210],
+      "accounts": [
+        { "name": "recipient", "writable": true, "signer": true },
+        { "name": "claim", "writable": true },
+        { "name": "mint" },
+        { "name": "vault_token_account", "writable": true },
+        { "name": "recipient_token_account", "writable": true },
+        { "name": "token_program" },
+        { "name": "associated_token_program" },
+        { "name": "system_program" }
+      ],
+      "args": []
+    },
+    {
+      "name": "refund",
+      "discriminator": [2, 96, 183, 251, 63, 208, 46, 46],
+      "accounts": [
+        { "name": "sender", "writable": true, "signer": true },
+        { "name": "claim", "writable": true },
+        { "name": "mint" },
+        { "name": "vault_token_account", "writable": true },
+        { "name": "sender_token_account", "writable": true },
+        { "name": "token_program" },
+        { "name": "system_program" }
+      ],
+      "args": []
+    }
+  ],
+  "accounts": [
+    {
+      "name": "Claim",
+      "discriminator": [60, 110, 152, 148, 11, 123, 47, 84]
+    }
+  ],
+  "types": [],
+  "errors": []
+}
