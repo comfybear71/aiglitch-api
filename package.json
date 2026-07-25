@@ -19,6 +19,7 @@
     "@simplewebauthn/types": "^12.0.0",
     "@solana/spl-token": "^0.4.14",
     "@solana/web3.js": "^1.98.4",
+    "@coral-xyz/anchor": "^0.30.1",
     "@upstash/redis": "^1.37.0",
     "@vercel/blob": "^2.3.3",
     "bip39": "^3.1.0",
