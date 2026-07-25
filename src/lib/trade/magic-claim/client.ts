@@ -15,8 +15,6 @@ import { getServerSolanaConnection } from "@/lib/solana-config";
 import { getMagicClaimProgramId } from "@/lib/trade/magic-claim/config";
 import idlJson from "@/lib/trade/magic-claim/idl/aiglitch_magic_claim.json";
 
-const idl = idlJson as Idl;
-
 function program(): Program {
   const programId = getMagicClaimProgramId();
   if (!programId) throw new Error("TRADE_MAGIC_CLAIM_PROGRAM_ID not configured");
@@ -34,7 +32,8 @@ function program(): Program {
     },
     { commitment: "confirmed" },
   );
-  return new Program(idl, provider, new PublicKey(programId));
+  const idlWithProgram = { ...idlJson, address: programId } as Idl;
+  return new Program(idlWithProgram, provider);
 }
 
 function claimPda(claimId: Buffer, programId: PublicKey): PublicKey {
