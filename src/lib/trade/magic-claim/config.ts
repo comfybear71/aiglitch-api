@@ -5,7 +5,7 @@
 import { getSolanaNetwork } from "@/lib/solana-config";
 
 /** Circle USDC on Solana devnet */
-export const DEVNET_USDC_MINT = "4zMMC9srt5Ri5X14GPhXUK7WJ37xN8Z7J2q8o9Y9M4";
+export const DEVNET_USDC_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
 
 export const MAGIC_LINK_EXPIRY_SEC = 7 * 24 * 60 * 60;
 export const MAGIC_LINK_MAX_USD = 500;
