@@ -14,8 +14,14 @@ import {
   USDC_MINT_STR,
   getHeliusApiUrl,
   getServerSolanaConnection,
+  getSolanaNetwork,
   hasValidTokenMint,
 } from "@/lib/solana-config";
+import { DEVNET_USDC_MINT } from "@/lib/trade/magic-claim/config";
+
+function usdcMintForNetwork(): string {
+  return getSolanaNetwork() === "devnet" ? DEVNET_USDC_MINT : USDC_MINT_STR;
+}
 
 interface HeliusTokenBalance {
   mint: string;
@@ -82,7 +88,7 @@ function parseHelius(data: HeliusBalanceResponse): WalletBalances {
     sol_balance: native / 1_000_000_000,
     glitch_balance: tokenAmount(tokens, GLITCH_TOKEN_MINT_STR, GLITCH_DECIMALS),
     budju_balance: tokenAmount(tokens, BUDJU_TOKEN_MINT_STR, BUDJU_DECIMALS),
-    usdc_balance: tokenAmount(tokens, USDC_MINT_STR, USDC_DECIMALS),
+    usdc_balance: tokenAmount(tokens, usdcMintForNetwork(), USDC_DECIMALS),
   };
 }
 
@@ -114,7 +120,7 @@ async function fetchRpcBalances(walletAddress: string): Promise<WalletBalances> 
         connection.getBalance(walletPubkey).catch(() => 0),
         getSplBalance(GLITCH_TOKEN_MINT_STR, GLITCH_DECIMALS),
         getSplBalance(BUDJU_TOKEN_MINT_STR, BUDJU_DECIMALS),
-        getSplBalance(USDC_MINT_STR, USDC_DECIMALS),
+        getSplBalance(usdcMintForNetwork(), USDC_DECIMALS),
       ]),
       12_000,
       [0, 0, 0, 0] as number[],
