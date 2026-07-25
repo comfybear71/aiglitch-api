@@ -9,7 +9,7 @@ Escrow **Magic Link** sends on trade.aiglitch.app: sender locks SPL in an on-cha
 | Expiry | **7 days** (recipient must claim before) |
 | USD cap | **$500** per link |
 | Cancel | Sender **refund anytime** while pending |
-| Devnet tokens | **USDC** only (`4zMMC9…`) |
+| Devnet tokens | **USDC** only (Circle mint `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`) |
 | Mainnet | Off until `TRADE_MAGIC_LINK_ENABLED=true` + program deploy |
 
 ## 1. Deploy program (devnet)
