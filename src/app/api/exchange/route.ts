@@ -107,6 +107,37 @@ async function fetchDexScreenerPairs(tokenMint: string): Promise<DexScreenerPair
   }
 }
 
+async function fetchTokenHolderCount(mint: string): Promise<number | null> {
+  const cacheKey = `holders_${mint}`;
+  const cached = getCached<number>(cacheKey);
+  if (cached !== null) return cached;
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    const res = await fetch(`https://frontend-api.pump.fun/coins/${mint}`, {
+      signal: controller.signal,
+      headers: { Accept: "application/json" },
+    });
+    clearTimeout(timeoutId);
+    if (res.ok) {
+      const data = (await res.json()) as {
+        holder_count?: number;
+        holders?: number;
+        num_holders?: number;
+      };
+      const n = data.holder_count ?? data.holders ?? data.num_holders;
+      if (n != null && Number.isFinite(n)) {
+        setCache(cacheKey, n, 600_000);
+        return n;
+      }
+    }
+  } catch {
+    /* fall through */
+  }
+  return null;
+}
+
 async function fetchJupiterPrice(tokenMint: string): Promise<number | null> {
   const cacheKey = `jup_${tokenMint}`;
   const cached = getCached<number>(cacheKey);
@@ -349,6 +380,11 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    let holderCount: number | null = null;
+    if (pair.base === "BUDJU") {
+      holderCount = await fetchTokenHolderCount(baseMint);
+    }
+
     return NextResponse.json({
       pair_id: pair.id,
       pair: pair.label,
@@ -371,6 +407,7 @@ export async function GET(request: NextRequest) {
       dex_name: dexName,
       txns_24h: txns24h,
       data_source: dataSource,
+      holder_count: holderCount,
       available_pairs: TRADING_PAIRS.filter((p) => p.isActive).map((p) => ({
         id: p.id,
         label: p.label,
