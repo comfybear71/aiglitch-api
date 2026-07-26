@@ -9,6 +9,7 @@ import { buildMagicRefundTx } from "@/lib/trade/magic-claim/client";
 import { decodeClaimIdBase58 } from "@/lib/trade/magic-claim/claim-id";
 import { isMagicLinkEnabled } from "@/lib/trade/magic-claim/config";
 import { getMagicClaim, updateMagicClaimStatus } from "@/lib/trade/magic-claim/db";
+import { logMagicRefund } from "@/lib/trade/activity/log-magic";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -81,5 +82,8 @@ export async function PUT(request: NextRequest, ctx: Ctx) {
   }
 
   await updateMagicClaimStatus(claimId, { status: "refunded", refundSig: refundSignature });
+
+  if (row) await logMagicRefund(row, refundSignature);
+
   return NextResponse.json({ ok: true, status: "refunded" });
 }

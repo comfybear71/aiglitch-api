@@ -1,11 +1,11 @@
 /**
- * POST /api/trade/magic-link/[claimId]/confirm — mark deposit landed on-chain.
+ * POST /api/trade/magic-link/[claimId]/abandon — discard unfunded link (no on-chain tx).
  */
 
 import { type NextRequest, NextResponse } from "next/server";
 
+import { isValidSolanaAddress } from "@/lib/solana-config";
 import { decodeClaimIdBase58 } from "@/lib/trade/magic-claim/claim-id";
-import { logMagicDeposit } from "@/lib/trade/activity/log-magic";
 import { getMagicClaim, updateMagicClaimStatus } from "@/lib/trade/magic-claim/db";
 
 export const dynamic = "force-dynamic";
@@ -21,32 +21,27 @@ export async function POST(request: NextRequest, ctx: Ctx) {
     return NextResponse.json({ error: "Invalid claim id" }, { status: 400 });
   }
 
-  let body: { depositSignature?: string; senderPublicKey?: string };
+  let body: { senderPublicKey?: string };
   try {
     body = await request.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const depositSignature = body.depositSignature?.trim() ?? "";
   const senderPublicKey = body.senderPublicKey?.trim() ?? "";
-  if (!depositSignature || depositSignature.length < 80) {
-    return NextResponse.json({ error: "Invalid depositSignature" }, { status: 400 });
+  if (!senderPublicKey || !isValidSolanaAddress(senderPublicKey)) {
+    return NextResponse.json({ error: "Invalid senderPublicKey" }, { status: 400 });
   }
 
   const row = await getMagicClaim(claimId);
   if (!row) return NextResponse.json({ error: "Claim not found" }, { status: 404 });
-  if (senderPublicKey && senderPublicKey !== row.sender_wallet) {
-    return NextResponse.json({ error: "Sender mismatch" }, { status: 403 });
+  if (row.sender_wallet !== senderPublicKey) {
+    return NextResponse.json({ error: "Only the sender can abandon" }, { status: 403 });
+  }
+  if (row.status !== "awaiting_deposit") {
+    return NextResponse.json({ error: `Claim is ${row.status}` }, { status: 409 });
   }
 
-  await updateMagicClaimStatus(claimId, {
-    status: "pending",
-    depositSig: depositSignature,
-  });
-
-  const updated = await getMagicClaim(claimId);
-  if (updated) await logMagicDeposit(updated, depositSignature);
-
-  return NextResponse.json({ ok: true, status: "pending", claimId });
+  await updateMagicClaimStatus(claimId, { status: "abandoned" });
+  return NextResponse.json({ ok: true, status: "abandoned", claimId });
 }

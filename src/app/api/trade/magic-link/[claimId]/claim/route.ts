@@ -9,6 +9,7 @@ import { buildMagicClaimTx } from "@/lib/trade/magic-claim/client";
 import { decodeClaimIdBase58 } from "@/lib/trade/magic-claim/claim-id";
 import { isMagicLinkEnabled } from "@/lib/trade/magic-claim/config";
 import { getMagicClaim, updateMagicClaimStatus } from "@/lib/trade/magic-claim/db";
+import { logMagicClaim } from "@/lib/trade/activity/log-magic";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -65,7 +66,7 @@ export async function POST(request: NextRequest, ctx: Ctx) {
 /** Optional: client calls after submit with claimSignature */
 export async function PUT(request: NextRequest, ctx: Ctx) {
   const { claimId } = await ctx.params;
-  let body: { claimSignature?: string };
+  let body: { claimSignature?: string; recipientPublicKey?: string };
   try {
     body = await request.json();
   } catch {
@@ -73,6 +74,14 @@ export async function PUT(request: NextRequest, ctx: Ctx) {
   }
   const claimSignature = body.claimSignature?.trim();
   if (!claimSignature) return NextResponse.json({ error: "claimSignature required" }, { status: 400 });
+
+  const row = await getMagicClaim(claimId);
+  if (!row) return NextResponse.json({ error: "Claim not found" }, { status: 404 });
+
   await updateMagicClaimStatus(claimId, { status: "claimed", claimSig: claimSignature });
+
+  const recipient = body.recipientPublicKey?.trim();
+  if (recipient) await logMagicClaim(row, recipient, claimSignature);
+
   return NextResponse.json({ ok: true, status: "claimed" });
 }
