@@ -66,7 +66,9 @@ Broadcast signed txs via existing `POST /api/trade/submit`.
 3. Open link in incognito → connect other wallet → **Claim**.
 4. Or sender → **Cancel link** → sign refund.
 
-## 6. Mainnet later
+## 6. Mainnet
+
+See **`docs/trade-magic-link-mainnet-ops.md`** — program id, deploy wallet, rent (~1.7 SOL locked in program data), deploy tx, shutdown / `solana program close` recovery notes.
 
 1. Deploy program to mainnet-beta.
 2. Set `TRADE_MAGIC_CLAIM_PROGRAM_ID` to mainnet id.
