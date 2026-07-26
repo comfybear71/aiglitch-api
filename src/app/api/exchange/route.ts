@@ -29,6 +29,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 
 import { getDb } from "@/lib/db";
+import { fetchTokenHolderCount } from "@/lib/token-holder-count";
 import { TOKENS, TRADING_PAIRS } from "@/lib/tokens";
 
 export const dynamic = "force-dynamic";
@@ -105,37 +106,6 @@ async function fetchDexScreenerPairs(tokenMint: string): Promise<DexScreenerPair
   } catch {
     return [];
   }
-}
-
-async function fetchTokenHolderCount(mint: string): Promise<number | null> {
-  const cacheKey = `holders_${mint}`;
-  const cached = getCached<number>(cacheKey);
-  if (cached !== null) return cached;
-
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
-    const res = await fetch(`https://frontend-api.pump.fun/coins/${mint}`, {
-      signal: controller.signal,
-      headers: { Accept: "application/json" },
-    });
-    clearTimeout(timeoutId);
-    if (res.ok) {
-      const data = (await res.json()) as {
-        holder_count?: number;
-        holders?: number;
-        num_holders?: number;
-      };
-      const n = data.holder_count ?? data.holders ?? data.num_holders;
-      if (n != null && Number.isFinite(n)) {
-        setCache(cacheKey, n, 600_000);
-        return n;
-      }
-    }
-  } catch {
-    /* fall through */
-  }
-  return null;
 }
 
 async function fetchJupiterPrice(tokenMint: string): Promise<number | null> {
