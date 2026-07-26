@@ -5,7 +5,8 @@ export type MagicClaimStatus =
   | "pending"
   | "claimed"
   | "refunded"
-  | "expired";
+  | "expired"
+  | "abandoned";
 
 export type MagicClaimRow = {
   claim_id: string;
@@ -86,6 +87,23 @@ export async function getMagicClaim(claimId: string): Promise<MagicClaimRow | nu
   `;
   const r = rows[0] as MagicClaimRow | undefined;
   return r ?? null;
+}
+
+export async function listMagicClaimsBySender(
+  senderWallet: string,
+  limit = 30,
+): Promise<MagicClaimRow[]> {
+  await ensureMagicClaimSchema();
+  const sql = getDb();
+  const rows = await sql`
+    SELECT claim_id, sender_wallet, symbol, mint, amount_atomic, expires_at, status,
+           deposit_sig, claim_sig, refund_sig, created_at
+    FROM trade_magic_claims
+    WHERE sender_wallet = ${senderWallet}
+    ORDER BY created_at DESC
+    LIMIT ${limit}
+  `;
+  return rows as MagicClaimRow[];
 }
 
 export async function updateMagicClaimStatus(

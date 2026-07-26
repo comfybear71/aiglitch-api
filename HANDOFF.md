@@ -7,6 +7,21 @@
 
 ## Session log (newest first)
 
+### 2026-07-26 — trade wallet activity (DB) + magic link management API
+
+**Branch:** `claude/trade-wallet-activity-db` (merge before trading-aiglitch activity UI PR).
+
+**New:**
+- `trade_wallet_activity` — swap/transfer (client POST), magic deposit/refund/claim (server-only)
+- `GET/POST /api/trade/activity`
+- `GET /api/trade/magic-link/sent?wallet=`
+- `POST /api/trade/magic-link/[claimId]/abandon` — unfunded links; status `abandoned`
+- Logging on magic confirm PUT, refund PUT, claim PUT (`recipientPublicKey`)
+
+**Merge before** trading-aiglitch DB activity UI. No new env vars.
+
+---
+
 ### 2026-07-24 — trade.aiglitch.app Phase 2 API (branch `claude/trade-phase-2-eligibility`)
 
 **New public routes (no treasury signing):**
