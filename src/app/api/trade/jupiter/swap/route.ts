@@ -5,7 +5,10 @@
 import { type NextRequest, NextResponse } from "next/server";
 
 import { getTradeEligibility } from "@/lib/trade/eligibility";
-import { buildJupiterSwapTransaction } from "@/lib/trade/jupiter-client";
+import {
+  buildJupiterSwapTransaction,
+  isBudjuGateUnlockQuote,
+} from "@/lib/trade/jupiter-client";
 import { isValidSolanaAddress } from "@/lib/solana-config";
 
 export const dynamic = "force-dynamic";
@@ -28,12 +31,14 @@ export async function POST(request: NextRequest) {
   }
 
   const eligibility = await getTradeEligibility(userPublicKey);
-  if (!eligibility.eligible) {
+  const budjuUnlock = isBudjuGateUnlockQuote(body.quoteResponse);
+  if (!eligibility.eligible && !budjuUnlock) {
     return NextResponse.json(
       {
-        error: "BUDJU gate: hold more $BUDJU to swap",
+        error: "BUDJU gate: swap SOL or USDC for $BUDJU to unlock, or hold more $BUDJU",
         budju_balance: eligibility.budju_balance,
         budju_required: eligibility.budju_required,
+        budju_unlock: true,
       },
       { status: 403 },
     );

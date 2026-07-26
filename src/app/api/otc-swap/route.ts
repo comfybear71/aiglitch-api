@@ -227,10 +227,17 @@ export async function GET(request: NextRequest) {
     const solPriceUsd = parseFloat(solSetting?.value ?? "164");
 
     let availableSupply = 0;
+    let treasuryWalletBalanceSol = 0;
     let rpcError = "";
     try {
       const connection = getServerSolanaConnection();
       const treasuryPubkey = new PublicKey(TREASURY_WALLET_STR);
+      try {
+        const lamports = await connection.getBalance(treasuryPubkey);
+        treasuryWalletBalanceSol = lamports / 1e9;
+      } catch {
+        /* non-fatal — stats still return */
+      }
       const glitchMint = new PublicKey(GLITCH_TOKEN_MINT_STR);
       const treasuryAccount = await findTokenAccountForMint(
         connection,
@@ -283,7 +290,9 @@ export async function GET(request: NextRequest) {
       min_purchase: OTC.minPurchase,
       max_purchase: OTC.maxPurchase,
       treasury_wallet: TREASURY_WALLET_STR,
-      treasury_sol: totalSolReceived,
+      /** On-chain SOL in treasury wallet (matches Phantom / Solscan). */
+      treasury_sol: treasuryWalletBalanceSol,
+      treasury_wallet_balance_sol: treasuryWalletBalanceSol,
       token_mint: GLITCH_TOKEN_MINT_STR,
       stats: {
         total_swaps: totalSwaps,
