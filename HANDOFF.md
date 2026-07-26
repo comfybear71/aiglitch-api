@@ -20,6 +20,8 @@
 
 **Merge before** trading-aiglitch DB activity UI. No new env vars.
 
+**Ops doc:** `docs/trade-magic-link-mainnet-ops.md` — deploy wallet `4Jm25…`, program `3m1zLK…`, ~1.7 SOL program rent recovery via `solana program close` on shutdown only.
+
 ---
 
 ### 2026-07-24 — trade.aiglitch.app Phase 2 API (branch `claude/trade-phase-2-eligibility`)
