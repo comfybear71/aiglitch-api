@@ -146,13 +146,26 @@ function heliusLooksUsable(data: HeliusBalanceResponse, parsed: WalletBalances):
   return false;
 }
 
+/** Helius can lag minutes behind chain — take the higher of Helius vs RPC per field. */
+function mergeWalletBalances(helius: WalletBalances, rpc: WalletBalances): WalletBalances {
+  return {
+    sol_balance: Math.max(helius.sol_balance, rpc.sol_balance),
+    glitch_balance: Math.max(helius.glitch_balance, rpc.glitch_balance),
+    budju_balance: Math.max(helius.budju_balance, rpc.budju_balance),
+    usdc_balance: Math.max(helius.usdc_balance, rpc.usdc_balance),
+  };
+}
+
 export async function getWalletBalances(walletAddress: string): Promise<WalletBalances> {
   if (!hasValidTokenMint()) return ZEROS;
 
   const heliusData = await fetchHeliusBalances(walletAddress);
   if (heliusData?.tokens) {
     const fromHelius = parseHelius(heliusData);
-    if (heliusLooksUsable(heliusData, fromHelius)) return fromHelius;
+    if (heliusLooksUsable(heliusData, fromHelius)) {
+      const fromRpc = await fetchRpcBalances(walletAddress);
+      return mergeWalletBalances(fromHelius, fromRpc);
+    }
   }
 
   return fetchRpcBalances(walletAddress);

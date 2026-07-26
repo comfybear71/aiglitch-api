@@ -20,5 +20,10 @@ export async function GET(request: NextRequest) {
   }
 
   const result = await getTradeEligibility(wallet);
-  return NextResponse.json(result);
+  return NextResponse.json(result, {
+    headers: {
+      "Cache-Control": "private, no-store, max-age=0",
+      Pragma: "no-cache",
+    },
+  });
 }
