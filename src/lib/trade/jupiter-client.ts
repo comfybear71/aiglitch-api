@@ -38,6 +38,16 @@ export function assertAllowedMint(mint: string): void {
   }
 }
 
+export function quoteOutputMint(quote: Record<string, unknown>): string | null {
+  const om = quote.outputMint;
+  return typeof om === "string" ? om : null;
+}
+
+/** Swaps that receive $BUDJU may run before the 1M BUDJU gate (unlock path). */
+export function isBudjuGateUnlockQuote(quote: Record<string, unknown>): boolean {
+  return quoteOutputMint(quote) === BUDJU_TOKEN_MINT_STR;
+}
+
 export async function fetchJupiterQuote(params: {
   inputMint: string;
   outputMint: string;
