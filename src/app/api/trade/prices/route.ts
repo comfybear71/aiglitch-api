@@ -15,6 +15,7 @@ import {
   TRADE_ALLOWED_MINTS,
   fetchJupiterQuote,
 } from "@/lib/trade/jupiter-client";
+import { getOtcGlitchPriceUsd } from "@/lib/otc-bonding-curve";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -117,18 +118,31 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const byMint = await fetchJupiterPrices(mints);
+    const wantsGlitch = mints.includes(GLITCH_TOKEN_MINT_STR);
+    const jupiterMints = wantsGlitch
+      ? mints.filter((m) => m !== GLITCH_TOKEN_MINT_STR)
+      : mints;
+
+    const byMint = jupiterMints.length > 0 ? await fetchJupiterPrices(jupiterMints) : {};
     const prices: Record<string, number> = {};
 
     for (const mint of mints) {
       const sym = MINT_TO_SYMBOL[mint];
       if (!sym) continue;
+      if (sym === "GLITCH") continue;
       let usd: number | undefined = byMint[mint];
       if (usd == null) {
         const fromQuote = await usdViaQuote(mint);
         if (fromQuote != null) usd = fromQuote;
       }
       if (usd != null && Number.isFinite(usd)) prices[sym] = usd;
+    }
+
+    if (wantsGlitch) {
+      const otcUsd = await getOtcGlitchPriceUsd();
+      if (otcUsd != null && Number.isFinite(otcUsd)) {
+        prices.GLITCH = otcUsd;
+      }
     }
 
     if (!prices.USDC && mints.includes(USDC_MINT_STR)) {

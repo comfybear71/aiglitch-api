@@ -78,6 +78,7 @@ import {
   getSolanaNetwork,
 } from "@/lib/solana-config";
 import { OTC } from "@/lib/bible/constants";
+import { calculateOtcBondingCurvePrice } from "@/lib/otc-bonding-curve";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -91,22 +92,7 @@ const BONDING_CURVE = {
 };
 
 function calculateBondingCurvePrice(totalGlitchSold: number, solPriceUsd: number) {
-  const tier = Math.floor(totalGlitchSold / BONDING_CURVE.TIER_SIZE);
-  const priceUsd = BONDING_CURVE.BASE_PRICE_USD + tier * BONDING_CURVE.INCREMENT_USD;
-  const priceSol = solPriceUsd > 0 ? priceUsd / solPriceUsd : 0;
-  const nextTierAt = (tier + 1) * BONDING_CURVE.TIER_SIZE;
-  const remainingInTier = nextTierAt - totalGlitchSold;
-  const nextPriceUsd = priceUsd + BONDING_CURVE.INCREMENT_USD;
-
-  return {
-    price_usd: priceUsd,
-    price_sol: priceSol,
-    tier,
-    next_tier_at: nextTierAt,
-    remaining_in_tier: remainingInTier,
-    next_price_usd: nextPriceUsd,
-    next_price_sol: solPriceUsd > 0 ? nextPriceUsd / solPriceUsd : 0,
-  };
+  return calculateOtcBondingCurvePrice(totalGlitchSold, solPriceUsd);
 }
 
 // ── ATA detection (Token + Token-2022 support) ──────────────────────
