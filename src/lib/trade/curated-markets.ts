@@ -55,7 +55,7 @@ export const TRADE_CURATED_JUPITER_TOKENS: TradeTokenDef[] = [
   },
   {
     symbol: "RAY",
-    mint: "4k3Dyjzvzp8eMZWUXbBCjJ7zCkQTJGFaW5dCxM8DrU9",
+    mint: "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R",
     decimals: 6,
     defaultQuote: "USDC",
     jupiterMajor: true,
