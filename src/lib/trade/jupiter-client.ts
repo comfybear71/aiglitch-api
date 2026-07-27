@@ -45,6 +45,8 @@ export async function fetchJupiterQuote(params: {
   outputMint: string;
   amount: string;
   slippageBps?: number;
+  /** Price discovery may need looser routing than user swaps. */
+  restrictIntermediateTokens?: boolean;
 }): Promise<Record<string, unknown>> {
   const apiKey = jupiterApiKey();
   if (!apiKey) throw new Error("JUPITER_API_KEY not configured");
@@ -53,7 +55,13 @@ export async function fetchJupiterQuote(params: {
   assertAllowedMint(params.outputMint);
 
   const slippageBps = params.slippageBps ?? TRADE_DEFAULT_SLIPPAGE_BPS;
-  const url = `${JUPITER_QUOTE_API}?inputMint=${params.inputMint}&outputMint=${params.outputMint}&amount=${params.amount}&slippageBps=${slippageBps}&restrictIntermediateTokens=true`;
+  const restrict =
+    params.restrictIntermediateTokens === undefined
+      ? "true"
+      : params.restrictIntermediateTokens
+        ? "true"
+        : "false";
+  const url = `${JUPITER_QUOTE_API}?inputMint=${params.inputMint}&outputMint=${params.outputMint}&amount=${params.amount}&slippageBps=${slippageBps}&restrictIntermediateTokens=${restrict}`;
 
   const res = await fetch(url, {
     headers: { "x-api-key": apiKey },
