@@ -25,7 +25,7 @@ export async function GET() {
     otc: {
       paymentAssets: [...OTC_CHECKOUT_PAYMENT_ASSETS],
       treasuryListingGoalSol: OTC_TREASURY_LISTING_GOAL_SOL,
-      note: "§GLITCH OTC checkout is SOL-only; USDC/BUDJU pair cards are reference prices until treasury milestone.",
+      note: "GLITCH (OTC) checkout is SOL-only; USDC/BUDJU pair cards are reference prices until treasury milestone.",
     },
   });
 }
