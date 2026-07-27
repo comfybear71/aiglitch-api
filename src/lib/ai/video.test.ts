@@ -1,0 +1,543 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// ── Mocks ─────────────────────────────────────────────────────────────────
+//
+// Circuit breaker + cost ledger: real modules — no UPSTASH / DATABASE_URL →
+// fail-open → no-op. Same pattern as image.test.ts.
+//
+// @vercel/blob: stubbed. Polling: driven by the fake fetch queue below with
+// a 0ms poll interval.
+
+const blob = {
+  putCalls: [] as { pathname: string; opts: unknown }[],
+  putResult: { url: "https://blob.test/default.mp4" } as { url: string },
+  putShouldThrow: null as Error | null,
+};
+
+vi.mock("@vercel/blob", () => ({
+  put: (pathname: string, _body: unknown, opts: unknown) => {
+    blob.putCalls.push({ pathname, opts });
+    if (blob.putShouldThrow) return Promise.reject(blob.putShouldThrow);
+    return Promise.resolve(blob.putResult);
+  },
+}));
+
+type FetchResponseShape = {
+  ok: boolean;
+  status: number;
+  json?: () => Promise<unknown>;
+  text?: () => Promise<string>;
+  arrayBuffer?: () => Promise<ArrayBuffer>;
+  headers?: Headers;
+};
+
+const fetchQueue: (FetchResponseShape | Error)[] = [];
+const fetchCalls: { url: string; init?: RequestInit }[] = [];
+
+const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
+  fetchCalls.push({ url: String(url), init });
+  const next = fetchQueue.shift();
+  if (!next) throw new Error(`fetch queue empty — url=${String(url)}`);
+  if (next instanceof Error) throw next;
+  return next as unknown as Response;
+});
+
+beforeEach(() => {
+  fetchQueue.length = 0;
+  fetchCalls.length = 0;
+  fetchMock.mockClear();
+  blob.putCalls = [];
+  blob.putResult = { url: "https://blob.test/default.mp4" };
+  blob.putShouldThrow = null;
+  vi.stubGlobal("fetch", fetchMock);
+  process.env.XAI_API_KEY = "test-xai-key";
+  delete process.env.UPSTASH_REDIS_REST_URL;
+  delete process.env.UPSTASH_REDIS_REST_TOKEN;
+  delete process.env.DATABASE_URL;
+  vi.resetModules();
+});
+
+afterEach(() => {
+  delete process.env.XAI_API_KEY;
+  vi.unstubAllGlobals();
+});
+
+function okJson(body: unknown): FetchResponseShape {
+  return { ok: true, status: 200, json: () => Promise.resolve(body) };
+}
+
+function okBytes(bytes: Uint8Array, contentType = "video/mp4"): FetchResponseShape {
+  return {
+    ok: true,
+    status: 200,
+    arrayBuffer: () =>
+      Promise.resolve(
+        bytes.buffer.slice(
+          bytes.byteOffset,
+          bytes.byteOffset + bytes.byteLength,
+        ) as ArrayBuffer,
+      ),
+    headers: new Headers({ "content-type": contentType }),
+  };
+}
+
+function badStatus(status: number, text = ""): FetchResponseShape {
+  return { ok: false, status, text: () => Promise.resolve(text) };
+}
+
+describe("costPerSecond — pins xAI tier table (v1.48.0)", () => {
+  it("returns confirmed rates for 1.0 + 1.5 across 480p / 720p", async () => {
+    const { costPerSecond, VIDEO_MODEL_V10, VIDEO_MODEL_V15 } = await import("./video");
+    expect(costPerSecond(VIDEO_MODEL_V10, "480p")).toBe(0.05);
+    expect(costPerSecond(VIDEO_MODEL_V10, "720p")).toBe(0.07);
+    expect(costPerSecond(VIDEO_MODEL_V15, "480p")).toBe(0.08);
+    expect(costPerSecond(VIDEO_MODEL_V15, "720p")).toBe(0.14);
+  });
+
+  it("falls back to the most expensive tier for unknown model", async () => {
+    const { costPerSecond } = await import("./video");
+    // Defensive: rather under-report success than under-bill.
+    expect(costPerSecond("grok-imagine-video-future-9.0", "720p")).toBe(0.14);
+  });
+
+  it("default VIDEO_MODEL is the 1.5 ID", async () => {
+    const { VIDEO_MODEL } = await import("./video");
+    expect(VIDEO_MODEL).toBe("grok-imagine-video-1.5");
+  });
+});
+
+describe("submitVideoJob", () => {
+  it("throws when XAI_API_KEY is missing", async () => {
+    delete process.env.XAI_API_KEY;
+    const { submitVideoJob } = await import("./video");
+    await expect(
+      submitVideoJob({ prompt: "a glitch", taskType: "video_generation" }),
+    ).rejects.toThrow(/XAI_API_KEY not set/);
+  });
+
+  it("POSTs to /videos/generations with default duration + resolution", async () => {
+    fetchQueue.push(okJson({ request_id: "req-1" }));
+    const { submitVideoJob } = await import("./video");
+    const res = await submitVideoJob({
+      prompt: "rain on neon",
+      taskType: "video_generation",
+    });
+    expect(res.requestId).toBe("req-1");
+    expect(res.durationSec).toBe(10);
+    // v1.51.1: text-to-video falls back to 1.0 (1.5 is image-to-video
+    // only). 1.0 @ 720p = $0.07/sec → 10s = $0.70.
+    expect(res.estimatedUsd).toBeCloseTo(0.7, 6);
+    expect(res.model).toBe("grok-imagine-video");
+
+    expect(fetchCalls[0]!.url).toBe("https://api.x.ai/v1/videos/generations");
+    const body = JSON.parse(fetchCalls[0]!.init?.body as string) as {
+      model: string;
+      prompt: string;
+      duration: number;
+      resolution: string;
+      aspect_ratio?: string;
+      image?: { url: string };
+    };
+    expect(body.model).toBe("grok-imagine-video");
+    expect(body.duration).toBe(10);
+    expect(body.resolution).toBe("720p");
+    expect(body.aspect_ratio).toBeUndefined();
+    expect(body.image).toBeUndefined();
+  });
+
+  it("honours duration + aspect + resolution overrides and prices correctly", async () => {
+    fetchQueue.push(okJson({ request_id: "req-2" }));
+    const { submitVideoJob } = await import("./video");
+    const res = await submitVideoJob({
+      prompt: "x",
+      taskType: "video_generation",
+      duration: 5,
+      aspectRatio: "9:16",
+      resolution: "480p",
+    });
+    expect(res.durationSec).toBe(5);
+    // Text-to-video → 1.0 @ 480p = $0.05/sec → 5s = $0.25
+    expect(res.estimatedUsd).toBeCloseTo(0.25, 6);
+    const body = JSON.parse(fetchCalls[0]!.init?.body as string) as {
+      duration: number;
+      aspect_ratio: string;
+      resolution: string;
+    };
+    expect(body.duration).toBe(5);
+    expect(body.aspect_ratio).toBe("9:16");
+    expect(body.resolution).toBe("480p");
+  });
+
+  it("passes nested image.url through for image-to-video jobs", async () => {
+    fetchQueue.push(okJson({ request_id: "req-3" }));
+    const { submitVideoJob } = await import("./video");
+    await submitVideoJob({
+      prompt: "animate this",
+      taskType: "video_generation",
+      sourceImageUrl: "https://cdn.test/frame.png",
+    });
+    const body = JSON.parse(fetchCalls[0]!.init?.body as string) as {
+      image: { url: string };
+      model: string;
+    };
+    expect(body.image).toEqual({ url: "https://cdn.test/frame.png" });
+    // v1.51.1: image-to-video routes to 1.5 (the better motion / audio
+    // model). The text-to-video path stays on 1.0 because xAI's 1.5 is
+    // image-only.
+    expect(body.model).toBe("grok-imagine-video-1.5");
+  });
+
+  it("explicit model override beats the sourceImageUrl-based default", async () => {
+    fetchQueue.push(okJson({ request_id: "req-3b" }));
+    const { submitVideoJob, VIDEO_MODEL_V10 } = await import("./video");
+    await submitVideoJob({
+      prompt: "force 1.0 even with image",
+      taskType: "video_generation",
+      sourceImageUrl: "https://cdn.test/frame.png",
+      model: VIDEO_MODEL_V10,
+    });
+    const body = JSON.parse(fetchCalls[0]!.init?.body as string) as {
+      model: string;
+    };
+    expect(body.model).toBe("grok-imagine-video");
+  });
+
+  it("captures a synchronous video URL when xAI returns one on submit", async () => {
+    fetchQueue.push(
+      okJson({ request_id: "req-4", video: { url: "https://xai.test/sync.mp4" } }),
+    );
+    const { submitVideoJob } = await import("./video");
+    const res = await submitVideoJob({
+      prompt: "x",
+      taskType: "video_generation",
+    });
+    expect(res.requestId).toBe("req-4");
+    expect(res.syncVideoUrl).toBe("https://xai.test/sync.mp4");
+  });
+
+  it("throws on persistent 500 after exhausting retries", async () => {
+    // v1.54.0 added 4 attempts (1 + 3 retries) for transient statuses.
+    // Push enough bad responses to exhaust the loop.
+    fetchQueue.push(badStatus(500, "upstream boom"));
+    fetchQueue.push(badStatus(500, "upstream boom"));
+    fetchQueue.push(badStatus(500, "upstream boom"));
+    fetchQueue.push(badStatus(500, "upstream boom"));
+    // Patch setTimeout so the retry sleeps don't slow the test down.
+    const realSetTimeout = global.setTimeout;
+    vi.stubGlobal(
+      "setTimeout",
+      ((cb: () => void) => realSetTimeout(cb, 0)) as unknown as typeof setTimeout,
+    );
+    const { submitVideoJob } = await import("./video");
+    await expect(
+      submitVideoJob({ prompt: "x", taskType: "video_generation" }),
+    ).rejects.toThrow(/xAI video submit failed \(500\): upstream boom/);
+    vi.unstubAllGlobals();
+  }, 10_000);
+
+  it("throws when the response carries neither request_id nor video url", async () => {
+    fetchQueue.push(okJson({}));
+    const { submitVideoJob } = await import("./video");
+    await expect(
+      submitVideoJob({ prompt: "x", taskType: "video_generation" }),
+    ).rejects.toThrow(/missing request_id \+ video/);
+  });
+
+  // ── v1.54.0 retry/backoff specs ────────────────────────────────
+
+  it("retries on 429 and succeeds on second attempt", async () => {
+    fetchQueue.push(badStatus(429, '{"code":"resource-exhausted"}'));
+    fetchQueue.push(okJson({ request_id: "req-retry-1" }));
+    const realSetTimeout = global.setTimeout;
+    vi.stubGlobal(
+      "setTimeout",
+      ((cb: () => void) => realSetTimeout(cb, 0)) as unknown as typeof setTimeout,
+    );
+    const { submitVideoJob } = await import("./video");
+    const res = await submitVideoJob({
+      prompt: "x",
+      taskType: "video_generation",
+    });
+    expect(res.requestId).toBe("req-retry-1");
+    expect(fetchCalls).toHaveLength(2);
+    vi.unstubAllGlobals();
+  }, 10_000);
+
+  it("retries on 503 then succeeds", async () => {
+    fetchQueue.push(badStatus(503, "service unavailable"));
+    fetchQueue.push(okJson({ request_id: "req-retry-2" }));
+    const realSetTimeout = global.setTimeout;
+    vi.stubGlobal(
+      "setTimeout",
+      ((cb: () => void) => realSetTimeout(cb, 0)) as unknown as typeof setTimeout,
+    );
+    const { submitVideoJob } = await import("./video");
+    const res = await submitVideoJob({
+      prompt: "x",
+      taskType: "video_generation",
+    });
+    expect(res.requestId).toBe("req-retry-2");
+    vi.unstubAllGlobals();
+  }, 10_000);
+
+  it("fails fast on non-transient 4xx (e.g. 400 bad request)", async () => {
+    // 400 should NOT trigger the retry loop — text-to-video on 1.5
+    // returns 400 deterministically; we don't want to spend 3 retries
+    // before bubbling the error.
+    fetchQueue.push(badStatus(400, "invalid model"));
+    const { submitVideoJob } = await import("./video");
+    await expect(
+      submitVideoJob({ prompt: "x", taskType: "video_generation" }),
+    ).rejects.toThrow(/xAI video submit failed \(400\): invalid model/);
+    expect(fetchCalls).toHaveLength(1);
+  });
+
+  it("honors Retry-After header when xAI provides one", async () => {
+    // Mock returns a 429 with Retry-After: 1 second; assert we wait
+    // ~1s (vs the default 2s exponential backoff).
+    fetchQueue.push({
+      ok: false,
+      status: 429,
+      text: () => Promise.resolve(""),
+      headers: new Headers({ "retry-after": "1" }),
+    });
+    fetchQueue.push(okJson({ request_id: "req-ra" }));
+    // Spy on setTimeout to capture the delay.
+    const waits: number[] = [];
+    const realSetTimeout = global.setTimeout;
+    vi.stubGlobal(
+      "setTimeout",
+      ((cb: () => void, ms: number) => {
+        waits.push(ms);
+        return realSetTimeout(cb, 0);
+      }) as unknown as typeof setTimeout,
+    );
+    const { submitVideoJob } = await import("./video");
+    await submitVideoJob({ prompt: "x", taskType: "video_generation" });
+    // Should be ~1000ms (the Retry-After value) + 0-500ms jitter, NOT
+    // the 2000ms default backoff.
+    expect(waits.length).toBeGreaterThan(0);
+    expect(waits[0]).toBeGreaterThanOrEqual(1000);
+    expect(waits[0]).toBeLessThan(1600);
+    vi.unstubAllGlobals();
+  }, 10_000);
+});
+
+describe("pollVideoJob", () => {
+  it("GETs /videos/{id} and returns the status + url", async () => {
+    fetchQueue.push(
+      okJson({
+        status: "done",
+        video: { url: "https://xai.test/done.mp4" },
+        respect_moderation: true,
+      }),
+    );
+    const { pollVideoJob } = await import("./video");
+    const res = await pollVideoJob("req-5");
+    expect(res.status).toBe("done");
+    expect(res.videoUrl).toBe("https://xai.test/done.mp4");
+    expect(res.respectModeration).toBe(true);
+    expect(fetchCalls[0]!.url).toBe("https://api.x.ai/v1/videos/req-5");
+    expect(fetchCalls[0]!.init?.method).toBe("GET");
+  });
+
+  it("defaults to pending when the response omits status", async () => {
+    fetchQueue.push(okJson({}));
+    const { pollVideoJob } = await import("./video");
+    const res = await pollVideoJob("req-6");
+    expect(res.status).toBe("pending");
+    expect(res.videoUrl).toBeUndefined();
+  });
+
+  it("throws on non-OK poll response", async () => {
+    fetchQueue.push(badStatus(404, "gone"));
+    const { pollVideoJob } = await import("./video");
+    await expect(pollVideoJob("req-7")).rejects.toThrow(
+      /xAI video poll failed \(404\): gone/,
+    );
+  });
+});
+
+describe("generateVideo", () => {
+  it("short-circuits when submit returns a synchronous video url", async () => {
+    fetchQueue.push(
+      okJson({ request_id: "sync-req", video: { url: "https://xai.test/sync.mp4" } }),
+    );
+    const { generateVideo } = await import("./video");
+    const res = await generateVideo({
+      prompt: "x",
+      taskType: "video_generation",
+      pollIntervalMs: 0,
+    });
+    expect(res.videoUrl).toBe("https://xai.test/sync.mp4");
+    // Only the submit fetch — no poll.
+    expect(fetchCalls).toHaveLength(1);
+  });
+
+  it("polls until status=done and returns the video URL", async () => {
+    fetchQueue.push(okJson({ request_id: "req-8" }));
+    fetchQueue.push(okJson({ status: "pending" }));
+    fetchQueue.push(okJson({ status: "pending" }));
+    fetchQueue.push(
+      okJson({
+        status: "done",
+        video: { url: "https://xai.test/ready.mp4" },
+      }),
+    );
+    const { generateVideo } = await import("./video");
+    const res = await generateVideo({
+      prompt: "x",
+      taskType: "video_generation",
+      pollIntervalMs: 0,
+    });
+    expect(res.videoUrl).toBe("https://xai.test/ready.mp4");
+    expect(res.requestId).toBe("req-8");
+    // 1 submit + 3 polls.
+    expect(fetchCalls).toHaveLength(4);
+    expect(fetchCalls[1]!.url).toBe("https://api.x.ai/v1/videos/req-8");
+  });
+
+  it("throws when polled status comes back as failed", async () => {
+    fetchQueue.push(okJson({ request_id: "req-9" }));
+    fetchQueue.push(okJson({ status: "failed" }));
+    const { generateVideo } = await import("./video");
+    await expect(
+      generateVideo({
+        prompt: "x",
+        taskType: "video_generation",
+        pollIntervalMs: 0,
+      }),
+    ).rejects.toThrow(/req-9 failed/);
+  });
+
+  it("throws when polled status comes back as expired", async () => {
+    fetchQueue.push(okJson({ request_id: "req-10" }));
+    fetchQueue.push(okJson({ status: "expired" }));
+    const { generateVideo } = await import("./video");
+    await expect(
+      generateVideo({
+        prompt: "x",
+        taskType: "video_generation",
+        pollIntervalMs: 0,
+      }),
+    ).rejects.toThrow(/req-10 expired/);
+  });
+
+  it("throws when a done response is missing the video url", async () => {
+    fetchQueue.push(okJson({ request_id: "req-11" }));
+    fetchQueue.push(okJson({ status: "done" }));
+    const { generateVideo } = await import("./video");
+    await expect(
+      generateVideo({
+        prompt: "x",
+        taskType: "video_generation",
+        pollIntervalMs: 0,
+      }),
+    ).rejects.toThrow(/done but missing url/);
+  });
+
+  it("throws when moderation blocks a completed video", async () => {
+    fetchQueue.push(okJson({ request_id: "req-12" }));
+    fetchQueue.push(
+      okJson({
+        status: "done",
+        video: { url: "https://xai.test/blocked.mp4" },
+        respect_moderation: false,
+      }),
+    );
+    const { generateVideo } = await import("./video");
+    await expect(
+      generateVideo({
+        prompt: "x",
+        taskType: "video_generation",
+        pollIntervalMs: 0,
+      }),
+    ).rejects.toThrow(/req-12 blocked by moderation/);
+  });
+
+  it("throws after maxAttempts when status never resolves", async () => {
+    fetchQueue.push(okJson({ request_id: "req-13" }));
+    fetchQueue.push(okJson({ status: "pending" }));
+    fetchQueue.push(okJson({ status: "pending" }));
+    const { generateVideo } = await import("./video");
+    await expect(
+      generateVideo({
+        prompt: "x",
+        taskType: "video_generation",
+        pollIntervalMs: 0,
+        maxAttempts: 2,
+      }),
+    ).rejects.toThrow(/still pending after 2 attempts/);
+  });
+});
+
+describe("generateVideoToBlob", () => {
+  it("downloads the completed video and uploads to Vercel Blob", async () => {
+    fetchQueue.push(okJson({ request_id: "req-14" }));
+    fetchQueue.push(
+      okJson({
+        status: "done",
+        video: { url: "https://xai.test/ready.mp4" },
+      }),
+    );
+    fetchQueue.push(okBytes(new Uint8Array([0xde, 0xad, 0xbe, 0xef])));
+    blob.putResult = { url: "https://blob.test/hatch/persona.mp4" };
+    const { generateVideoToBlob } = await import("./video");
+    const res = await generateVideoToBlob({
+      prompt: "x",
+      taskType: "video_generation",
+      pollIntervalMs: 0,
+      blobPath: "hatch/persona.mp4",
+    });
+    expect(res.blobUrl).toBe("https://blob.test/hatch/persona.mp4");
+    expect(res.requestId).toBe("req-14");
+    expect(res.sizeBytes).toBe(4);
+    expect(blob.putCalls).toHaveLength(1);
+    const putCall = blob.putCalls[0]!;
+    expect(putCall.pathname).toBe("hatch/persona.mp4");
+    const opts = putCall.opts as {
+      access: string;
+      contentType: string;
+      addRandomSuffix: boolean;
+    };
+    expect(opts.access).toBe("public");
+    expect(opts.addRandomSuffix).toBe(false);
+    expect(opts.contentType).toBe("video/mp4");
+  });
+
+  it("honours an explicit contentType over the response header", async () => {
+    fetchQueue.push(okJson({ request_id: "req-15" }));
+    fetchQueue.push(
+      okJson({ status: "done", video: { url: "https://xai.test/x.webm" } }),
+    );
+    fetchQueue.push(okBytes(new Uint8Array([1]), "application/octet-stream"));
+    const { generateVideoToBlob } = await import("./video");
+    await generateVideoToBlob({
+      prompt: "x",
+      taskType: "video_generation",
+      pollIntervalMs: 0,
+      blobPath: "x/y.mp4",
+      contentType: "video/mp4",
+    });
+    const opts = blob.putCalls[0]!.opts as { contentType: string };
+    expect(opts.contentType).toBe("video/mp4");
+  });
+
+  it("throws if the video download fails", async () => {
+    fetchQueue.push(okJson({ request_id: "req-16" }));
+    fetchQueue.push(
+      okJson({ status: "done", video: { url: "https://xai.test/x.mp4" } }),
+    );
+    fetchQueue.push(badStatus(404));
+    const { generateVideoToBlob } = await import("./video");
+    await expect(
+      generateVideoToBlob({
+        prompt: "x",
+        taskType: "video_generation",
+        pollIntervalMs: 0,
+        blobPath: "x/y.mp4",
+      }),
+    ).rejects.toThrow(/Failed to download xAI video \(404\)/);
+    expect(blob.putCalls).toHaveLength(0);
+  });
+});
