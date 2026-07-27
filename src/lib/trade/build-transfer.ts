@@ -16,21 +16,16 @@ import {
 
 import { getServerSolanaConnection } from "@/lib/solana-config";
 import {
-  BUDJU_TOKEN_MINT_STR,
-  GLITCH_TOKEN_MINT_STR,
-  USDC_MINT_STR,
-} from "@/lib/solana-config";
-import { assertAllowedMint, TRADE_ALLOWED_MINTS } from "@/lib/trade/jupiter-client";
+  SOL_MINT,
+  TRADE_MINT_DECIMALS,
+  tradeMintFromSymbol,
+} from "@/lib/trade/curated-markets";
+import { assertAllowedMint } from "@/lib/trade/jupiter-client";
 import { DEVNET_USDC_MINT } from "@/lib/trade/magic-claim/config";
 
-const SOL_MINT = "So11111111111111111111111111111111111111112";
-
 const MINT_DECIMALS: Record<string, number> = {
-  [SOL_MINT]: 9,
-  [USDC_MINT_STR]: 6,
+  ...TRADE_MINT_DECIMALS,
   [DEVNET_USDC_MINT]: 6,
-  [BUDJU_TOKEN_MINT_STR]: 6,
-  [GLITCH_TOKEN_MINT_STR]: 9,
 };
 
 export function mintDecimals(mint: string): number {
@@ -95,15 +90,4 @@ export async function buildTradeTransferTransaction(params: {
   return { transaction: serialized };
 }
 
-/** Symbol → mint for API validation */
-export function tradeMintFromSymbol(symbol: string): string | null {
-  const map: Record<string, string> = {
-    SOL: SOL_MINT,
-    USDC: USDC_MINT_STR,
-    BUDJU: BUDJU_TOKEN_MINT_STR,
-    GLITCH: GLITCH_TOKEN_MINT_STR,
-  };
-  const m = map[symbol.toUpperCase()];
-  if (!m || !TRADE_ALLOWED_MINTS.has(m)) return null;
-  return m;
-}
+export { tradeMintFromSymbol };

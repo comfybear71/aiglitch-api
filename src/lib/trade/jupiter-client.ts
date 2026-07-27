@@ -3,11 +3,11 @@
  * Server never holds user keys. Requires JUPITER_API_KEY.
  */
 
+import { BUDJU_TOKEN_MINT_STR } from "@/lib/solana-config";
 import {
-  BUDJU_TOKEN_MINT_STR,
-  GLITCH_TOKEN_MINT_STR,
-  USDC_MINT_STR,
-} from "@/lib/solana-config";
+  TRADE_ALLOWED_MINTS,
+  SOL_MINT,
+} from "@/lib/trade/curated-markets";
 import {
   TRADE_DEFAULT_SLIPPAGE_BPS,
   TRADE_MAX_PRIORITY_FEE_LAMPORTS,
@@ -17,15 +17,7 @@ import {
 const JUPITER_QUOTE_API = "https://api.jup.ag/swap/v1/quote";
 const JUPITER_SWAP_API = "https://api.jup.ag/swap/v1/swap";
 
-const SOL_MINT = "So11111111111111111111111111111111111111112";
-
-/** Homegrown trade lane — no arbitrary meme routing in v1. */
-export const TRADE_ALLOWED_MINTS = new Set([
-  SOL_MINT,
-  USDC_MINT_STR,
-  BUDJU_TOKEN_MINT_STR,
-  GLITCH_TOKEN_MINT_STR,
-]);
+export { TRADE_ALLOWED_MINTS, SOL_MINT };
 
 function jupiterApiKey(): string | null {
   const key = process.env.JUPITER_API_KEY?.trim();
@@ -111,8 +103,6 @@ export async function buildJupiterSwapTransaction(params: {
   }
   return { swapTransaction: data.swapTransaction };
 }
-
-export { SOL_MINT };
 
 /** Shown on trade UI — must match buildJupiterSwapTransaction caps. */
 export function getTradeSwapFeeMeta(slippageBps = TRADE_DEFAULT_SLIPPAGE_BPS) {
