@@ -7,6 +7,14 @@
 
 ## Session log (newest first)
 
+### 2026-07-27 — Portfolio net-worth snapshots API
+
+**Branch:** `claude/trade-networth-snapshots` — merge **before** trading-aiglitch `claude/trade-portfolio-networth-api`.
+
+**New:** `trade_wallet_networth` table; `GET/POST /api/trade/networth?wallet=` (USD estimate snapshots for Portfolio chart).
+
+---
+
 ### 2026-07-26 — trade wallet activity (DB) + magic link management API
 
 **Branch:** `claude/trade-wallet-activity-db` (merge before trading-aiglitch activity UI PR).
