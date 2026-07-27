@@ -7,6 +7,14 @@
 
 ## Session log (newest first)
 
+### 2026-07-27 — Curated Jupiter markets (swap allowlist)
+
+**Branch:** `claude/trade-markets-jupiter-curated` — merge **before** trading-aiglitch same branch name.
+
+**New:** `src/lib/trade/curated-markets.ts` (JUP, WIF, BONK, RAY, PYTH, jupSOL, mSOL + core mints); `GET /api/trade/markets/curated`; extended `/api/trade/prices` + Jupiter allowlist + transfer symbols.
+
+---
+
 ### 2026-07-27 — Portfolio net-worth snapshots API
 
 **Branch:** `claude/trade-networth-snapshots` — merge **before** trading-aiglitch `claude/trade-portfolio-networth-api`.

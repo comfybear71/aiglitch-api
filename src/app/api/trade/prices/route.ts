@@ -5,38 +5,21 @@
 
 import { type NextRequest, NextResponse } from "next/server";
 
-import {
-  BUDJU_TOKEN_MINT_STR,
-  GLITCH_TOKEN_MINT_STR,
-  USDC_MINT_STR,
-} from "@/lib/solana-config";
+import { GLITCH_TOKEN_MINT_STR, USDC_MINT_STR } from "@/lib/solana-config";
 import {
   SOL_MINT,
   TRADE_ALLOWED_MINTS,
-  fetchJupiterQuote,
-} from "@/lib/trade/jupiter-client";
+  TRADE_MINT_DECIMALS,
+  TRADE_MINT_TO_SYMBOL,
+  TRADE_SYMBOL_TO_MINT,
+} from "@/lib/trade/curated-markets";
+import { fetchJupiterQuote } from "@/lib/trade/jupiter-client";
 import { getOtcGlitchPriceUsd } from "@/lib/otc-bonding-curve";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const SYMBOL_TO_MINT: Record<string, string> = {
-  SOL: SOL_MINT,
-  USDC: USDC_MINT_STR,
-  BUDJU: BUDJU_TOKEN_MINT_STR,
-  GLITCH: GLITCH_TOKEN_MINT_STR,
-};
-
-const MINT_DECIMALS: Record<string, number> = {
-  [SOL_MINT]: 9,
-  [USDC_MINT_STR]: 6,
-  [BUDJU_TOKEN_MINT_STR]: 6,
-  [GLITCH_TOKEN_MINT_STR]: 9,
-};
-
-const MINT_TO_SYMBOL = Object.fromEntries(
-  Object.entries(SYMBOL_TO_MINT).map(([s, m]) => [m, s]),
-) as Record<string, string>;
+const MINT_DECIMALS: Record<string, number> = TRADE_MINT_DECIMALS;
 
 function parseUsdFromPriceRow(row: unknown): number | null {
   if (!row || typeof row !== "object") return null;
@@ -104,12 +87,14 @@ async function usdViaQuote(mint: string): Promise<number | null> {
 export async function GET(request: NextRequest) {
   const raw = request.nextUrl.searchParams.get("symbols")?.trim();
   const symbols = raw
-    ? raw.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean)
-    : Object.keys(SYMBOL_TO_MINT);
+    ? raw.split(",").map((s) => s.trim()).filter(Boolean)
+    : Object.keys(TRADE_SYMBOL_TO_MINT);
 
   const mints: string[] = [];
   for (const sym of symbols) {
-    const mint = SYMBOL_TO_MINT[sym];
+    const mint =
+      TRADE_SYMBOL_TO_MINT[sym.toUpperCase()] ??
+      TRADE_SYMBOL_TO_MINT[sym];
     if (mint && TRADE_ALLOWED_MINTS.has(mint)) mints.push(mint);
   }
 
@@ -127,7 +112,7 @@ export async function GET(request: NextRequest) {
     const prices: Record<string, number> = {};
 
     for (const mint of mints) {
-      const sym = MINT_TO_SYMBOL[mint];
+      const sym = TRADE_MINT_TO_SYMBOL[mint];
       if (!sym) continue;
       if (sym === "GLITCH") continue;
       let usd: number | undefined = byMint[mint];
