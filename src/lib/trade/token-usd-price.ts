@@ -172,10 +172,12 @@ export async function resolveTradeSymbolPrices(
     missing = missing.filter((m) => byMint[m] == null);
   }
 
-  for (const mint of missing) {
-    const usd = await resolveMintUsd(mint);
-    if (usd != null) byMint[mint] = usd;
-  }
+  await Promise.all(
+    missing.map(async (mint) => {
+      const usd = await resolveMintUsd(mint);
+      if (usd != null) byMint[mint] = usd;
+    }),
+  );
 
   const prices: Record<string, number> = {};
   for (const mint of mints) {
