@@ -1,6 +1,0 @@
-target/
-test-ledger/
-.anchor/
-Cargo.lock
-**/*.rs.bk
-.DS_Store
