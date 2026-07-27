@@ -83,6 +83,21 @@ export const TRADE_CURATED_JUPITER_TOKENS: TradeTokenDef[] = [
     yieldLst: true,
     jupiterMajor: true,
   },
+  {
+    symbol: "PSOL",
+    mint: "pSo1f9nQXWgXibFtKf7NWYxb5enAM4qfP6UJSiXRQfL",
+    decimals: 9,
+    defaultQuote: "SOL",
+    yieldLst: true,
+    jupiterMajor: true,
+  },
+  {
+    symbol: "WBTC",
+    mint: "3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh",
+    decimals: 8,
+    defaultQuote: "USDC",
+    jupiterMajor: true,
+  },
 ];
 
 export const TRADE_ALL_TOKEN_DEFS: TradeTokenDef[] = [
