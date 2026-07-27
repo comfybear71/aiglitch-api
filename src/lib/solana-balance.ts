@@ -53,7 +53,9 @@ const GLITCH_DECIMALS = 9;
 const BUDJU_DECIMALS = 6;
 const USDC_DECIMALS = 6;
 
-async function fetchHeliusBalances(walletAddress: string): Promise<HeliusBalanceResponse | null> {
+export async function fetchHeliusAddressBalances(
+  walletAddress: string,
+): Promise<HeliusBalanceResponse | null> {
   const url = getHeliusApiUrl(`/v0/addresses/${walletAddress}/balances`);
   if (!url) return null;
 
@@ -68,6 +70,10 @@ async function fetchHeliusBalances(walletAddress: string): Promise<HeliusBalance
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+function fetchHeliusBalances(walletAddress: string): Promise<HeliusBalanceResponse | null> {
+  return fetchHeliusAddressBalances(walletAddress);
 }
 
 function tokenAmount(
