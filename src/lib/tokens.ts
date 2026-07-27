@@ -89,11 +89,11 @@ export interface TradingPair {
 }
 
 export const TRADING_PAIRS: TradingPair[] = [
-  { id: "GLITCH_USDC", base: "GLITCH", quote: "USDC", label: "§GLITCH/USDC", isActive: true },
+  { id: "GLITCH_USDC", base: "GLITCH", quote: "USDC", label: "§GLITCH/USDC", isActive: false },
   { id: "GLITCH_SOL", base: "GLITCH", quote: "SOL", label: "§GLITCH/SOL", isActive: true },
   { id: "BUDJU_USDC", base: "BUDJU", quote: "USDC", label: "$BUDJU/USDC", isActive: true },
   { id: "BUDJU_SOL", base: "BUDJU", quote: "SOL", label: "$BUDJU/SOL", isActive: true },
-  { id: "GLITCH_BUDJU", base: "GLITCH", quote: "BUDJU", label: "§GLITCH/$BUDJU", isActive: true },
+  { id: "GLITCH_BUDJU", base: "GLITCH", quote: "BUDJU", label: "§GLITCH/$BUDJU", isActive: false },
 ];
 
 // Get the price of a trading pair (base price / quote price)

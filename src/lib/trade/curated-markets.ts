@@ -34,7 +34,7 @@ export const TRADE_CORE_TOKENS: TradeTokenDef[] = [
 export const TRADE_CURATED_JUPITER_TOKENS: TradeTokenDef[] = [
   {
     symbol: "JUP",
-    mint: "JUPyiwrYJFskUPkHLfU6WH9tFQ12GYCZqFFoBoF7qK",
+    mint: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
     decimals: 6,
     defaultQuote: "USDC",
     jupiterMajor: true,
