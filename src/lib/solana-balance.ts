@@ -105,21 +105,31 @@ function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T
   ]);
 }
 
+/** SPL balance for one mint via RPC (ATA read). Used by trade wallet/balances for curated tokens. */
+export async function fetchWalletSplTokenBalance(
+  walletAddress: string,
+  mintStr: string,
+  decimals: number,
+): Promise<number> {
+  try {
+    const connection = getServerSolanaConnection();
+    const walletPubkey = new PublicKey(walletAddress);
+    const mint = new PublicKey(mintStr);
+    const tokenAccount = await getAssociatedTokenAddress(mint, walletPubkey);
+    const account = await getAccount(connection, tokenAccount);
+    return Number(account.amount) / Math.pow(10, decimals);
+  } catch {
+    return 0;
+  }
+}
+
 async function fetchRpcBalances(walletAddress: string): Promise<WalletBalances> {
   try {
     const connection = getServerSolanaConnection();
     const walletPubkey = new PublicKey(walletAddress);
 
-    const getSplBalance = async (mintStr: string, decimals: number): Promise<number> => {
-      try {
-        const mint = new PublicKey(mintStr);
-        const tokenAccount = await getAssociatedTokenAddress(mint, walletPubkey);
-        const account = await getAccount(connection, tokenAccount);
-        return Number(account.amount) / Math.pow(10, decimals);
-      } catch {
-        return 0;
-      }
-    };
+    const getSplBalance = async (mintStr: string, decimals: number): Promise<number> =>
+      fetchWalletSplTokenBalance(walletAddress, mintStr, decimals);
 
     const results = await withTimeout(
       Promise.all([
