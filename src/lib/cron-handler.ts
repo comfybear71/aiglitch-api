@@ -11,7 +11,8 @@
  *
  * Gate (before fn runs):
  * 1. Per-job pause — platform_settings cron_paused_<name> (+ admin UI aliases)
- * 2. Global activity_throttle — 0% hard-stops all gated crons
+ * 2. Soft interval — cron_interval_minutes_<name> vs last ok run
+ * 3. Global activity_throttle — 0% hard-stops all gated crons
  *
  * Skipped runs are logged with status='throttled' and return
  * { skipped: true, reason, cron } without calling fn (no AI spend).
@@ -19,6 +20,7 @@
 
 import { randomUUID } from "node:crypto";
 import { getDb } from "@/lib/db";
+import { shouldRunByInterval } from "@/lib/cron-interval";
 import { isCronPaused, shouldRunCron } from "@/lib/throttle";
 
 export interface CronResult {
@@ -29,7 +31,7 @@ export interface CronResult {
 export interface CronSkipResult extends CronResult {
   ok: true;
   skipped: true;
-  reason: "paused" | "throttled";
+  reason: "paused" | "throttled" | "interval";
   cron: string;
 }
 
@@ -67,7 +69,7 @@ export function __resetCronTableFlag(): void {
 async function logSkippedRun(
   id: string,
   name: string,
-  reason: "paused" | "throttled",
+  reason: "paused" | "throttled" | "interval",
 ): Promise<void> {
   const sql = getDb();
   const result = JSON.stringify({ ok: true, skipped: true, reason, cron: name });
@@ -99,6 +101,18 @@ export async function cronHandler<T extends CronResult>(
         _cron_run_id: id,
       };
       // Skip payload is not T; callers should check `skipped` before reading job fields.
+      return skipped as unknown as T & { _cron_run_id: string };
+    }
+
+    if (!(await shouldRunByInterval(name))) {
+      await logSkippedRun(id, name, "interval");
+      const skipped: CronSkipResult & { _cron_run_id: string } = {
+        ok: true,
+        skipped: true,
+        reason: "interval",
+        cron: name,
+        _cron_run_id: id,
+      };
       return skipped as unknown as T & { _cron_run_id: string };
     }
 

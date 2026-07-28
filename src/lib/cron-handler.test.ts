@@ -28,6 +28,7 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env.DATABASE_URL;
+  delete process.env.TEST_CRON_INTERVAL;
 });
 
 async function getCronHandler() {
@@ -43,7 +44,7 @@ describe("cronHandler", () => {
 
     const result = await cronHandler("test-job", async () => ({ processed: 5 }));
 
-    // CREATE + pause SELECT + throttle SELECT + INSERT + UPDATE = 5
+    // CREATE + pause + throttle + INSERT + UPDATE = 5 (interval gated off in Vitest)
     expect(fake.calls.length).toBe(5);
     expect(result.processed).toBe(5);
     expect(result._cron_run_id).toBeDefined();
@@ -67,7 +68,6 @@ describe("cronHandler", () => {
       }),
     ).rejects.toThrow("something broke");
 
-    // CREATE + pause + throttle + INSERT + UPDATE error = 5
     expect(fake.calls.length).toBe(5);
     const updateCall = fake.calls[4]!;
     const updateSql = updateCall.strings.join("");
@@ -81,8 +81,7 @@ describe("cronHandler", () => {
     await cronHandler("job-a", async () => ({}));
     await cronHandler("job-b", async () => ({}));
 
-    // First: CREATE + pause + throttle + INSERT + UPDATE = 5
-    // Second: pause + throttle + INSERT + UPDATE = 4
+    // First 5 + second 4 (no CREATE) = 9
     expect(fake.calls.length).toBe(9);
   });
 
@@ -117,6 +116,27 @@ describe("cronHandler", () => {
 
     const insertSql = fake.calls[2]!.strings.join("");
     expect(insertSql).toContain("throttled");
+  });
+
+  it("skips fn when soft interval not elapsed", async () => {
+    process.env.TEST_CRON_INTERVAL = "1";
+    const { cronHandler } = await getCronHandler();
+    const fn = vi.fn(async () => ({ ran: true }));
+
+    // CREATE, pause empty, interval setting 120, last ok 10m ago, then skip insert
+    const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    fake.results = [
+      [], // CREATE
+      [], // not paused
+      [{ value: "120" }], // interval override
+      [{ started_at: tenMinAgo }], // last ok recent
+    ];
+
+    const result = await cronHandler("general-content", fn);
+
+    expect(fn).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ skipped: true, reason: "interval" });
+    delete process.env.TEST_CRON_INTERVAL;
   });
 
   it("skips fn when activity throttle is 0%", async () => {

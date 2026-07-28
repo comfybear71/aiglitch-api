@@ -15,6 +15,10 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import {
+  loadCronIntervalOverrides,
+  resolveDisplayInterval,
+} from "@/lib/cron-interval";
+import {
   getSocialAutoPolicy,
   postsPerMarketingCycle,
 } from "@/lib/marketing/social-policy";
@@ -283,7 +287,9 @@ export async function GET() {
     async () => {
       const rows = (await sql`
         SELECT DISTINCT ON (cron_name) cron_name, started_at, status
-        FROM cron_runs ORDER BY cron_name, started_at DESC
+        FROM cron_runs
+        WHERE status IN ('ok', 'error', 'running', 'completed', 'failed')
+        ORDER BY cron_name, started_at DESC
       `) as Array<{ cron_name: string; started_at: string; status: string }>;
       return rows.map((r) => ({
         cronName: r.cron_name,
@@ -469,19 +475,36 @@ export async function GET() {
         body: { force: true, count: 6 },
       },
     ],
-    cronSchedules: [
-      { name: "Persona Content", path: "/api/generate-persona-content", interval: 40, unit: "min" },
-      { name: "General Content", path: "/api/generate", interval: 30, unit: "min" },
-      { name: "Social Marketing", path: "/api/marketing-post", interval: 240, unit: "min" },
-      { name: "AI Trading", path: "/api/ai-trading?action=cron", interval: 30, unit: "min" },
-      { name: "Budju Trading", path: "/api/budju-trading?action=cron", interval: 30, unit: "min" },
-      { name: "Avatars", path: "/api/generate-avatars", interval: 120, unit: "min" },
-      { name: "Topics & News", path: "/api/generate-topics", interval: 120, unit: "min" },
-      { name: "Ads", path: "/api/generate-ads", interval: 240, unit: "min" },
-      { name: "Chaos Drops", path: "/api/generate-chaos-drop", interval: 120, unit: "min" },
-      { name: "X React", path: "/api/x-react", interval: 30, unit: "min" },
-      { name: "Telegram Persona Msgs", path: "/api/telegram/persona-message", interval: 180, unit: "min" },
-    ],
+    cronSchedules: await (async () => {
+      const overrides = await loadCronIntervalOverrides();
+      const defs: Array<{
+        name: string;
+        path: string;
+        interval: number;
+        unit: "min";
+        job: string;
+      }> = [
+        { name: "Persona Content", path: "/api/generate-persona-content", interval: 40, unit: "min", job: "generate-persona-content" },
+        { name: "General Content", path: "/api/generate", interval: 30, unit: "min", job: "general-content" },
+        { name: "Social Marketing", path: "/api/marketing-post", interval: 240, unit: "min", job: "marketing-post" },
+        { name: "AI Trading", path: "/api/ai-trading?action=cron", interval: 30, unit: "min", job: "ai-trading" },
+        { name: "Budju Trading", path: "/api/budju-trading?action=cron", interval: 30, unit: "min", job: "budju-trading" },
+        { name: "Avatars", path: "/api/generate-avatars", interval: 120, unit: "min", job: "avatar-gen" },
+        { name: "Topics & News", path: "/api/generate-topics", interval: 120, unit: "min", job: "generate-topics" },
+        { name: "Ads", path: "/api/generate-ads", interval: 240, unit: "min", job: "generate-ads" },
+        { name: "Chaos Drops", path: "/api/generate-chaos-drop", interval: 120, unit: "min", job: "generate-chaos-drop" },
+        { name: "X React", path: "/api/x-react", interval: 30, unit: "min", job: "x-react" },
+        { name: "Telegram Persona Msgs", path: "/api/telegram/persona-message", interval: 180, unit: "min", job: "telegram-persona-message" },
+      ];
+      return defs.map((c) => ({
+        name: c.name,
+        path: c.path,
+        interval: resolveDisplayInterval(c.job, c.interval, overrides),
+        unit: c.unit,
+        defaultInterval: c.interval,
+        job: c.job,
+      }));
+    })(),
     socialPolicy: {
       postsPerDay: socialPolicy.postsPerDay,
       platforms: socialPolicy.platforms,

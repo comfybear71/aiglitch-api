@@ -1,16 +1,10 @@
 /**
  * /api/activity-throttle — admin UI controls for cron throttling.
  *
- * Two storage rows in `platform_settings`:
+ * Storage rows in `platform_settings`:
  *   - `activity_throttle` (0-100) — global cap
  *   - `cron_paused_<job_name>` ("true" | "false") — per-job pause
- *
- * Ported from legacy aiglitch. Replaces the earlier aiglitch-api
- * version which used a separate `cron_throttle` table that the admin
- * UI doesn't understand — the UI is built against this legacy shape,
- * so the legacy contract wins.
- *
- * `ensureDbReady` dropped per CLAUDE.md migration rule #4.
+ *   - `cron_interval_minutes_<job_name>` — soft run frequency (minutes)
  *
  * Auth: GET is unauthenticated (read-only stats the dashboard polls
  * every few seconds; matches legacy). POST requires the admin cookie.
@@ -19,6 +13,12 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { isAdminAuthenticated } from "@/lib/admin-auth";
+import {
+  CRON_INTERVAL_PRESETS,
+  DEFAULT_CRON_INTERVALS_MIN,
+  loadCronIntervalOverrides,
+  setCronIntervalMinutes,
+} from "@/lib/cron-interval";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -50,7 +50,15 @@ export async function GET(request: NextRequest) {
     } catch (err) {
       console.error("[activity-throttle GET] job_states read failed:", err);
     }
-    return NextResponse.json({ throttle, jobStates: states });
+
+    const intervals = await loadCronIntervalOverrides();
+    return NextResponse.json({
+      throttle,
+      jobStates: states,
+      intervals,
+      defaults: DEFAULT_CRON_INTERVALS_MIN,
+      presets: [...CRON_INTERVAL_PRESETS],
+    });
   }
 
   return NextResponse.json({ throttle });
@@ -70,7 +78,27 @@ export async function POST(request: NextRequest) {
 
   const sql = getDb();
 
-  // Per-job pause/resume.
+  if (body.action === "set_interval") {
+    const jobName = body.job_name as string | undefined;
+    const minutes = Number(body.minutes);
+    if (!jobName) {
+      return NextResponse.json({ error: "Missing job_name" }, { status: 400 });
+    }
+    if (!Number.isFinite(minutes)) {
+      return NextResponse.json({ error: "Invalid minutes" }, { status: 400 });
+    }
+    try {
+      const saved = await setCronIntervalMinutes(jobName, minutes);
+      return NextResponse.json({ job: jobName, intervalMinutes: saved });
+    } catch (err) {
+      console.error("[activity-throttle POST] set_interval failed:", err);
+      return NextResponse.json(
+        { error: err instanceof Error ? err.message : "Interval write failed" },
+        { status: 500 },
+      );
+    }
+  }
+
   if (body.action === "toggle_job") {
     const jobName = body.job_name as string | undefined;
     if (!jobName) {
@@ -101,7 +129,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ job: jobName, paused: newValue === "true" });
   }
 
-  // Global throttle (clamped 0-100).
   const throttle = Math.min(
     100,
     Math.max(0, Math.round(Number(body.throttle) || 0)),
