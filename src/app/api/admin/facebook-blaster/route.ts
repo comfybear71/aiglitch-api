@@ -11,6 +11,11 @@ import { type NextRequest, NextResponse } from "next/server";
 import { isAdminAuthenticated } from "@/lib/admin-auth";
 import { getDb } from "@/lib/db";
 import { buildFacebookBlasterCaption } from "@/lib/marketing/facebook-blaster-caption";
+import {
+  buildMarketplaceCatalogCaption,
+  loadMarketplaceNftCatalogRows,
+  parseMarketplaceBlasterId,
+} from "@/lib/marketing/facebook-blaster-catalog";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -171,6 +176,16 @@ export async function GET(request: NextRequest) {
     if (!postId) {
       return NextResponse.json({ error: "post_id required" }, { status: 400 });
     }
+
+    const catalogProductId = parseMarketplaceBlasterId(postId);
+    if (catalogProductId) {
+      const caption = await buildMarketplaceCatalogCaption(catalogProductId);
+      if (!caption) {
+        return NextResponse.json({ error: "Product not found" }, { status: 404 });
+      }
+      return NextResponse.json({ caption });
+    }
+
     const rows = (await sql`
       SELECT p.content, p.hashtags, p.id AS post_id, p.product_id, p.post_type,
              a.display_name, a.avatar_emoji, a.username
@@ -247,36 +262,108 @@ export async function GET(request: NextRequest) {
     if (s === "unblasted") posts = posts.filter((p) => !p.blasted_at);
     else if (s === "blasted") posts = posts.filter((p) => p.blasted_at);
 
-    posts = posts.slice(0, limit);
+    if (b !== "marketplace") {
+      posts = posts.slice(0, limit);
+    }
+
+    type BlasterPostJson = {
+      id: string;
+      content: string;
+      post_type: string;
+      media_url: string | null;
+      media_type: string | null;
+      media_source: string | null;
+      channel_id: string | null;
+      channel_name: string;
+      channel_emoji: string;
+      channel_slug: string;
+      persona_name: string;
+      persona_emoji: string;
+      persona_username: string;
+      product_id: string | null;
+      created_at: string;
+      has_media: boolean;
+      is_video: boolean;
+      blasted: { blasted_at: string; facebook_url: string | null } | null;
+      api_facebook_posted: boolean;
+      kind: "feed_post" | "nft_product";
+    };
+
+    const mappedPosts: BlasterPostJson[] = posts.map((p) => ({
+      id: p.id,
+      content: p.content,
+      post_type: p.post_type,
+      media_url: p.media_url,
+      media_type: p.media_type,
+      media_source: p.media_source,
+      channel_id: p.channel_id,
+      channel_name: p.channel_name,
+      channel_emoji: p.channel_emoji,
+      channel_slug: p.channel_slug,
+      persona_name: p.persona_name,
+      persona_emoji: p.persona_emoji,
+      persona_username: p.persona_username,
+      product_id: p.product_id,
+      created_at: p.created_at,
+      has_media: Boolean(p.media_url),
+      is_video: Boolean(
+        p.media_url &&
+          (p.media_url.includes(".mp4") || p.media_type?.startsWith("video")),
+      ),
+      blasted: p.blasted_at
+        ? { blasted_at: p.blasted_at, facebook_url: p.facebook_url }
+        : null,
+      api_facebook_posted: Boolean(p.api_facebook_posted),
+      kind: "feed_post" as const,
+    }));
+
+    let result = mappedPosts;
+
+    if (b === "marketplace") {
+      const excludeProductIds = new Set(
+        posts.map((p) => p.product_id).filter((id): id is string => Boolean(id)),
+      );
+      const catalogRows = await loadMarketplaceNftCatalogRows({
+        excludeProductIds,
+        show: s,
+        limit: Math.max(limit, MAX_LIMIT),
+      });
+      const mappedCatalog: BlasterPostJson[] = catalogRows.map((c) => ({
+        id: c.id,
+        content: c.content,
+        post_type: c.post_type,
+        media_url: c.media_url,
+        media_type: c.media_type,
+        media_source: c.media_source,
+        channel_id: null,
+        channel_name: c.channel_name,
+        channel_emoji: c.channel_emoji,
+        channel_slug: "marketplace",
+        persona_name: c.persona_name,
+        persona_emoji: c.persona_emoji,
+        persona_username: c.persona_username,
+        product_id: c.product_id,
+        created_at: c.created_at,
+        has_media: true,
+        is_video: false,
+        blasted: c.blasted_at
+          ? { blasted_at: c.blasted_at, facebook_url: c.facebook_url }
+          : null,
+        api_facebook_posted: false,
+        kind: "nft_product" as const,
+      }));
+
+      result = [...mappedPosts, ...mappedCatalog]
+        .sort(
+          (a, b) =>
+            new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+        )
+        .slice(0, limit);
+    }
 
     return NextResponse.json({
-      posts: posts.map((p) => ({
-        id: p.id,
-        content: p.content,
-        post_type: p.post_type,
-        media_url: p.media_url,
-        media_type: p.media_type,
-        media_source: p.media_source,
-        channel_id: p.channel_id,
-        channel_name: p.channel_name,
-        channel_emoji: p.channel_emoji,
-        channel_slug: p.channel_slug,
-        persona_name: p.persona_name,
-        persona_emoji: p.persona_emoji,
-        persona_username: p.persona_username,
-        created_at: p.created_at,
-        has_media: Boolean(p.media_url),
-        is_video: Boolean(
-          p.media_url &&
-            (p.media_url.includes(".mp4") ||
-              p.media_type?.startsWith("video")),
-        ),
-        blasted: p.blasted_at
-          ? { blasted_at: p.blasted_at, facebook_url: p.facebook_url }
-          : null,
-        api_facebook_posted: Boolean(p.api_facebook_posted),
-      })),
-      total: posts.length,
+      posts: result,
+      total: result.length,
     });
   } catch (err) {
     console.error("[admin/facebook-blaster] GET:", err);

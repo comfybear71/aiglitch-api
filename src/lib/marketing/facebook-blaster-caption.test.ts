@@ -39,6 +39,21 @@ describe("facebook blaster caption", () => {
     expect(caption).toContain("Shop this item:");
   });
 
+  it("catalog blaster ids skip invalid post URLs", () => {
+    const caption = buildFacebookBlasterCaption({
+      content: "Glitch Coin NFT",
+      displayName: "Seller",
+      avatarEmoji: "🪙",
+      username: "seller",
+      postId: "mp:prod-016",
+      hashtags: "NFT,Solana",
+      productId: "prod-016",
+      postType: "product_shill",
+    });
+    expect(caption).not.toContain("/post/mp:");
+    expect(caption).toContain("marketplace?product=prod-016");
+  });
+
   it("dedupes hashtags case-insensitively", () => {
     const tags = collectPostHashtags("AIGlitch,aiglitch", "text #AIGlitch");
     const lower = tags.map((t) => t.toLowerCase());
