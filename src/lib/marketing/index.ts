@@ -11,6 +11,7 @@ import {
 import { getActiveAccounts, postToPlatform } from "./platforms";
 import { generatePostImage } from "./post-image";
 import { pickFallbackMedia } from "./spread-post";
+import { getSocialAutoPolicy, postsPerMarketingCycle } from "./social-policy";
 import { ALL_PLATFORMS, type MarketingPlatform } from "./types";
 
 // Platforms that actually work for automated posting
@@ -90,6 +91,7 @@ export async function runMarketingCycle(): Promise<MarketingCycleResult> {
   }
 
   // Active campaign filter + posts-per-cycle calc.
+  const policy = await getSocialAutoPolicy();
   const campaignRows = (await sql`
     SELECT id, target_platforms, posts_per_day
     FROM marketing_campaigns
@@ -105,15 +107,35 @@ export async function runMarketingCycle(): Promise<MarketingCycleResult> {
   const campaignPlatforms = campaign
     ? campaign.target_platforms.split(",").filter(Boolean)
     : null;
-  // ~24 cycles/day (cron runs hourly-ish). Default 3 posts when no campaign.
   const postsPerCycle = campaign
     ? Math.max(1, Math.ceil(campaign.posts_per_day / 24))
-    : 3;
+    : postsPerMarketingCycle(policy.postsPerDay);
 
-  const targetAccounts = (campaignPlatforms
-    ? accounts.filter((a) => campaignPlatforms.includes(a.platform))
-    : accounts
-  ).filter((a) => WORKING_PLATFORMS.includes(a.platform));
+  if (postsPerCycle === 0) {
+    return {
+      posted: 0,
+      failed: 0,
+      skipped: 0,
+      details: [
+        {
+          platform: "all",
+          status: "skipped",
+          error: "Auto-social posts per day is 0 (Overview social policy)",
+        },
+      ],
+    };
+  }
+
+  let allowedPlatforms = (campaignPlatforms ?? policy.platforms).filter(Boolean);
+  if (!policy.facebookAuto) {
+    allowedPlatforms = allowedPlatforms.filter((p) => p !== "facebook");
+  }
+
+  const targetAccounts = accounts.filter(
+    (a) =>
+      WORKING_PLATFORMS.includes(a.platform) &&
+      allowedPlatforms.includes(a.platform),
+  );
 
   const topPosts = await pickTopPosts(postsPerCycle);
   let posted = 0;

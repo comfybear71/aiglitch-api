@@ -37,9 +37,9 @@ afterEach(() => {
 
 describe("GET /api/activity", () => {
   it("returns the full rollup shape with empty defaults", async () => {
-    // 12 core queries + 5 secondary (throttle, cronHistory, lastCronRuns,
+    // 15 core queries + 5 secondary (throttle, cronHistory, lastCronRuns,
     // cronTrend, cronCosts) — all empty.
-    fake.results = Array.from({ length: 17 }, () => []);
+    fake.results = Array.from({ length: 20 }, () => []);
 
     const { GET } = await import("./route");
     const res = await GET();
@@ -62,6 +62,14 @@ describe("GET /api/activity", () => {
     expect(Array.isArray(body.cronCosts)).toBe(true);
     expect(Array.isArray(body.cronSchedules)).toBe(true);
     expect(body.cronSchedules.length).toBeGreaterThan(0);
+    expect(body.socialSpread).toEqual({
+      posted24h: 0,
+      failed24h: 0,
+      queued24h: 0,
+      feedBacklog24h: 0,
+      recent: [],
+    });
+    expect(Array.isArray(body.manualActions)).toBe(true);
   });
 
   it("survives individual query failures without blowing up the rollup", async () => {
@@ -80,6 +88,9 @@ describe("GET /api/activity", () => {
       [{ count: 3 }], // breakingCount
       [{ count: 1 }], // recentBreaking
       [], // activeTopics
+      [{ posted: 0, failed: 0, queued: 0 }], // socialSpread24h
+      [{ count: 0 }], // feedNotSpread24h
+      [], // recentSocialSpreads
       new Error("platform_settings missing"), // activityThrottle
       [], // cronHistory
       [], // lastCronRuns
@@ -106,6 +117,9 @@ describe("GET /api/activity", () => {
   it("maps cronHistory rows into the camelCased UI shape", async () => {
     fake.results = [
       [], [], [], [{ count: 0 }], [], [], [], [], [], [{ count: 0 }], [{ count: 0 }], [], // 12 core
+      [{ posted: 0, failed: 0, queued: 0 }],
+      [{ count: 0 }],
+      [],
       [{ value: "75" }], // activityThrottle
       [
         // cronHistory

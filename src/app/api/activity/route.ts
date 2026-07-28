@@ -14,6 +14,10 @@
 
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
+import {
+  getSocialAutoPolicy,
+  postsPerMarketingCycle,
+} from "@/lib/marketing/social-policy";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -56,6 +60,9 @@ export async function GET() {
     breakingCountResult,
     recentBreakingResult,
     activeTopics,
+    socialSpread24h,
+    feedNotSpread24h,
+    recentSocialSpreads,
   ] = await Promise.all([
     safeQuery(
       "recentActivity",
@@ -166,12 +173,65 @@ export async function GET() {
       ` as unknown as Promise<Record<string, unknown>[]>,
       [],
     ),
+    safeQuery(
+      "socialSpread24h",
+      () => sql`
+        SELECT
+          COUNT(*) FILTER (WHERE status = 'posted' AND created_at > NOW() - INTERVAL '24 hours')::int AS posted,
+          COUNT(*) FILTER (WHERE status = 'failed' AND created_at > NOW() - INTERVAL '24 hours')::int AS failed,
+          COUNT(*) FILTER (WHERE status IN ('queued', 'pending') AND created_at > NOW() - INTERVAL '24 hours')::int AS queued
+        FROM marketing_posts
+      ` as unknown as Promise<
+        Array<{ posted: number; failed: number; queued: number }>
+      >,
+      [{ posted: 0, failed: 0, queued: 0 }],
+    ),
+    safeQuery(
+      "feedNotSpread24h",
+      () => sql`
+        SELECT COUNT(*)::int AS count
+        FROM posts p
+        WHERE p.created_at > NOW() - INTERVAL '24 hours'
+          AND p.is_reply_to IS NULL
+          AND p.content IS NOT NULL
+          AND LENGTH(p.content) > 20
+          AND p.id NOT IN (
+            SELECT source_post_id FROM marketing_posts
+            WHERE source_post_id IS NOT NULL
+          )
+      ` as unknown as Promise<Array<{ count: number }>>,
+      [{ count: 0 }],
+    ),
+    safeQuery(
+      "recentSocialSpreads",
+      () => sql`
+        SELECT
+          mp.id,
+          mp.platform,
+          mp.status,
+          mp.created_at,
+          mp.error_message,
+          mp.source_post_id,
+          LEFT(COALESCE(p.content, mp.adapted_content, ''), 120) AS content_preview,
+          a.display_name,
+          a.username,
+          a.avatar_emoji
+        FROM marketing_posts mp
+        LEFT JOIN posts p ON p.id = mp.source_post_id
+        LEFT JOIN ai_personas a ON a.id = COALESCE(mp.persona_id, p.persona_id)
+        ORDER BY mp.created_at DESC
+        LIMIT 12
+      ` as unknown as Promise<Record<string, unknown>[]>,
+      [],
+    ),
   ]);
 
   const adTotal = adTotalResult[0] ?? { count: 0 };
   const currentlyActive = currentlyActiveResult[0] ?? null;
   const breakingCount = breakingCountResult[0] ?? { count: 0 };
   const recentBreaking = recentBreakingResult[0] ?? { count: 0 };
+  const social24 = socialSpread24h[0] ?? { posted: 0, failed: 0, queued: 0 };
+  const backlog24 = feedNotSpread24h[0]?.count ?? 0;
 
   // ── Throttle setting ────────────────────────────────────────────
   const activityThrottle = await safeQuery(
@@ -295,6 +355,28 @@ export async function GET() {
     }>,
   );
 
+  const feedPosts24h = todayByHour.reduce(
+    (sum, h) => sum + Number(h.count),
+    0,
+  );
+  const socialPolicy = await safeQuery(
+    "socialPolicy",
+    () => getSocialAutoPolicy(),
+    { postsPerDay: 3, platforms: ["x", "telegram", "instagram", "facebook"], facebookAuto: true },
+  );
+  const activePlatforms = socialPolicy.platforms.filter(
+    (p) => p !== "facebook" || socialPolicy.facebookAuto,
+  );
+  const throttlePct = activityThrottle;
+  const expectedMarketingRuns24h =
+    throttlePct <= 0 ? 0 : Math.round(6 * (throttlePct / 100));
+  const expectedAutoFeedPosts24h =
+    throttlePct <= 0
+      ? 0
+      : throttlePct >= 100
+        ? feedPosts24h
+        : Math.round(feedPosts24h / (throttlePct / 100));
+
   return NextResponse.json({
     recentActivity,
     pendingJobs,
@@ -328,15 +410,93 @@ export async function GET() {
     lastCronRuns,
     cronTrend,
     cronCosts,
-    cronSchedules: [
-      { name: "Persona Content", path: "/api/generate-persona-content", interval: 5, unit: "min" },
-      { name: "General Content", path: "/api/generate", interval: 6, unit: "min" },
-      { name: "AI Trading", path: "/api/ai-trading", interval: 10, unit: "min" },
-      { name: "Budju Trading", path: "/api/budju-trading", interval: 8, unit: "min" },
-      { name: "Avatars", path: "/api/generate-avatars", interval: 20, unit: "min" },
-      { name: "Topics & News", path: "/api/generate-topics", interval: 30, unit: "min" },
-      { name: "Ads", path: "/api/generate-ads", interval: 120, unit: "min" },
+    socialSpread: {
+      posted24h: Number(social24.posted),
+      failed24h: Number(social24.failed),
+      queued24h: Number(social24.queued),
+      feedBacklog24h: Number(backlog24),
+      recent: recentSocialSpreads.map((r) => ({
+        id: r.id as string,
+        platform: r.platform as string,
+        status: r.status as string,
+        createdAt: String(r.created_at),
+        errorMessage: r.error_message ? String(r.error_message) : null,
+        sourcePostId: r.source_post_id ? String(r.source_post_id) : null,
+        contentPreview: String(r.content_preview ?? ""),
+        displayName: r.display_name ? String(r.display_name) : null,
+        username: r.username ? String(r.username) : null,
+        avatarEmoji: r.avatar_emoji ? String(r.avatar_emoji) : null,
+      })),
+    },
+    manualActions: [
+      {
+        id: "marketing-post",
+        label: "Social spread cycle",
+        description: "Pick top feed posts and post to X, Telegram, Instagram, Facebook",
+        method: "POST",
+        path: "/api/marketing-post",
+      },
+      {
+        id: "elon-campaign",
+        label: "Elon campaign video",
+        description: "Generate Day N video + spread (same as Personas tab)",
+        method: "POST",
+        path: "/api/admin/elon-campaign",
+        body: {},
+      },
+      {
+        id: "breaking-news",
+        label: "Breaking news",
+        description: "Force pipeline on next topic (~5–8 min). Also on Briefing tab.",
+        method: "POST",
+        path: "/api/admin/breaking-news",
+        body: { action: "force_trigger", max_topics: 1 },
+      },
+      {
+        id: "generate-chaos-drop",
+        label: "Chaos drop",
+        description: "One-off chaos drop post + spread",
+        method: "POST",
+        path: "/api/generate-chaos-drop",
+        body: {},
+      },
+      {
+        id: "generate-topics",
+        label: "Refresh topics",
+        description: "NewsAPI + Claude topic refresh",
+        method: "POST",
+        path: "/api/generate-topics",
+        body: { force: true, count: 6 },
+      },
     ],
+    cronSchedules: [
+      { name: "Persona Content", path: "/api/generate-persona-content", interval: 40, unit: "min" },
+      { name: "General Content", path: "/api/generate", interval: 30, unit: "min" },
+      { name: "Social Marketing", path: "/api/marketing-post", interval: 240, unit: "min" },
+      { name: "AI Trading", path: "/api/ai-trading?action=cron", interval: 30, unit: "min" },
+      { name: "Budju Trading", path: "/api/budju-trading?action=cron", interval: 30, unit: "min" },
+      { name: "Avatars", path: "/api/generate-avatars", interval: 120, unit: "min" },
+      { name: "Topics & News", path: "/api/generate-topics", interval: 120, unit: "min" },
+      { name: "Ads", path: "/api/generate-ads", interval: 240, unit: "min" },
+      { name: "Chaos Drops", path: "/api/generate-chaos-drop", interval: 120, unit: "min" },
+      { name: "X React", path: "/api/x-react", interval: 30, unit: "min" },
+      { name: "Telegram Persona Msgs", path: "/api/telegram/persona-message", interval: 180, unit: "min" },
+    ],
+    socialPolicy: {
+      postsPerDay: socialPolicy.postsPerDay,
+      platforms: socialPolicy.platforms,
+      facebookAuto: socialPolicy.facebookAuto,
+      postsPerMarketingCycle: postsPerMarketingCycle(socialPolicy.postsPerDay),
+      activePlatforms,
+    },
+    forecast: {
+      feedPostsLast24h: feedPosts24h,
+      expectedFeedPostsAt100PctThrottle: expectedAutoFeedPosts24h,
+      expectedMarketingCronRuns24h: expectedMarketingRuns24h,
+      maxAutoOriginalPostsPerDay: socialPolicy.postsPerDay,
+      maxAutoPlatformPostsPerDay:
+        socialPolicy.postsPerDay * activePlatforms.length,
+    },
   });
 }
 // Re-export the SettledResult type for downstream type hygiene.
