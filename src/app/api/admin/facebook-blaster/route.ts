@@ -319,15 +319,15 @@ export async function GET(request: NextRequest) {
 
     let result = mappedPosts;
 
+    let nftCatalogCount = 0;
+
     if (b === "marketplace") {
-      const excludeProductIds = new Set(
-        posts.map((p) => p.product_id).filter((id): id is string => Boolean(id)),
-      );
       const catalogRows = await loadMarketplaceNftCatalogRows({
-        excludeProductIds,
         show: s,
-        limit: Math.max(limit, MAX_LIMIT),
+        limit: MAX_LIMIT,
       });
+      nftCatalogCount = catalogRows.length;
+      const catalogProductIds = new Set(catalogRows.map((c) => c.product_id));
       const mappedCatalog: BlasterPostJson[] = catalogRows.map((c) => ({
         id: c.id,
         content: c.content,
@@ -353,17 +353,19 @@ export async function GET(request: NextRequest) {
         kind: "nft_product" as const,
       }));
 
-      result = [...mappedPosts, ...mappedCatalog]
-        .sort(
-          (a, b) =>
-            new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
-        )
-        .slice(0, limit);
+      const feedOnly = mappedPosts.filter(
+        (p) => !p.product_id || !catalogProductIds.has(p.product_id),
+      );
+
+      // NFT Grokified cards first — feed marketplace posts fill remaining slots.
+      result = [...mappedCatalog, ...feedOnly].slice(0, limit);
     }
 
     return NextResponse.json({
       posts: result,
       total: result.length,
+      nft_catalog_count: nftCatalogCount,
+      bucket: b,
     });
   } catch (err) {
     console.error("[admin/facebook-blaster] GET:", err);
