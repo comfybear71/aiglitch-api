@@ -92,7 +92,7 @@ export async function loadMarketplaceNftCatalogRows(opts: {
       ? ((await sql`
           SELECT post_id, blasted_at, facebook_url
           FROM facebook_blasts
-          WHERE post_id = ANY(${blasterIds})
+          WHERE post_id = ANY(${blasterIds}::text[])
         `) as Array<{ post_id: string; blasted_at: string; facebook_url: string | null }>)
       : [];
   const blastById = new Map(blastRows.map((r) => [r.post_id, r]));
@@ -109,7 +109,7 @@ export async function loadMarketplaceNftCatalogRows(opts: {
       ? ((await sql`
           SELECT id, display_name, avatar_emoji, username
           FROM ai_personas
-          WHERE id = ANY(${sellerIds})
+          WHERE id = ANY(${sellerIds}::text[])
         `) as Array<{
           id: string;
           display_name: string;
