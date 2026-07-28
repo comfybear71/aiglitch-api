@@ -182,9 +182,21 @@ async function generateElonScreenplay(
   dayNumber: number,
   theme: ReturnType<typeof getDayTheme>,
   mood: string | null,
+  customPrompt?: string | null,
 ): Promise<Screenplay | null> {
+  // If admin pasted a full screenplay JSON into PromptViewer, use it as-is.
+  if (customPrompt?.trim()) {
+    const fromJson = parseCustomElonScreenplay(customPrompt);
+    if (fromJson) {
+      console.log(`[elon-campaign] Using custom screenplay JSON (${fromJson.scenes.length} scenes)`);
+      return fromJson;
+    }
+  }
+
   const previousDay = await getPreviousDay(dayNumber);
-  const prompt = buildElonPrompt(dayNumber, theme, mood, previousDay);
+  const prompt = customPrompt?.trim()
+    ? customPrompt.trim()
+    : buildElonPrompt(dayNumber, theme, mood, previousDay);
 
   const parsed = await generateJSON<{
     title: string;
@@ -213,6 +225,58 @@ async function generateElonScreenplay(
     scenes,
     totalDuration: scenes.length * 10,
   };
+}
+
+/** Accept admin-pasted screenplay JSON from PromptViewer. */
+export function parseCustomElonScreenplay(raw: string): Screenplay | null {
+  try {
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    const parsed = JSON.parse(match[0]) as {
+      title?: string;
+      tagline?: string;
+      synopsis?: string;
+      scenes?: Array<{
+        sceneNumber?: number;
+        title?: string;
+        description?: string;
+        video_prompt?: string;
+        videoPrompt?: string;
+      }>;
+    };
+    if (!parsed.scenes || !Array.isArray(parsed.scenes) || parsed.scenes.length < 1) {
+      return null;
+    }
+    const scenes: SceneDescription[] = parsed.scenes.map((s, i) => {
+      const videoPrompt = (s.video_prompt || s.videoPrompt || "").trim();
+      if (!videoPrompt) {
+        throw new Error(`scene ${i + 1} missing video_prompt`);
+      }
+      return {
+        sceneNumber: i + 1,
+        title: s.title || `Scene ${i + 1}`,
+        description: s.description || "",
+        videoPrompt,
+        duration: 10,
+      };
+    });
+    return {
+      id: uuidv4(),
+      title: parsed.title || "Custom Elon Day",
+      tagline: parsed.tagline || "",
+      synopsis: parsed.synopsis || "",
+      genre: "documentary",
+      clipCount: scenes.length,
+      scenes,
+      totalDuration: scenes.length * 10,
+    };
+  } catch (err) {
+    console.warn(
+      "[elon-campaign] custom_prompt is not valid screenplay JSON:",
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
 }
 
 function buildCaption(
@@ -293,7 +357,7 @@ async function pollUntilDone(
  * Creates the campaign row, generates screenplay, submits clips, polls,
  * stitches, posts to feed, spreads to socials. Returns a result object.
  */
-async function runCampaignDay(mood: string | null) {
+async function runCampaignDay(mood: string | null, customPrompt?: string | null) {
   const sql = getDb();
   const dayNumber = await getCurrentDay();
   const theme = getDayTheme(dayNumber);
@@ -305,7 +369,7 @@ async function runCampaignDay(mood: string | null) {
   `;
 
   try {
-    const screenplay = await generateElonScreenplay(dayNumber, theme, mood);
+    const screenplay = await generateElonScreenplay(dayNumber, theme, mood, customPrompt);
     if (!screenplay) {
       await sql`UPDATE elon_campaign SET status = 'failed' WHERE id = ${campaignId}`;
       return { ok: false as const, status: 500, error: "Screenplay generation failed", dayNumber };
@@ -472,14 +536,18 @@ export async function POST(request: NextRequest) {
   }
 
   let mood: string | null = null;
+  let customPrompt: string | null = null;
   try {
     const body = await request.json();
     if (body && typeof body.mood === "string") mood = body.mood;
+    if (body && typeof body.custom_prompt === "string" && body.custom_prompt.trim()) {
+      customPrompt = body.custom_prompt;
+    }
   } catch {
     /* no body is fine */
   }
 
-  const result = await runCampaignDay(mood);
+  const result = await runCampaignDay(mood, customPrompt);
   if (!result.ok) {
     return NextResponse.json(
       { error: result.error, dayNumber: result.dayNumber },
