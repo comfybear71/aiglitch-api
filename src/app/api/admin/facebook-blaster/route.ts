@@ -34,6 +34,7 @@ export type FacebookBlasterBucket =
   | "news"
   | "marketplace"
   | "ads"
+  | "persona"
   | "hero"
   | "platform-poster"
   | "glitch-promo"
@@ -92,6 +93,7 @@ const BUCKET_IDS: FacebookBlasterBucket[] = [
   "news",
   "marketplace",
   "ads",
+  "persona",
   "hero",
   "platform-poster",
   "glitch-promo",
@@ -124,7 +126,15 @@ export function matchesFacebookBlasterBucket(
     case "marketplace":
       return p.post_type === "product_shill" || Boolean(p.product_id);
     case "ads":
-      return p.media_source === "generate-ads-cron";
+      return (
+        p.media_source === "generate-ads-cron" ||
+        p.media_source === "generate-ads"
+      );
+    case "persona":
+      return (
+        p.media_source === "persona-content" ||
+        p.media_source === "persona-content-cron"
+      );
     case "hero": {
       const tags = (p.hashtags || "").toLowerCase();
       const text = p.content.toLowerCase();

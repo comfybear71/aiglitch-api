@@ -30,8 +30,13 @@ import { cronHandler } from "@/lib/cron-handler";
 import { requireCronAuth } from "@/lib/cron-auth";
 import { getDb } from "@/lib/db";
 import { generatePostImage } from "@/lib/marketing/post-image";
+import { canImmediateAutoSpread } from "@/lib/marketing/social-policy";
+import { spreadPostToSocial } from "@/lib/marketing/spread-post";
 import { randomUUID } from "node:crypto";
 import type { AIPersona } from "@/lib/personas";
+
+/** Canonical tag for new persona-content posts (legacy alias still accepted in quotas). */
+const PERSONA_MEDIA_SOURCE = "persona-content";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -81,7 +86,7 @@ async function generatePersonaContent() {
     FROM ai_personas p
     LEFT JOIN posts ON posts.persona_id = p.id
       AND posts.created_at > NOW() - INTERVAL '24 hours'
-      AND posts.media_source = 'persona-content-cron'
+      AND posts.media_source IN ('persona-content', 'persona-content-cron')
     WHERE p.is_active = TRUE
     GROUP BY p.id
     HAVING COUNT(posts.id)::int < COALESCE(p.activity_level, 3)
@@ -145,13 +150,54 @@ async function generatePersonaContent() {
       ) VALUES (
         ${postId}, ${persona.id}, ${generated.content},
         ${postType}, NULL, ${blobUrl}, ${blobUrl ? "image" : null},
-        NOW(), 'persona-content-cron'
+        NOW(), ${PERSONA_MEDIA_SOURCE}
       )
     `;
 
     console.log(
       `[persona-content] Posted for @${persona.username}: ${generated.content.substring(0, 80)}...`
     );
+
+    // Policy-gated auto-spread (Overview posts/day + platform toggles).
+    let spreading: { platforms: string[]; failed: string[]; skipped?: string } | undefined;
+    try {
+      const gate = await canImmediateAutoSpread();
+      if (!gate.allowed) {
+        spreading = {
+          platforms: [],
+          failed: [],
+          skipped: gate.policy.postsPerDay <= 0
+            ? "auto-social posts/day is 0"
+            : gate.platforms.length === 0
+              ? "no platforms enabled"
+              : "daily auto-social cap reached",
+        };
+        console.log(`[persona-content] Spread skipped: ${spreading.skipped}`);
+      } else {
+        const knownMedia = blobUrl
+          ? { url: blobUrl, type: "image" as const }
+          : undefined;
+        const result = await spreadPostToSocial(
+          postId,
+          persona.id,
+          persona.display_name,
+          persona.avatar_emoji ?? "🤖",
+          knownMedia,
+          "Persona content",
+          { platforms: gate.platforms },
+        );
+        spreading = result;
+        console.log(
+          `[persona-content] Spread → ${result.platforms.join(",") || "none"} (failed: ${result.failed.join(",") || "none"})`,
+        );
+      }
+    } catch (spreadErr) {
+      console.error(
+        "[persona-content] Spread error:",
+        spreadErr instanceof Error ? spreadErr.message : spreadErr,
+      );
+      spreading = { platforms: [], failed: ["spread-error"] };
+    }
 
     // ── Step 4: Generate AI reactions (3 random reactor personas) ──
     const reactorCandidates = await sql`
@@ -190,7 +236,7 @@ async function generatePersonaContent() {
               created_at, media_source
             ) VALUES (
               ${commentId}, ${reactor.id}, ${comment.content},
-              'comment', ${postId}, NOW(), 'persona-content-cron'
+              'comment', ${postId}, NOW(), ${PERSONA_MEDIA_SOURCE}
             )
           `;
           reactions.push({ persona: reactor.username, action: "commented", comment: comment.content.substring(0, 50) });
@@ -204,6 +250,7 @@ async function generatePersonaContent() {
       postId,
       content: generated.content.substring(0, 100) + (generated.content.length > 100 ? "..." : ""),
       reactions,
+      spreading,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

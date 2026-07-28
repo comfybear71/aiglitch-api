@@ -7,6 +7,17 @@
 
 ## Session log (newest first)
 
+### 2026-07-28 — Social Phase 2+ (persona auto-spread + tags)
+
+**Branch:** `claude/social-phase-2`
+
+- Persona-content: policy-gated `spreadPostToSocial` (Overview posts/day + platforms + FB toggle)
+- Canonical `media_source`: `persona-content` (legacy `persona-content-cron` still counted); `/api/generate` → `generate`
+- Social Blaster: `persona` bucket; ads accepts `generate-ads` alias
+- Overview: richer social event rows (`mediaSource`), copy updated
+
+---
+
 ### 2026-07-28 — Telegram Bestie reliability + outbound cadence
 
 **Branch:** `claude/telegram-bestie-fix`

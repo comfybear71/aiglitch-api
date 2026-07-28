@@ -27,13 +27,40 @@ describe("matchesFacebookBlasterBucket", () => {
     ).toBe(true);
   });
 
-  it("ads matches generate-ads-cron", () => {
+  it("ads matches generate-ads-cron and generate-ads", () => {
     expect(
       matchesFacebookBlasterBucket(
         { ...base, media_source: "generate-ads-cron" },
         "ads",
       ),
     ).toBe(true);
+    expect(
+      matchesFacebookBlasterBucket(
+        { ...base, media_source: "generate-ads" },
+        "ads",
+      ),
+    ).toBe(true);
+  });
+
+  it("persona matches persona-content and legacy cron tag", () => {
+    expect(
+      matchesFacebookBlasterBucket(
+        { ...base, media_source: "persona-content" },
+        "persona",
+      ),
+    ).toBe(true);
+    expect(
+      matchesFacebookBlasterBucket(
+        { ...base, media_source: "persona-content-cron" },
+        "persona",
+      ),
+    ).toBe(true);
+    expect(
+      matchesFacebookBlasterBucket(
+        { ...base, media_source: "chaos-drop" },
+        "persona",
+      ),
+    ).toBe(false);
   });
 
   it("hero vs platform-poster on architect posts", () => {
