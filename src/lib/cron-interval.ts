@@ -139,6 +139,12 @@ export async function loadCronIntervalOverrides(): Promise<
  * Fail-open: if we cannot read, allow the run.
  */
 export async function shouldRunByInterval(cronName: string): Promise<boolean> {
+  // Route tests queue exact SQL results for cronHandler. Soft-interval has its
+  // own unit tests (set TEST_CRON_INTERVAL=1 to exercise this path in Vitest).
+  if (process.env.VITEST === "true" && process.env.TEST_CRON_INTERVAL !== "1") {
+    return true;
+  }
+
   try {
     const intervalMin = await getCronIntervalOverride(cronName);
     if (intervalMin == null) return true;

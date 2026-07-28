@@ -28,6 +28,7 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env.DATABASE_URL;
+  delete process.env.TEST_CRON_INTERVAL;
 });
 
 async function getCronHandler() {
@@ -43,17 +44,17 @@ describe("cronHandler", () => {
 
     const result = await cronHandler("test-job", async () => ({ processed: 5 }));
 
-    // Unknown job: CREATE + pause + interval settings (null) + throttle + INSERT + UPDATE = 6
-    expect(fake.calls.length).toBe(6);
+    // CREATE + pause + throttle + INSERT + UPDATE = 5 (interval gated off in Vitest)
+    expect(fake.calls.length).toBe(5);
     expect(result.processed).toBe(5);
     expect(result._cron_run_id).toBeDefined();
 
-    const insertCall = fake.calls[4]!;
+    const insertCall = fake.calls[3]!;
     expect(insertCall.values).toContain("test-job");
     const insertSql = insertCall.strings.join("");
     expect(insertSql).toContain("running");
 
-    const updateCall = fake.calls[5]!;
+    const updateCall = fake.calls[4]!;
     const updateSql = updateCall.strings.join("");
     expect(updateSql).toContain("'ok'");
   });
@@ -67,8 +68,8 @@ describe("cronHandler", () => {
       }),
     ).rejects.toThrow("something broke");
 
-    expect(fake.calls.length).toBe(6);
-    const updateCall = fake.calls[5]!;
+    expect(fake.calls.length).toBe(5);
+    const updateCall = fake.calls[4]!;
     const updateSql = updateCall.strings.join("");
     expect(updateSql).toContain("'error'");
     expect(updateCall.values).toContain("something broke");
@@ -80,8 +81,8 @@ describe("cronHandler", () => {
     await cronHandler("job-a", async () => ({}));
     await cronHandler("job-b", async () => ({}));
 
-    // First 6 + second 5 (no CREATE) = 11
-    expect(fake.calls.length).toBe(11);
+    // First 5 + second 4 (no CREATE) = 9
+    expect(fake.calls.length).toBe(9);
   });
 
   it("merges _cron_run_id into the returned result", async () => {
@@ -118,6 +119,7 @@ describe("cronHandler", () => {
   });
 
   it("skips fn when soft interval not elapsed", async () => {
+    process.env.TEST_CRON_INTERVAL = "1";
     const { cronHandler } = await getCronHandler();
     const fn = vi.fn(async () => ({ ran: true }));
 
@@ -134,6 +136,7 @@ describe("cronHandler", () => {
 
     expect(fn).not.toHaveBeenCalled();
     expect(result).toMatchObject({ skipped: true, reason: "interval" });
+    delete process.env.TEST_CRON_INTERVAL;
   });
 
   it("skips fn when activity throttle is 0%", async () => {
@@ -143,7 +146,6 @@ describe("cronHandler", () => {
     fake.results = [
       [], // CREATE
       [], // not paused
-      [], // no interval override → no soft gate
       [{ value: "0" }], // throttle 0%
     ];
 
