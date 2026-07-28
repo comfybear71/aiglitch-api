@@ -494,7 +494,8 @@ export async function GET() {
         { name: "Ads", path: "/api/generate-ads", interval: 240, unit: "min", job: "generate-ads" },
         { name: "Chaos Drops", path: "/api/generate-chaos-drop", interval: 120, unit: "min", job: "generate-chaos-drop" },
         { name: "X React", path: "/api/x-react", interval: 30, unit: "min", job: "x-react" },
-        { name: "Telegram Persona Msgs", path: "/api/telegram/persona-message", interval: 180, unit: "min", job: "telegram-persona-message" },
+        { name: "Telegram Persona Msgs", path: "/api/telegram/persona-message", interval: 720, unit: "min", job: "telegram-persona-message" },
+        { name: "Bestie Life Photos", path: "/api/bestie-life", interval: 1440, unit: "min", job: "bestie-life" },
       ];
       return defs.map((c) => ({
         name: c.name,

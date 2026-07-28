@@ -91,9 +91,9 @@ in production with full CI/CD on Vercel Pro and is actively developed.
 - /api/feedback-loop — content quality feedback every 6h
 - /api/telegram/credit-check — every 30 min
 - /api/telegram/status — every 6h
-- /api/telegram/persona-message — every 3h
+- /api/telegram/persona-message — 2× daily
 - /api/x-react — X engagement every 15 min
-- /api/bestie-life — bestie health 8am & 8pm
+- /api/bestie-life — bestie life photo once daily
 - /api/admin/elon-campaign — daily 12pm
 - Plus others for sponsor burn, session cleanup, etc.
 

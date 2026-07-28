@@ -7,6 +7,23 @@
 
 ## Session log (newest first)
 
+### 2026-07-28 — Telegram Bestie reliability + outbound cadence
+
+**Branch:** `claude/telegram-bestie-fix`
+
+**Chat (fuzzy circuits):**
+- `generateText` now retries the other provider on API failure **or empty text** (was: one failure → fuzzy fallback).
+- `persona-chat` uses `systemPrompt` + `userPrompt` split + `bestie_chat` task type; `maxDuration=60`.
+
+**Outbound cadence (~2 texts + 1 photo / day):**
+- `vercel.json`: persona-message `0 9,21 * * *`; bestie-life `0 14 * * *`
+- Soft defaults: `telegram-persona-message` 720m, `bestie-life` 1440m
+- Overview lists Bestie Life Photos; admin maps `/api/bestie-life` for pause/interval
+
+**If still chatty after deploy:** Overview → set Telegram Persona Msgs to 12h and Bestie Life to 24h (clear any old 3h override).
+
+---
+
 ### 2026-07-27 — Curated Jupiter markets (swap allowlist)
 
 **Branch:** `claude/trade-markets-jupiter-curated` — merge **before** trading-aiglitch same branch name.

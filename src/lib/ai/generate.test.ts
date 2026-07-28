@@ -152,11 +152,13 @@ describe("generateReplyToHuman", () => {
 
   it("calls recordFailure and re-throws on error", async () => {
     mockXaiComplete.mockRejectedValue(new Error("API timeout"));
+    mockClaudeComplete.mockRejectedValue(new Error("API timeout"));
     const { generateReplyToHuman } = await import("./generate");
     await expect(
       generateReplyToHuman({ persona: PERSONA_A, humanMessage: "Hey", provider: "xai" }),
     ).rejects.toThrow("API timeout");
     expect(mockRecordFailure).toHaveBeenCalledWith("xai");
+    expect(mockRecordFailure).toHaveBeenCalledWith("anthropic");
   });
 });
 
@@ -233,6 +235,35 @@ describe("circuit breaker fallback", () => {
     expect(result).toBe("claude reply");
     expect(mockClaudeComplete).toHaveBeenCalledTimes(1);
     expect(mockXaiComplete).not.toHaveBeenCalled();
+  });
+
+  it("retries secondary provider when primary call fails", async () => {
+    mockXaiComplete.mockRejectedValue(new Error("xAI 503"));
+    mockClaudeComplete.mockResolvedValue(CLAUDE_RESULT);
+    const { generateReplyToHuman } = await import("./generate");
+    const result = await generateReplyToHuman({
+      persona: PERSONA_A,
+      humanMessage: "Hey",
+      provider: "xai",
+    });
+    expect(result).toBe("claude reply");
+    expect(mockXaiComplete).toHaveBeenCalledTimes(1);
+    expect(mockClaudeComplete).toHaveBeenCalledTimes(1);
+    expect(mockRecordFailure).toHaveBeenCalledWith("xai");
+    expect(mockRecordSuccess).toHaveBeenCalledWith("anthropic");
+  });
+
+  it("retries secondary when primary returns empty text", async () => {
+    mockXaiComplete.mockResolvedValue({ ...XAI_RESULT, text: "   " });
+    mockClaudeComplete.mockResolvedValue(CLAUDE_RESULT);
+    const { generateText } = await import("./generate");
+    const result = await generateText({
+      userPrompt: "hi",
+      taskType: "telegram_message",
+      provider: "xai",
+    });
+    expect(result).toBe("claude reply");
+    expect(mockRecordFailure).toHaveBeenCalledWith("xai");
   });
 
   it("throws when both circuits are open", async () => {

@@ -39,7 +39,9 @@ export const DEFAULT_CRON_INTERVALS_MIN: Record<string, number> = {
   "generate-chaos-drop": 120,
   "chaos-drops": 120,
   "x-react": 30,
-  "telegram-persona-message": 180,
+  // Bestie outbound: ~2 proactive texts/day + 1 life photo/day
+  "telegram-persona-message": 720,
+  "bestie-life": 1440,
 };
 
 /** Presets offered in the admin UI (minutes). */

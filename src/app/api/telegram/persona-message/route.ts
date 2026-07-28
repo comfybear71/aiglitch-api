@@ -1,14 +1,15 @@
 /**
- * GET /api/telegram/persona-message  — Vercel cron every 3 hours (CRON_SECRET)
+ * GET /api/telegram/persona-message  — Vercel cron 2× daily (CRON_SECRET)
  * POST /api/telegram/persona-message — admin manual trigger
  *
  * For each active persona Telegram bot (persona_telegram_bots.is_active = true),
  * generates a short in-character message and sends it to the bot's configured
  * Telegram chat. Uses the persona's own bot_token (not the admin bot).
  *
- * Skips any bot with a missing token or chat_id. Skips any persona whose
- * AI generation returns an empty string. Errors on individual bots are
- * caught and counted — a single failure doesn't abort the whole run.
+ * Soft default interval is 720 min (~2/day). Skips any bot with a missing
+ * token or chat_id. Skips any persona whose AI generation returns an empty
+ * string. Errors on individual bots are caught and counted — a single
+ * failure doesn't abort the whole run.
  */
 
 import { type NextRequest, NextResponse } from "next/server";

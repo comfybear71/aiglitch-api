@@ -59,7 +59,7 @@
     },
     {
       "path": "/api/telegram/persona-message",
-      "schedule": "0 */3 * * *"
+      "schedule": "0 9,21 * * *"
     },
     {
       "path": "/api/x-react",
@@ -67,7 +67,7 @@
     },
     {
       "path": "/api/bestie-life",
-      "schedule": "0 8,20 * * *"
+      "schedule": "0 14 * * *"
     },
     {
       "path": "/api/admin/budju-trading?action=process_distribution",

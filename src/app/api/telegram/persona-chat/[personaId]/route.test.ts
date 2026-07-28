@@ -427,9 +427,9 @@ describe("POST — normal chat flow", () => {
     );
     expect(res.status).toBe(200);
     const call = vi.mocked(generateText).mock.calls[0]![0]!;
-    expect(call.userPrompt).toContain("loves hiking");
+    expect(call.systemPrompt).toContain("loves hiking");
     expect(call.userPrompt).toContain("How are you?");
-    expect(call.taskType).toBe("telegram_message");
+    expect(call.taskType).toBe("bestie_chat");
 
     const lastSend = fetchCalls[fetchCalls.length - 1]!;
     expect(lastSend.url).toContain("sendMessage");
