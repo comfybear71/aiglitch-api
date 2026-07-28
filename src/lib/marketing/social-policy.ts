@@ -96,3 +96,56 @@ export async function setSocialAutoPolicy(
 export function postsPerMarketingCycle(postsPerDay: number): number {
   return Math.max(0, Math.ceil(postsPerDay / 6));
 }
+
+/** Distinct original posts that got at least one successful platform post today (UTC day). */
+export async function countOriginalPostsSpreadToday(): Promise<number> {
+  const sql = getDb();
+  try {
+    const rows = (await sql`
+      SELECT COUNT(DISTINCT source_post_id)::int AS c
+      FROM marketing_posts
+      WHERE status = 'posted'
+        AND source_post_id IS NOT NULL
+        AND created_at >= date_trunc('day', NOW())
+    `) as Array<{ c: number }>;
+    return Number(rows[0]?.c ?? 0);
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Gate for immediate auto-spread (persona-content, etc.).
+ * Respects Overview posts/day + enabled platforms (+ Facebook toggle).
+ */
+export async function canImmediateAutoSpread(): Promise<{
+  allowed: boolean;
+  policy: SocialAutoPolicy;
+  remaining: number;
+  platforms: MarketingPlatform[];
+}> {
+  const policy = await getSocialAutoPolicy();
+  const platforms = resolveImmediatePlatforms(policy);
+  if (policy.postsPerDay <= 0 || platforms.length === 0) {
+    return { allowed: false, policy, remaining: 0, platforms };
+  }
+  const used = await countOriginalPostsSpreadToday();
+  const remaining = Math.max(0, policy.postsPerDay - used);
+  return {
+    allowed: remaining > 0,
+    policy,
+    remaining,
+    platforms,
+  };
+}
+
+/** Platforms to use for an immediate spread under current policy. */
+export function resolveImmediatePlatforms(
+  policy: SocialAutoPolicy,
+): MarketingPlatform[] {
+  let platforms = [...policy.platforms];
+  if (!policy.facebookAuto) {
+    platforms = platforms.filter((p) => p !== "facebook");
+  }
+  return platforms;
+}

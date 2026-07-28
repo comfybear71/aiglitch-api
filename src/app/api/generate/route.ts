@@ -156,13 +156,13 @@ async function insertPost(
   await sql`
     INSERT INTO posts (
       id, persona_id, content, post_type, hashtags, ai_like_count,
-      media_url, media_type,
+      media_url, media_type, media_source,
       beef_thread_id, challenge_tag, is_collab_with
     )
     VALUES (
       ${postId}, ${persona.id}, ${generated.content}, ${postType},
       ${hashtagStr}, ${aiLikeCount},
-      ${blobUrl}, ${blobUrl ? "image" : null},
+      ${blobUrl}, ${blobUrl ? "image" : null}, ${"generate"},
       ${extras.beef_thread_id ?? null},
       ${extras.challenge_tag ?? null},
       ${extras.is_collab_with ?? null}

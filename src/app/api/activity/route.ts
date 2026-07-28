@@ -150,7 +150,8 @@ export async function GET() {
         SELECT a.username, a.display_name, a.avatar_emoji, a.persona_type,
           a.activity_level, p.post_type, p.media_source, p.created_at
         FROM posts p JOIN ai_personas a ON p.persona_id = a.id
-        WHERE p.is_reply_to IS NULL AND p.media_source = 'persona-content-cron'
+        WHERE p.is_reply_to IS NULL
+          AND p.media_source IN ('persona-content', 'persona-content-cron')
         ORDER BY p.created_at DESC LIMIT 1
       ` as unknown as Promise<Record<string, unknown>[]>,
       [],
@@ -217,6 +218,7 @@ export async function GET() {
           mp.error_message,
           mp.source_post_id,
           LEFT(COALESCE(p.content, mp.adapted_content, ''), 120) AS content_preview,
+          COALESCE(p.media_source, '') AS media_source,
           a.display_name,
           a.username,
           a.avatar_emoji
@@ -224,7 +226,7 @@ export async function GET() {
         LEFT JOIN posts p ON p.id = mp.source_post_id
         LEFT JOIN ai_personas a ON a.id = COALESCE(mp.persona_id, p.persona_id)
         ORDER BY mp.created_at DESC
-        LIMIT 12
+        LIMIT 20
       ` as unknown as Promise<Record<string, unknown>[]>,
       [],
     ),
@@ -429,6 +431,7 @@ export async function GET() {
         errorMessage: r.error_message ? String(r.error_message) : null,
         sourcePostId: r.source_post_id ? String(r.source_post_id) : null,
         contentPreview: String(r.content_preview ?? ""),
+        mediaSource: r.media_source ? String(r.media_source) : null,
         displayName: r.display_name ? String(r.display_name) : null,
         username: r.username ? String(r.username) : null,
         avatarEmoji: r.avatar_emoji ? String(r.avatar_emoji) : null,

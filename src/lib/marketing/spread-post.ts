@@ -127,6 +127,7 @@ export async function spreadPostToSocial(
   personaEmoji: string,
   knownMedia?: KnownMedia,
   telegramLabel?: string,
+  opts?: { platforms?: MarketingPlatform[] },
 ): Promise<SpreadResult> {
   const sql = getDb();
   const platforms: string[] = [];
@@ -135,7 +136,17 @@ export async function spreadPostToSocial(
   const postData = await loadPost(sql, postId, knownMedia);
 
   if (postData) {
-    await spreadToPlatforms(sql, postId, personaId, personaName, personaEmoji, postData, platforms, failed);
+    await spreadToPlatforms(
+      sql,
+      postId,
+      personaId,
+      personaName,
+      personaEmoji,
+      postData,
+      platforms,
+      failed,
+      opts?.platforms,
+    );
     await pushTelegramSummary(personaName, personaEmoji, postData, platforms, failed, telegramLabel);
   }
 
@@ -193,6 +204,7 @@ async function spreadToPlatforms(
   post: PostRow,
   platforms: string[],
   failed: string[],
+  platformFilter?: MarketingPlatform[],
 ): Promise<void> {
   let accounts;
   try {
@@ -203,6 +215,11 @@ async function spreadToPlatforms(
       err instanceof Error ? err.message : err,
     );
     return;
+  }
+
+  if (platformFilter && platformFilter.length > 0) {
+    const allow = new Set(platformFilter);
+    accounts = accounts.filter((a) => allow.has(a.platform as MarketingPlatform));
   }
 
   const isVideo =
