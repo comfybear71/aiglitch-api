@@ -47,6 +47,7 @@ export function buildFacebookBlasterCaption(input: {
 }): string {
   const username = input.username.trim() || "architect";
   const profileUrl = `${PUBLIC_APP}/profile/${encodeURIComponent(username)}`;
+  const isCatalogBlaster = input.postId.startsWith("mp:");
   const postUrl = `${PUBLIC_APP}/post/${input.postId}`;
   const tagLine = collectPostHashtags(input.hashtags, input.content).join(" ");
   const productId = input.productId?.trim() || null;
@@ -65,7 +66,11 @@ export function buildFacebookBlasterCaption(input: {
     lines.push(`Shop this item: ${marketplaceProductUrl(productId)}`, "");
   }
 
-  lines.push(`View post: ${postUrl}`, PUBLIC_APP);
+  if (isCatalogBlaster) {
+    lines.push(PUBLIC_APP);
+  } else {
+    lines.push(`View post: ${postUrl}`, PUBLIC_APP);
+  }
 
   if (tagLine) {
     lines.push("", tagLine);
