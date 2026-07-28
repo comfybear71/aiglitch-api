@@ -4,7 +4,7 @@
  */
 
 import { getDb } from "@/lib/db";
-import type { MarketingPlatform } from "./types";
+import { ALL_PLATFORMS, type MarketingPlatform } from "./types";
 
 const KEY_POSTS_PER_DAY = "social_auto_posts_per_day";
 const KEY_PLATFORMS = "social_auto_platforms";
@@ -21,18 +21,13 @@ export interface SocialAutoPolicy {
 
 function parsePlatforms(raw: string | undefined): MarketingPlatform[] {
   if (!raw?.trim()) return [...DEFAULT_PLATFORMS];
-  const allowed = new Set<MarketingPlatform>([
-    "x",
-    "telegram",
-    "instagram",
-    "facebook",
-    "youtube",
-    "tiktok",
-  ]);
+  const allowed = new Set<string>(ALL_PLATFORMS);
   const out: MarketingPlatform[] = [];
   for (const part of raw.split(",")) {
-    const p = part.trim().toLowerCase() as MarketingPlatform;
-    if (allowed.has(p) && !out.includes(p)) out.push(p);
+    const p = part.trim().toLowerCase();
+    if (allowed.has(p) && !out.includes(p as MarketingPlatform)) {
+      out.push(p as MarketingPlatform);
+    }
   }
   return out.length > 0 ? out : [...DEFAULT_PLATFORMS];
 }
