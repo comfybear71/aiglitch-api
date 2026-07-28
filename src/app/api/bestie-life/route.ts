@@ -1,9 +1,11 @@
 /**
- * Bestie Life Moments — twice-daily Telegram photo cron.
+ * Bestie Life Moments — once-daily Telegram photo cron.
  *
  * GET (cron) / POST (admin manual) — For every active persona with a
  * hooked-up Telegram bot + `telegram_chat_id`, generates a slice-of-
  * life scene and sends it as a photo to the meatbag's chat.
+ *
+ * Soft default interval is 1440 min (1/day). Vercel schedule: 14:00 UTC.
  *
  * Flow per bestie:
  *   1. Apply health decay via `calculateHealth`; update `ai_personas`

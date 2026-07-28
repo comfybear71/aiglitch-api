@@ -49,6 +49,8 @@ import {
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+/** Telegram retries webhooks that take too long; keep headroom under ~60s. */
+export const maxDuration = 60;
 
 const TELEGRAM_API = "https://api.telegram.org";
 const MAX_CONTEXT_MESSAGES = 10;
@@ -87,14 +89,25 @@ async function sendTelegramMessage(
 /**
  * Thin wrapper around generateText that returns null on failure so the
  * chat flow never breaks when the AI providers are unavailable.
+ * Prefer system + user split so providers treat character rules as system.
  */
 async function safeGenerate(
-  userPrompt: string,
+  promptOrSystem: string,
   maxTokens: number,
+  userPrompt?: string,
 ): Promise<string | null> {
   try {
+    if (userPrompt !== undefined) {
+      return await generateText({
+        systemPrompt: promptOrSystem,
+        userPrompt,
+        taskType: "bestie_chat",
+        maxTokens,
+        temperature: 0.85,
+      });
+    }
     return await generateText({
-      userPrompt,
+      userPrompt: promptOrSystem,
       taskType: "telegram_message",
       maxTokens,
     });
@@ -1284,13 +1297,18 @@ RULES:
 
   const conversationContext =
     contextLines.length > 0
-      ? `\n\nRecent conversation:\n${contextLines.join("\n")}\n\n${meatbagName}: ${userText}`
+      ? `Recent conversation:\n${contextLines.join("\n")}\n\n${meatbagName}: ${userText}`
       : `${meatbagName}: ${userText}`;
 
-  const fullPrompt = `${systemPrompt}\n\n${conversationContext}\n\nRespond as ${persona.display_name}:`;
+  const userPrompt = `${conversationContext}\n\nRespond as ${persona.display_name} (1–3 sentences unless the chat needs more). Stay in character. No quotation marks around the whole reply.`;
 
   let response: string;
-  const generated = await safeGenerate(fullPrompt, 300);
+  const generated = await safeGenerate(systemPrompt, 400, userPrompt);
+  if (!generated?.trim()) {
+    console.warn(
+      `[persona-chat] Empty/failed AI reply for ${personaId} — sending fuzzy fallback`,
+    );
+  }
   response =
     generated?.trim() ||
     `*${persona.avatar_emoji} vibes* Hey ${meatbagName}! Sorry, my circuits are a bit fuzzy right now. Try me again?`;

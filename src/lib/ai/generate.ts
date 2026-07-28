@@ -52,63 +52,97 @@ export async function generateText(params: GenerateTextParams): Promise<string> 
 
 type CompleteParams = GenerateTextParams;
 
+type ProviderResult = {
+  text: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  estimatedUsd: number;
+};
+
+async function callProvider(
+  provider: AiProvider,
+  params: CompleteParams,
+): Promise<ProviderResult> {
+  if (provider === "xai") {
+    return xaiComplete({
+      systemPrompt: params.systemPrompt,
+      userPrompt: params.userPrompt,
+      model: XAI_MODEL,
+      maxTokens: params.maxTokens,
+      temperature: params.temperature,
+    });
+  }
+  return claudeComplete({
+    systemPrompt: params.systemPrompt,
+    userPrompt: params.userPrompt,
+    model: CLAUDE_MODEL,
+    maxTokens: params.maxTokens,
+    // Anthropic range is 0–1
+    temperature:
+      params.temperature !== undefined
+        ? Math.min(params.temperature, 1)
+        : undefined,
+  });
+}
+
+/**
+ * Provider order: preferred (if circuit allows), then the other.
+ * On API failure OR empty text, try the next provider before giving up.
+ * This is what stops Telegram Bestie from falling through to the
+ * "circuits are a bit fuzzy" fallback on a single flaky Grok call.
+ */
 async function complete(params: CompleteParams): Promise<string> {
   const primary = params.provider ?? selectProvider();
-  const fallback: AiProvider = primary === "xai" ? "anthropic" : "xai";
+  const secondary: AiProvider = primary === "xai" ? "anthropic" : "xai";
 
-  const provider = (await canProceed(primary)) ? primary : fallback;
-  if (!(await canProceed(provider))) {
+  const order: AiProvider[] = [];
+  if (await canProceed(primary)) order.push(primary);
+  if (await canProceed(secondary)) order.push(secondary);
+
+  if (order.length === 0) {
     throw new Error(
-      `Both AI providers (${primary}, ${fallback}) have open circuit breakers`,
+      `Both AI providers (${primary}, ${secondary}) have open circuit breakers`,
     );
   }
 
-  try {
-    let result: {
-      text: string;
-      model: string;
-      inputTokens: number;
-      outputTokens: number;
-      estimatedUsd: number;
-    };
+  let lastError: unknown;
+  for (let i = 0; i < order.length; i++) {
+    const provider = order[i]!;
+    try {
+      const result = await callProvider(provider, params);
+      if (!result.text.trim()) {
+        await recordFailure(provider);
+        lastError = new Error(`${provider} returned empty text`);
+        console.warn(
+          `[generate] ${provider} empty text — ${i < order.length - 1 ? "trying fallback" : "giving up"}`,
+        );
+        continue;
+      }
 
-    if (provider === "xai") {
-      result = await xaiComplete({
-        systemPrompt: params.systemPrompt,
-        userPrompt: params.userPrompt,
-        model: XAI_MODEL,
-        maxTokens: params.maxTokens,
-        temperature: params.temperature,
+      await recordSuccess(provider);
+      void logAiCost({
+        provider,
+        taskType: params.taskType,
+        model: result.model,
+        inputTokens: result.inputTokens,
+        outputTokens: result.outputTokens,
+        estimatedUsd: result.estimatedUsd,
       });
-    } else {
-      result = await claudeComplete({
-        systemPrompt: params.systemPrompt,
-        userPrompt: params.userPrompt,
-        model: CLAUDE_MODEL,
-        maxTokens: params.maxTokens,
-        // Anthropic range is 0–1
-        temperature:
-          params.temperature !== undefined
-            ? Math.min(params.temperature, 1)
-            : undefined,
-      });
+      return result.text;
+    } catch (err) {
+      await recordFailure(provider);
+      lastError = err;
+      console.warn(
+        `[generate] ${provider} failed — ${i < order.length - 1 ? "trying fallback" : "giving up"}:`,
+        err instanceof Error ? err.message : err,
+      );
     }
-
-    await recordSuccess(provider);
-    void logAiCost({
-      provider,
-      taskType: params.taskType,
-      model: result.model,
-      inputTokens: result.inputTokens,
-      outputTokens: result.outputTokens,
-      estimatedUsd: result.estimatedUsd,
-    });
-
-    return result.text;
-  } catch (err) {
-    await recordFailure(provider);
-    throw err;
   }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("All AI providers failed");
 }
 
 function buildPersonaSystem(persona: PersonaContext): string {
