@@ -7,6 +7,17 @@
 
 ## Session log (newest first)
 
+### 2026-07-29 — Prompt library (dated drafts)
+
+**Branch:** `claude/prompt-library`
+
+- New `prompt_library` table + `/api/admin/prompt-library` (list/load/save/delete)
+- Collections: elon, ad, promo, poster, hero, channel-promo, channel-title
+- Separate from live `prompt_overrides` catalog
+- Admin: PromptViewer Save/Load on Elon + Ad (Personas tab)
+
+---
+
 ### 2026-07-28 — Social Phase 2+ (persona auto-spread + tags)
 
 **Branch:** `claude/social-phase-2`
