@@ -21,6 +21,10 @@
  * `action=cron` GET accepts admin OR a valid CRON_SECRET bearer token
  * so Vercel's scheduler can hit it.
  *
+ * Cron gating: `action=cron` runs through `cronHandler("elon-campaign")`
+ * so Overview activity % / Pause / soft interval apply. Manual POST
+ * (Praise Elon) bypasses those gates — intentional admin spend.
+ *
  * Idempotency: `action=cron` short-circuits if any campaign row already
  * exists for today's date. Manual POST has no such guard — admins can
  * intentionally re-run the day if a generation failed.
@@ -32,6 +36,7 @@ import { v4 as uuidv4 } from "uuid";
 
 import { isAdminAuthenticated } from "@/lib/admin-auth";
 import { requireCronAuth } from "@/lib/cron-auth";
+import { cronHandler } from "@/lib/cron-handler";
 import { getDb } from "@/lib/db";
 import { generateJSON } from "@/lib/ai/claude";
 import { submitVideoJob } from "@/lib/ai/video";
@@ -576,32 +581,69 @@ export async function GET(request: NextRequest) {
       if (cronError) return cronError;
     }
 
-    const sql = getDb();
-    const today = new Date().toISOString().slice(0, 10);
-    const existing = (await sql`
-      SELECT id FROM elon_campaign
-      WHERE DATE(created_at) = ${today}::date
-      LIMIT 1
-    `) as unknown as Array<{ id: string }>;
+    try {
+      const result = await cronHandler("elon-campaign", async () => {
+        const sql = getDb();
+        const today = new Date().toISOString().slice(0, 10);
+        const existing = (await sql`
+          SELECT id FROM elon_campaign
+          WHERE DATE(created_at) = ${today}::date
+          LIMIT 1
+        `) as unknown as Array<{ id: string }>;
 
-    if (existing.length > 0) {
-      return NextResponse.json({ skipped: true, reason: "Already posted today", date: today });
-    }
+        if (existing.length > 0) {
+          return {
+            skipped: true as const,
+            reason: "Already posted today",
+            date: today,
+          };
+        }
 
-    const result = await runCampaignDay(null);
-    if (!result.ok) {
+        const campaign = await runCampaignDay(null);
+        if (!campaign.ok) {
+          return {
+            ok: false as const,
+            error: campaign.error,
+            dayNumber: campaign.dayNumber,
+            httpStatus: campaign.status,
+          };
+        }
+        return {
+          ok: true as const,
+          success: true,
+          dayNumber: campaign.dayNumber,
+          title: campaign.title,
+          campaignId: campaign.campaignId,
+          message: `Day ${campaign.dayNumber} cron: video posted & spread!`,
+        };
+      });
+
+      // Pause / activity throttle / soft interval — no video spend.
+      if (
+        "skipped" in result &&
+        result.skipped === true &&
+        (result.reason === "paused" ||
+          result.reason === "throttled" ||
+          result.reason === "interval")
+      ) {
+        return NextResponse.json(result);
+      }
+
+      if ("ok" in result && result.ok === false) {
+        return NextResponse.json(
+          { error: result.error, dayNumber: result.dayNumber },
+          { status: typeof result.httpStatus === "number" ? result.httpStatus : 500 },
+        );
+      }
+
+      return NextResponse.json(result);
+    } catch (err) {
+      console.error("[elon-campaign] cron failed:", err);
       return NextResponse.json(
-        { error: result.error, dayNumber: result.dayNumber },
-        { status: result.status },
+        { error: err instanceof Error ? err.message : "Elon campaign cron failed" },
+        { status: 500 },
       );
     }
-    return NextResponse.json({
-      success: true,
-      dayNumber: result.dayNumber,
-      title: result.title,
-      campaignId: result.campaignId,
-      message: `Day ${result.dayNumber} cron: video posted & spread!`,
-    });
   }
 
   // Everything below requires admin.

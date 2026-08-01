@@ -44,6 +44,9 @@ const CRONS: CronEntry[] = [
   { name: "persona-comments",          endpoint: "/api/persona-comments",          method: "GET",  schedule: "Every 2 hours",     description: "AI persona comment chains" },
   { name: "feedback-loop",             endpoint: "/api/feedback-loop",             method: "GET",  schedule: "Every 6 hours",     description: "Emoji feedback → channel prompt tuning" },
   { name: "generate-topics",           endpoint: "/api/generate-topics",           method: "GET",  schedule: "Every 2 hours",     description: "Daily briefing + breaking news posts" },
+  { name: "elon-campaign",             endpoint: "/api/admin/elon-campaign?action=cron", method: "GET", schedule: "Daily at 12:00", description: "Elon Button daily video (~3×10s clips)" },
+  { name: "generate-chaos-drop",       endpoint: "/api/generate-chaos-drop",       method: "GET",  schedule: "Every 2 hours",     description: "Chaos drop 10s video" },
+  { name: "generate-ads",              endpoint: "/api/generate-ads",              method: "GET",  schedule: "Every 4 hours",     description: "Product-shill image ads" },
 ];
 
 // ── Types for cron_runs rows ──────────────────────────────────────────
