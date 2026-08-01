@@ -499,6 +499,8 @@ export async function GET() {
         { name: "X React", path: "/api/x-react", interval: 30, unit: "min", job: "x-react" },
         { name: "Telegram Persona Msgs", path: "/api/telegram/persona-message", interval: 720, unit: "min", job: "telegram-persona-message" },
         { name: "Bestie Life Photos", path: "/api/bestie-life", interval: 1440, unit: "min", job: "bestie-life" },
+        // Video: ~3 × $0.70 clips/run — was ungated before v2.x activity throttle
+        { name: "Elon Campaign", path: "/api/admin/elon-campaign?action=cron", interval: 1440, unit: "min", job: "elon-campaign" },
       ];
       return defs.map((c) => ({
         name: c.name,

@@ -42,6 +42,8 @@ export const DEFAULT_CRON_INTERVALS_MIN: Record<string, number> = {
   // Bestie outbound: ~2 proactive texts/day + 1 life photo/day
   "telegram-persona-message": 720,
   "bestie-life": 1440,
+  // Elon Button daily video (~3 × 10s clips) — vercel fires once/day
+  "elon-campaign": 1440,
 };
 
 /** Presets offered in the admin UI (minutes). */

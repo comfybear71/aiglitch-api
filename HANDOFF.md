@@ -7,6 +7,20 @@
 
 ## Session log (newest first)
 
+### 2026-08-01 — Elon cron respects activity slider
+
+**Branch:** `claude/elon-activity-throttle`
+
+- `GET ?action=cron` on `/api/admin/elon-campaign` now runs via `cronHandler("elon-campaign")` (pause + activity % + soft interval). Manual Praise Elon POST still ungated.
+- Overview `cronSchedules` includes **Elon Campaign** (default soft interval 1440m).
+- Soft default `elon-campaign: 1440` in `cron-interval.ts`.
+- cron-control registry: elon-campaign + chaos-drop + generate-ads.
+- Admin sister: `PATH_TO_CRON_NAME` maps elon path for last-run matching.
+
+**Ops (75% video cut):** Pause Chaos Drops + Elon Campaign; keep slider ~10%; no channel/iOS autopilot; check breaking_news_enabled.
+
+---
+
 ### 2026-07-29 — Prompt library (dated drafts)
 
 **Branch:** `claude/prompt-library`

@@ -38,6 +38,17 @@ vi.mock("@/lib/admin-auth", () => ({
 vi.mock("@/lib/cron-auth", () => ({
   requireCronAuth: vi.fn(),
 }));
+
+const cronHandlerMock = vi.fn(
+  async (_name: string, fn: () => Promise<unknown>): Promise<unknown> => {
+    const result = await fn();
+    return { ...(result as object), _cron_run_id: "test-cron-run" };
+  },
+);
+vi.mock("@/lib/cron-handler", () => ({
+  cronHandler: (...args: unknown[]) =>
+    cronHandlerMock(...(args as [string, () => Promise<unknown>])),
+}));
 vi.mock("@/lib/ai/claude", () => ({
   generateJSON: vi.fn(),
 }));
@@ -57,6 +68,13 @@ vi.mock("@vercel/blob", () => ({
 beforeEach(() => {
   fake.calls = [];
   fake.results = [];
+  cronHandlerMock.mockReset();
+  cronHandlerMock.mockImplementation(
+    async (_name: string, fn: () => Promise<unknown>) => {
+      const result = await fn();
+      return { ...(result as object), _cron_run_id: "test-cron-run" };
+    },
+  );
   process.env.DATABASE_URL = "postgres://test";
   process.env.XAI_API_KEY = "test-xai-key";
   process.env.CRON_SECRET = "test-cron-secret";
@@ -201,6 +219,37 @@ describe("GET /api/admin/elon-campaign", () => {
     expect(res.status).toBe(200);
     expect(body.skipped).toBe(true);
     expect(body.reason).toMatch(/Already posted today/);
+    expect(body._cron_run_id).toBe("test-cron-run");
+  });
+
+  it("cron path: returns throttled skip from cronHandler without running campaign", async () => {
+    const { isAdminAuthenticated } = await import("@/lib/admin-auth");
+    const { requireCronAuth } = await import("@/lib/cron-auth");
+    (isAdminAuthenticated as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+    (requireCronAuth as ReturnType<typeof vi.fn>).mockReturnValue(null);
+
+    cronHandlerMock.mockResolvedValueOnce({
+      ok: true,
+      skipped: true,
+      reason: "throttled",
+      cron: "elon-campaign",
+      _cron_run_id: "skipped-run",
+    });
+
+    const { GET } = await import("./route");
+    const res = await GET(await buildRequest("?action=cron"));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.skipped).toBe(true);
+    expect(body.reason).toBe("throttled");
+    expect(body.cron).toBe("elon-campaign");
+    expect(cronHandlerMock).toHaveBeenCalledWith(
+      "elon-campaign",
+      expect.any(Function),
+    );
+    // No SQL for today's row when cronHandler short-circuits before fn.
+    expect(fake.calls.length).toBe(0);
   });
 });
 
