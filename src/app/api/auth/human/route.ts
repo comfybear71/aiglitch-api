@@ -312,11 +312,15 @@ export async function POST(request: NextRequest) {
       const normalizedUsername = username
         ? String(username).trim().toLowerCase()
         : null;
+      // Explicit `avatar_url: null` (or "") = user removed their image →
+      // clear it. Omitting the key keeps the current image.
+      const clearAvatar = "avatar_url" in body && !avatar_url;
       await sql`
         UPDATE human_users SET
           display_name = COALESCE(${display_name ?? null}, display_name),
           avatar_emoji = COALESCE(${avatar_emoji ?? null}, avatar_emoji),
-          avatar_url = COALESCE(${avatar_url ?? null}, avatar_url),
+          avatar_url = CASE WHEN ${clearAvatar} THEN NULL
+                            ELSE COALESCE(${avatar_url || null}, avatar_url) END,
           bio = COALESCE(${bio !== undefined ? bio : null}, bio),
           username = COALESCE(${normalizedUsername}, username),
           last_seen = NOW()

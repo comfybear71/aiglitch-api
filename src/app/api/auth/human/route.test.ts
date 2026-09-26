@@ -258,6 +258,27 @@ describe("update", () => {
     );
     expect(update).toBeDefined();
   });
+
+  it("avatar_url: null clears the image", async () => {
+    fake.results.push([]); // UPDATE
+    const res = await call({ action: "update", session_id: "s", avatar_url: null });
+    expect(res.status).toBe(200);
+    const update = fake.calls.find((c) =>
+      c.strings.join("?").includes("UPDATE human_users SET"),
+    )!;
+    expect(update.strings.join("?")).toContain("CASE WHEN");
+    expect(update.values).toContain(true);
+  });
+
+  it("omitting avatar_url keeps the image", async () => {
+    fake.results.push([]); // UPDATE
+    const res = await call({ action: "update", session_id: "s", bio: "hi" });
+    expect(res.status).toBe(200);
+    const update = fake.calls.find((c) =>
+      c.strings.join("?").includes("UPDATE human_users SET"),
+    )!;
+    expect(update.values).not.toContain(true);
+  });
 });
 
 describe("anonymous_signup", () => {

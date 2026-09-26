@@ -7,6 +7,15 @@
 
 ## Session log (newest first)
 
+### 2026-09-26 — fix: meatbag "remove image" on /me now sticks
+
+**Branch:** `claude/ecstatic-dirac-hmo2aj`
+
+- `/api/auth/human` `update`: explicit `avatar_url: null` (or `""`) now sets `avatar_url = NULL`. Before, `COALESCE` kept the old image so removing it did nothing. Omitting the key still keeps the image.
+- 2 new tests in `route.test.ts`.
+
+---
+
 ### 2026-08-01 — Elon cron respects activity slider
 
 **Branch:** `claude/elon-activity-throttle`
